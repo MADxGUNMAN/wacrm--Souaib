@@ -6,23 +6,33 @@ import {
   useEffect,
   useState,
   useCallback,
+  useMemo,
   type ReactNode,
 } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
+import type { VendorPermissions, UserRole } from "@/types";
 
 interface Profile {
   id: string;
   full_name: string | null;
   email: string;
   avatar_url: string | null;
-  role: string | null;
+  role: UserRole | null;
+  permissions: VendorPermissions | null;
+  is_active: boolean;
 }
 
 interface AuthContextValue {
   user: User | null;
   profile: Profile | null;
   loading: boolean;
+  /** Whether the current user is an admin */
+  isAdmin: boolean;
+  /** Whether the current user is a vendor */
+  isVendor: boolean;
+  /** Check if the current user has permission for a specific section */
+  hasPermission: (section: keyof VendorPermissions) => boolean;
   signOut: () => Promise<void>;
   /** Re-fetch the current user's profile row — call after a save from
    *  the settings form so header/sidebar reflect the change without a
@@ -50,17 +60,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, full_name, email, avatar_url, role")
+        .select("id, full_name, email, avatar_url, role, permissions, is_active")
         .eq("user_id", userId)
         .maybeSingle();
 
       if (error) {
-        console.error("[AuthProvider] fetchProfile error:", {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
-        });
+        console.error("[AuthProvider] fetchProfile error:", error.message, error.code, error.hint, JSON.stringify(error));
         return;
       }
 
@@ -145,9 +150,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await fetchProfile(user.id);
   }, [user?.id, fetchProfile]);
 
+  const isAdmin = profile?.role === "admin";
+  const isVendor = profile?.role === "vendor";
+
+  const hasPermission = useCallback(
+    (section: keyof VendorPermissions): boolean => {
+      // Admins have full access
+      if (profile?.role === "admin") return true;
+      // Vendors check their permissions object
+      if (profile?.role === "vendor" && profile.permissions) {
+        return profile.permissions[section] === true;
+      }
+      // Regular users (the original single-user) get full access
+      if (profile?.role === "user") return true;
+      return false;
+    },
+    [profile?.role, profile?.permissions]
+  );
+
   return (
     <AuthContext.Provider
-      value={{ user, profile, loading, signOut, refreshProfile }}
+      value={{
+        user,
+        profile,
+        loading,
+        isAdmin,
+        isVendor,
+        hasPermission,
+        signOut,
+        refreshProfile,
+      }}
     >
       {children}
     </AuthContext.Provider>
@@ -167,6 +199,9 @@ export function useAuth(): AuthContextValue {
       user: null,
       profile: null,
       loading: false,
+      isAdmin: false,
+      isVendor: false,
+      hasPermission: () => false,
       signOut: async () => {
         window.location.href = "/login";
       },

@@ -4,12 +4,15 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
+import { useAuth } from "@/hooks/use-auth";
 import {
   MessageSquare,
   ChevronDown,
   UserPlus,
   Clock,
   ArrowLeft,
+  UserX,
+  Check,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -18,12 +21,20 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./message-bubble";
 import { MessageComposer } from "./message-composer";
 import { toast } from "sonner";
+
+interface VendorOption {
+  id: string;
+  full_name: string;
+  email: string;
+  is_active: boolean;
+}
 
 interface MessageThreadProps {
   conversation: Conversation | null;
@@ -85,6 +96,69 @@ export function MessageThread({
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [vendors, setVendors] = useState<VendorOption[]>([]);
+  const [assignedVendor, setAssignedVendor] = useState<VendorOption | null>(null);
+  const { isAdmin } = useAuth();
+
+  // Fetch vendors for the assign dropdown (admin only)
+  useEffect(() => {
+    if (!isAdmin) return;
+    (async () => {
+      try {
+        const res = await fetch("/api/vendors");
+        if (res.ok) {
+          const data = await res.json();
+          setVendors(data.filter((v: VendorOption) => v.is_active));
+        }
+      } catch (e) {
+        console.error("Failed to fetch vendors:", e);
+      }
+    })();
+  }, [isAdmin]);
+
+  // Resolve assigned vendor name when conversation changes
+  useEffect(() => {
+    if (!conversation?.assigned_agent_id || vendors.length === 0) {
+      setAssignedVendor(null);
+      return;
+    }
+    const match = vendors.find((v) => v.id === conversation.assigned_agent_id);
+    setAssignedVendor(match ?? null);
+  }, [conversation?.assigned_agent_id, vendors]);
+
+  const handleAssignVendor = useCallback(
+    async (vendorId: string | null) => {
+      if (!conversation) return;
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("conversations")
+        .update({ assigned_agent_id: vendorId })
+        .eq("id", conversation.id);
+
+      if (error) {
+        toast.error("Failed to assign conversation");
+        return;
+      }
+
+      const vendorName = vendorId
+        ? vendors.find((v) => v.id === vendorId)?.full_name ?? "vendor"
+        : null;
+      toast.success(
+        vendorId
+          ? `Assigned to ${vendorName}`
+          : "Conversation unassigned"
+      );
+
+      // Update local state
+      if (vendorId) {
+        const match = vendors.find((v) => v.id === vendorId);
+        setAssignedVendor(match ?? null);
+      } else {
+        setAssignedVendor(null);
+      }
+    },
+    [conversation, vendors]
+  );
 
   // 24-hour session timer
   const sessionInfo = useMemo(() => {
@@ -353,15 +427,56 @@ export function MessageThread({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Assign button */}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1 text-xs text-slate-400 hover:text-white"
-          >
-            <UserPlus className="h-3 w-3" />
-            Assign
-          </Button>
+          {/* Assign button — admin only */}
+          {isAdmin && (
+            <DropdownMenu>
+              <DropdownMenuTrigger className="inline-flex items-center gap-1 h-7 px-2 text-xs text-slate-400 hover:text-white rounded-md hover:bg-slate-800">
+                  <UserPlus className="h-3 w-3" />
+                  {assignedVendor ? assignedVendor.full_name : "Assign"}
+                  <ChevronDown className="h-3 w-3" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className="border-slate-700 bg-slate-800 min-w-48"
+              >
+                {vendors.length === 0 ? (
+                  <DropdownMenuItem disabled className="text-sm text-slate-500">
+                    No vendors — create one in Settings
+                  </DropdownMenuItem>
+                ) : (
+                  <>
+                    {vendors.map((vendor) => (
+                      <DropdownMenuItem
+                        key={vendor.id}
+                        onClick={() => handleAssignVendor(vendor.id)}
+                        className="flex items-center gap-2 text-sm text-slate-300"
+                      >
+                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-xs font-medium text-violet-400">
+                          {vendor.full_name.charAt(0).toUpperCase()}
+                        </div>
+                        <span className="flex-1">{vendor.full_name}</span>
+                        {assignedVendor?.id === vendor.id && (
+                          <Check className="h-3.5 w-3.5 text-violet-400" />
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                    {assignedVendor && (
+                      <>
+                        <DropdownMenuSeparator className="bg-slate-700" />
+                        <DropdownMenuItem
+                          onClick={() => handleAssignVendor(null)}
+                          className="flex items-center gap-2 text-sm text-red-400"
+                        >
+                          <UserX className="h-4 w-4" />
+                          Unassign
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
 

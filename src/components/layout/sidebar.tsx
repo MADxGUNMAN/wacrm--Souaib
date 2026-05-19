@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
+import type { VendorPermissions } from "@/types";
 import {
   LayoutDashboard,
   MessageSquare,
@@ -30,14 +31,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Badge } from "@/components/ui/badge";
 
-const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/inbox", label: "Inbox", icon: MessageSquare },
-  { href: "/contacts", label: "Contacts", icon: Users },
-  { href: "/pipelines", label: "Pipelines", icon: GitBranch },
-  { href: "/broadcasts", label: "Broadcasts", icon: Radio },
-  { href: "/automations", label: "Automations", icon: Zap },
+const ALL_NAV_ITEMS = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, permKey: "dashboard" as keyof VendorPermissions },
+  { href: "/inbox", label: "Inbox", icon: MessageSquare, permKey: "inbox" as keyof VendorPermissions },
+  { href: "/contacts", label: "Contacts", icon: Users, permKey: "contacts" as keyof VendorPermissions },
+  { href: "/pipelines", label: "Pipelines", icon: GitBranch, permKey: "pipelines" as keyof VendorPermissions },
+  { href: "/broadcasts", label: "Broadcasts", icon: Radio, permKey: "broadcasts" as keyof VendorPermissions },
+  { href: "/automations", label: "Automations", icon: Zap, permKey: "automations" as keyof VendorPermissions },
 ];
 
 const bottomNavItems = [
@@ -52,19 +54,21 @@ interface SidebarProps {
 
 export function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { profile, signOut } = useAuth();
+  const { profile, isVendor, hasPermission, signOut } = useAuth();
   const totalUnread = useTotalUnread();
 
-  // Close the drawer when route changes — users opened it to navigate,
-  // so once they pick a destination the drawer should get out of the way.
+  // Filter nav items based on role and permissions
+  const navItems = useMemo(() => {
+    return ALL_NAV_ITEMS.filter((item) => hasPermission(item.permKey));
+  }, [hasPermission]);
+
+  // Close the drawer when route changes
   useEffect(() => {
     onClose?.();
-    // Only pathname drives this — onClose identity doesn't need to re-run it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
-  // Lock body scroll and allow Escape to close while the drawer is open on
-  // mobile. No-ops on desktop because the sidebar isn't positioned there.
+  // Lock body scroll and allow Escape to close while the drawer is open
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -81,9 +85,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
   return (
     <>
-      {/* Backdrop — only exists on mobile and only when open. Clicking
-          it closes the drawer. Hidden from lg+ since the sidebar is
-          part of the main flex row there. */}
+      {/* Backdrop */}
       <button
         type="button"
         aria-label="Close menu"
@@ -98,19 +100,16 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
       <aside
         className={cn(
-          // Mobile: fixed drawer that slides in from the left.
           "fixed inset-y-0 left-0 z-40 flex h-full w-64 flex-col border-r border-slate-800 bg-slate-900",
           "transition-transform duration-200 ease-out will-change-transform",
           open ? "translate-x-0" : "-translate-x-full",
-          // Desktop: static, always visible — reset all the mobile framing.
           "lg:static lg:z-0 lg:w-60 lg:translate-x-0 lg:transition-none",
         )}
         aria-label="Primary"
       >
-        {/* Logo row. On mobile we put a close button here; on desktop the
-            close button is hidden since the sidebar is always-visible. */}
+        {/* Logo row */}
         <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-slate-800 px-4">
-          <Link href="/dashboard" className="flex items-center gap-2">
+          <Link href={isVendor ? "/inbox" : "/dashboard"} className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500">
               <MessageSquare className="h-4 w-4 text-white" />
             </div>
@@ -128,6 +127,14 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           </button>
         </div>
 
+        {/* Role badge for vendors */}
+        {isVendor && (
+          <div className="mx-3 mt-3 flex items-center gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2">
+            <User className="h-3.5 w-3.5 text-violet-400" />
+            <span className="text-xs font-medium text-violet-400">Vendor Account</span>
+          </div>
+        )}
+
         {/* Main navigation */}
         <nav className="flex-1 overflow-y-auto px-3 py-4">
           <ul className="flex flex-col gap-1">
@@ -144,7 +151,6 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                   <Link
                     href={item.href}
                     className={cn(
-                      // Taller on mobile so fingers can hit the row reliably (≥44px).
                       "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
                       isActive
                         ? "bg-violet-500/10 text-violet-500"
@@ -237,18 +243,20 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                 <User className="size-4" />
                 Profile
               </DropdownMenuItem>
-              <DropdownMenuItem
-                render={
-                  <Link
-                    href="/settings?tab=whatsapp"
-                    onClick={onClose}
-                    className="text-slate-200 focus:bg-slate-800 focus:text-white"
-                  />
-                }
-              >
-                <Settings className="size-4" />
-                Settings
-              </DropdownMenuItem>
+              {!isVendor && (
+                <DropdownMenuItem
+                  render={
+                    <Link
+                      href="/settings?tab=whatsapp"
+                      onClick={onClose}
+                      className="text-slate-200 focus:bg-slate-800 focus:text-white"
+                    />
+                  }
+                >
+                  <Settings className="size-4" />
+                  Settings
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator className="bg-slate-800" />
               <DropdownMenuItem
                 onClick={signOut}

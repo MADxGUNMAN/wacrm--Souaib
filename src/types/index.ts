@@ -1,11 +1,36 @@
+export interface VendorPermissions {
+  inbox: boolean;
+  dashboard: boolean;
+  contacts: boolean;
+  pipelines: boolean;
+  broadcasts: boolean;
+  automations: boolean;
+  settings: boolean;
+}
+
+export const DEFAULT_VENDOR_PERMISSIONS: VendorPermissions = {
+  inbox: true,
+  dashboard: false,
+  contacts: false,
+  pipelines: false,
+  broadcasts: false,
+  automations: false,
+  settings: true,
+};
+
+export type UserRole = 'admin' | 'vendor' | 'user';
+
 export interface Profile {
   id: string;
   user_id: string;
   full_name: string;
   email: string;
   avatar_url?: string;
-  role: string;
+  role: UserRole;
+  permissions?: VendorPermissions;
+  is_active?: boolean;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface Contact {

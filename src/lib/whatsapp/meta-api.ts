@@ -167,6 +167,153 @@ export async function sendTemplateMessage(
   return { messageId: data.messages[0].id }
 }
 
+export interface SendMediaMessageArgs {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  type: 'image' | 'video' | 'audio' | 'document'
+  mediaId?: string
+  mediaLink?: string
+  caption?: string
+  filename?: string // Used for documents
+}
+
+/**
+ * Send a media message (image, video, audio, document) using an existing Meta media ID or URL.
+ */
+export async function sendMediaMessage(
+  args: SendMediaMessageArgs
+): Promise<MetaSendResult> {
+  const { phoneNumberId, accessToken, to, type, mediaId, mediaLink, caption, filename } = args
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+
+  const mediaPayload: any = {}
+  if (mediaId) mediaPayload.id = mediaId
+  else if (mediaLink) mediaPayload.link = mediaLink
+  else throw new Error('Must provide either mediaId or mediaLink')
+
+  if (caption && type !== 'audio') mediaPayload.caption = caption
+  if (filename && type === 'document') mediaPayload.filename = filename
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type,
+      [type]: mediaPayload,
+    }),
+  })
+
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  return { messageId: data.messages[0].id }
+}
+
+export interface SendLocationMessageArgs {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  latitude: number
+  longitude: number
+  name?: string
+  address?: string
+}
+
+/**
+ * Send a location message.
+ */
+export async function sendLocationMessage(
+  args: SendLocationMessageArgs
+): Promise<MetaSendResult> {
+  const { phoneNumberId, accessToken, to, latitude, longitude, name, address } = args
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+
+  const locationPayload: any = { latitude, longitude }
+  if (name) locationPayload.name = name
+  if (address) locationPayload.address = address
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'location',
+      location: locationPayload,
+    }),
+  })
+
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  return { messageId: data.messages[0].id }
+}
+
+export interface SendContactMessageArgs {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  contact: {
+    name: {
+      formatted_name: string
+      first_name?: string
+      last_name?: string
+    }
+    phones?: Array<{
+      phone: string
+      type?: string
+    }>
+    emails?: Array<{
+      email: string
+      type?: string
+    }>
+  }
+}
+
+/**
+ * Send a contact (vCard) message.
+ */
+export async function sendContactMessage(
+  args: SendContactMessageArgs
+): Promise<MetaSendResult> {
+  const { phoneNumberId, accessToken, to, contact } = args
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'contacts',
+      contacts: [contact],
+    }),
+  })
+
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  return { messageId: data.messages[0].id }
+}
+
 // ============================================================
 // Media
 // ============================================================
@@ -218,4 +365,47 @@ export async function downloadMedia(
     response.headers.get('content-type') || 'application/octet-stream'
   const buffer = Buffer.from(await response.arrayBuffer())
   return { buffer, contentType }
+}
+
+export interface UploadMediaArgs {
+  phoneNumberId: string
+  accessToken: string
+  file: Blob | Buffer
+  mimeType: string
+  filename?: string
+}
+
+/**
+ * Upload a media file to Meta and get a media ID.
+ */
+export async function uploadMedia(
+  args: UploadMediaArgs
+): Promise<{ id: string }> {
+  const { phoneNumberId, accessToken, file, mimeType, filename } = args
+  const url = `${META_API_BASE}/${phoneNumberId}/media`
+
+  const formData = new FormData()
+  formData.append('messaging_product', 'whatsapp')
+  
+  if (file instanceof Buffer) {
+    // Note: Node.js fetch implementation handles FormData with Blobs.
+    const blob = new Blob([file], { type: mimeType })
+    formData.append('file', blob, filename || 'upload')
+  } else {
+    formData.append('file', file, filename || 'upload')
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: formData,
+  })
+
+  if (!response.ok) {
+    await throwMetaError(response, `Media upload failed: ${response.status}`)
+  }
+  const data = await response.json()
+  return { id: data.id }
 }

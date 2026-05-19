@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import type { Contact, Tag, ContactTag } from '@/types';
@@ -40,6 +41,7 @@ import {
   Users,
   ChevronLeft,
   ChevronRight,
+  MessageSquare,
 } from 'lucide-react';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { ContactDetailView } from '@/components/contacts/contact-detail-view';
@@ -53,6 +55,7 @@ interface ContactWithTags extends Contact {
 
 export default function ContactsPage() {
   const supabase = createClient();
+  const router = useRouter();
 
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
   const [loading, setLoading] = useState(true);
@@ -199,6 +202,40 @@ export default function ContactsPage() {
     setDeleting(false);
     setDeleteConfirmOpen(false);
     setDeleteTarget(null);
+  }
+
+  async function handleMessageClick(e: React.MouseEvent, contact: Contact) {
+    e.stopPropagation();
+    
+    // Check if conversation exists
+    const { data: conv, error } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('contact_id', contact.id)
+      .limit(1)
+      .maybeSingle();
+      
+    if (conv) {
+      router.push(`/inbox?c=${conv.id}`);
+      return;
+    }
+    
+    // Create new conversation (Admin only, since vendors only see contacts with assigned conversations)
+    const { data: newConv, error: createError } = await supabase
+      .from('conversations')
+      .insert({
+        contact_id: contact.id,
+        // @ts-ignore
+        user_id: contact.user_id, // Ensure it's assigned to the contact's owner
+      })
+      .select('id')
+      .single();
+      
+    if (newConv) {
+      router.push(`/inbox?c=${newConv.id}`);
+    } else {
+      toast.error('Could not open conversation');
+    }
   }
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
@@ -348,19 +385,29 @@ export default function ContactsPage() {
                     })}
                   </TableCell>
                   <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className="text-slate-400 hover:text-white"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        }
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="text-slate-400 hover:text-white"
+                        onClick={(e) => handleMessageClick(e, contact)}
+                        title="Message"
                       >
-                        <MoreHorizontal className="size-4" />
-                      </DropdownMenuTrigger>
+                        <MessageSquare className="size-4" />
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="text-slate-400 hover:text-white"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          }
+                        >
+                          <MoreHorizontal className="size-4" />
+                        </DropdownMenuTrigger>
                       <DropdownMenuContent
                         align="end"
                         className="bg-slate-900 border-slate-700"
@@ -388,6 +435,7 @@ export default function ContactsPage() {
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
