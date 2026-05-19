@@ -9,33 +9,36 @@
  * instead of a runtime rejection from Meta.
  */
 
-const META_API_VERSION = 'v21.0'
-const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`
+const META_API_VERSION = 'v21.0';
+const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`;
 
 export interface MetaSendResult {
-  messageId: string
+  messageId: string;
 }
 
 export interface MetaPhoneInfo {
-  id: string
-  display_phone_number: string
-  verified_name?: string
-  quality_rating?: string
+  id: string;
+  display_phone_number: string;
+  verified_name?: string;
+  quality_rating?: string;
 }
 
 interface MetaErrorResponse {
-  error?: { message?: string; code?: number; type?: string }
+  error?: { message?: string; code?: number; type?: string };
 }
 
-async function throwMetaError(response: Response, fallback: string): Promise<never> {
-  let message = fallback
+async function throwMetaError(
+  response: Response,
+  fallback: string
+): Promise<never> {
+  let message = fallback;
   try {
-    const data = (await response.json()) as MetaErrorResponse
-    if (data.error?.message) message = data.error.message
+    const data = (await response.json()) as MetaErrorResponse;
+    if (data.error?.message) message = data.error.message;
   } catch {
     // response body wasn't JSON — keep the fallback
   }
-  throw new Error(message)
+  throw new Error(message);
 }
 
 // ============================================================
@@ -43,8 +46,8 @@ async function throwMetaError(response: Response, fallback: string): Promise<nev
 // ============================================================
 
 export interface VerifyPhoneNumberArgs {
-  phoneNumberId: string
-  accessToken: string
+  phoneNumberId: string;
+  accessToken: string;
 }
 
 /**
@@ -54,15 +57,15 @@ export interface VerifyPhoneNumberArgs {
 export async function verifyPhoneNumber(
   args: VerifyPhoneNumberArgs
 ): Promise<MetaPhoneInfo> {
-  const { phoneNumberId, accessToken } = args
-  const url = `${META_API_BASE}/${phoneNumberId}?fields=id,display_phone_number,verified_name,quality_rating`
+  const { phoneNumberId, accessToken } = args;
+  const url = `${META_API_BASE}/${phoneNumberId}?fields=id,display_phone_number,verified_name,quality_rating`;
   const response = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
-  })
+  });
   if (!response.ok) {
-    await throwMetaError(response, `Meta API error: ${response.status}`)
+    await throwMetaError(response, `Meta API error: ${response.status}`);
   }
-  return response.json()
+  return response.json();
 }
 
 // ============================================================
@@ -70,10 +73,10 @@ export async function verifyPhoneNumber(
 // ============================================================
 
 export interface SendTextMessageArgs {
-  phoneNumberId: string
-  accessToken: string
-  to: string
-  text: string
+  phoneNumberId: string;
+  accessToken: string;
+  to: string;
+  text: string;
 }
 
 /**
@@ -83,8 +86,8 @@ export interface SendTextMessageArgs {
 export async function sendTextMessage(
   args: SendTextMessageArgs
 ): Promise<MetaSendResult> {
-  const { phoneNumberId, accessToken, to, text } = args
-  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const { phoneNumberId, accessToken, to, text } = args;
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`;
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -98,21 +101,21 @@ export async function sendTextMessage(
       type: 'text',
       text: { body: text },
     }),
-  })
+  });
   if (!response.ok) {
-    await throwMetaError(response, `Meta API error: ${response.status}`)
+    await throwMetaError(response, `Meta API error: ${response.status}`);
   }
-  const data = await response.json()
-  return { messageId: data.messages[0].id }
+  const data = await response.json();
+  return { messageId: data.messages[0].id };
 }
 
 export interface SendTemplateMessageArgs {
-  phoneNumberId: string
-  accessToken: string
-  to: string
-  templateName: string
-  language?: string
-  params?: string[]
+  phoneNumberId: string;
+  accessToken: string;
+  to: string;
+  templateName: string;
+  language?: string;
+  params?: string[];
 }
 
 /**
@@ -129,13 +132,13 @@ export async function sendTemplateMessage(
     templateName,
     language = 'en_US',
     params,
-  } = args
-  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  } = args;
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`;
 
   const template: Record<string, unknown> = {
     name: templateName,
     language: { code: language },
-  }
+  };
 
   if (params && params.length > 0) {
     template.components = [
@@ -143,7 +146,7 @@ export async function sendTemplateMessage(
         type: 'body',
         parameters: params.map((p) => ({ type: 'text', text: String(p) })),
       },
-    ]
+    ];
   }
 
   const response = await fetch(url, {
@@ -159,23 +162,23 @@ export async function sendTemplateMessage(
       type: 'template',
       template,
     }),
-  })
+  });
   if (!response.ok) {
-    await throwMetaError(response, `Meta API error: ${response.status}`)
+    await throwMetaError(response, `Meta API error: ${response.status}`);
   }
-  const data = await response.json()
-  return { messageId: data.messages[0].id }
+  const data = await response.json();
+  return { messageId: data.messages[0].id };
 }
 
 export interface SendMediaMessageArgs {
-  phoneNumberId: string
-  accessToken: string
-  to: string
-  type: 'image' | 'video' | 'audio' | 'document'
-  mediaId?: string
-  mediaLink?: string
-  caption?: string
-  filename?: string // Used for documents
+  phoneNumberId: string;
+  accessToken: string;
+  to: string;
+  type: 'image' | 'video' | 'audio' | 'document';
+  mediaId?: string;
+  mediaLink?: string;
+  caption?: string;
+  filename?: string; // Used for documents
 }
 
 /**
@@ -184,16 +187,25 @@ export interface SendMediaMessageArgs {
 export async function sendMediaMessage(
   args: SendMediaMessageArgs
 ): Promise<MetaSendResult> {
-  const { phoneNumberId, accessToken, to, type, mediaId, mediaLink, caption, filename } = args
-  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const {
+    phoneNumberId,
+    accessToken,
+    to,
+    type,
+    mediaId,
+    mediaLink,
+    caption,
+    filename,
+  } = args;
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`;
 
-  const mediaPayload: any = {}
-  if (mediaId) mediaPayload.id = mediaId
-  else if (mediaLink) mediaPayload.link = mediaLink
-  else throw new Error('Must provide either mediaId or mediaLink')
+  const mediaPayload: Record<string, string> = {};
+  if (mediaId) mediaPayload.id = mediaId;
+  else if (mediaLink) mediaPayload.link = mediaLink;
+  else throw new Error('Must provide either mediaId or mediaLink');
 
-  if (caption && type !== 'audio') mediaPayload.caption = caption
-  if (filename && type === 'document') mediaPayload.filename = filename
+  if (caption && type !== 'audio') mediaPayload.caption = caption;
+  if (filename && type === 'document') mediaPayload.filename = filename;
 
   const response = await fetch(url, {
     method: 'POST',
@@ -208,23 +220,55 @@ export async function sendMediaMessage(
       type,
       [type]: mediaPayload,
     }),
-  })
+  });
 
   if (!response.ok) {
-    await throwMetaError(response, `Meta API error: ${response.status}`)
+    await throwMetaError(response, `Meta API error: ${response.status}`);
   }
-  const data = await response.json()
-  return { messageId: data.messages[0].id }
+  const data = await response.json();
+  return { messageId: data.messages[0].id };
+}
+
+export type SendImageMessageArgs = Omit<SendMediaMessageArgs, 'type'>;
+export type SendVideoMessageArgs = Omit<SendMediaMessageArgs, 'type'>;
+export type SendAudioMessageArgs = Omit<
+  SendMediaMessageArgs,
+  'type' | 'caption' | 'filename'
+>;
+export type SendDocumentMessageArgs = Omit<SendMediaMessageArgs, 'type'>;
+
+export function sendImageMessage(
+  args: SendImageMessageArgs
+): Promise<MetaSendResult> {
+  return sendMediaMessage({ ...args, type: 'image' });
+}
+
+export function sendVideoMessage(
+  args: SendVideoMessageArgs
+): Promise<MetaSendResult> {
+  return sendMediaMessage({ ...args, type: 'video' });
+}
+
+export function sendAudioMessage(
+  args: SendAudioMessageArgs
+): Promise<MetaSendResult> {
+  return sendMediaMessage({ ...args, type: 'audio' });
+}
+
+export function sendDocumentMessage(
+  args: SendDocumentMessageArgs
+): Promise<MetaSendResult> {
+  return sendMediaMessage({ ...args, type: 'document' });
 }
 
 export interface SendLocationMessageArgs {
-  phoneNumberId: string
-  accessToken: string
-  to: string
-  latitude: number
-  longitude: number
-  name?: string
-  address?: string
+  phoneNumberId: string;
+  accessToken: string;
+  to: string;
+  latitude: number;
+  longitude: number;
+  name?: string;
+  address?: string;
 }
 
 /**
@@ -233,12 +277,16 @@ export interface SendLocationMessageArgs {
 export async function sendLocationMessage(
   args: SendLocationMessageArgs
 ): Promise<MetaSendResult> {
-  const { phoneNumberId, accessToken, to, latitude, longitude, name, address } = args
-  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const { phoneNumberId, accessToken, to, latitude, longitude, name, address } =
+    args;
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`;
 
-  const locationPayload: any = { latitude, longitude }
-  if (name) locationPayload.name = name
-  if (address) locationPayload.address = address
+  const locationPayload: Record<string, string | number> = {
+    latitude,
+    longitude,
+  };
+  if (name) locationPayload.name = name;
+  if (address) locationPayload.address = address;
 
   const response = await fetch(url, {
     method: 'POST',
@@ -253,34 +301,34 @@ export async function sendLocationMessage(
       type: 'location',
       location: locationPayload,
     }),
-  })
+  });
 
   if (!response.ok) {
-    await throwMetaError(response, `Meta API error: ${response.status}`)
+    await throwMetaError(response, `Meta API error: ${response.status}`);
   }
-  const data = await response.json()
-  return { messageId: data.messages[0].id }
+  const data = await response.json();
+  return { messageId: data.messages[0].id };
 }
 
 export interface SendContactMessageArgs {
-  phoneNumberId: string
-  accessToken: string
-  to: string
+  phoneNumberId: string;
+  accessToken: string;
+  to: string;
   contact: {
     name: {
-      formatted_name: string
-      first_name?: string
-      last_name?: string
-    }
+      formatted_name: string;
+      first_name?: string;
+      last_name?: string;
+    };
     phones?: Array<{
-      phone: string
-      type?: string
-    }>
+      phone: string;
+      type?: string;
+    }>;
     emails?: Array<{
-      email: string
-      type?: string
-    }>
-  }
+      email: string;
+      type?: string;
+    }>;
+  };
 }
 
 /**
@@ -289,8 +337,8 @@ export interface SendContactMessageArgs {
 export async function sendContactMessage(
   args: SendContactMessageArgs
 ): Promise<MetaSendResult> {
-  const { phoneNumberId, accessToken, to, contact } = args
-  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const { phoneNumberId, accessToken, to, contact } = args;
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`;
 
   const response = await fetch(url, {
     method: 'POST',
@@ -305,13 +353,13 @@ export async function sendContactMessage(
       type: 'contacts',
       contacts: [contact],
     }),
-  })
+  });
 
   if (!response.ok) {
-    await throwMetaError(response, `Meta API error: ${response.status}`)
+    await throwMetaError(response, `Meta API error: ${response.status}`);
   }
-  const data = await response.json()
-  return { messageId: data.messages[0].id }
+  const data = await response.json();
+  return { messageId: data.messages[0].id };
 }
 
 // ============================================================
@@ -319,8 +367,8 @@ export async function sendContactMessage(
 // ============================================================
 
 export interface GetMediaUrlArgs {
-  mediaId: string
-  accessToken: string
+  mediaId: string;
+  accessToken: string;
 }
 
 /**
@@ -330,21 +378,24 @@ export interface GetMediaUrlArgs {
 export async function getMediaUrl(
   args: GetMediaUrlArgs
 ): Promise<{ url: string; mimeType: string }> {
-  const { mediaId, accessToken } = args
+  const { mediaId, accessToken } = args;
   const response = await fetch(`${META_API_BASE}/${mediaId}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
-  })
+  });
   if (!response.ok) {
-    await throwMetaError(response, `Media fetch failed: ${response.status}`)
+    await throwMetaError(response, `Media fetch failed: ${response.status}`);
   }
-  const data = await response.json()
-  if (!data.url) throw new Error('Media URL not found in Meta response')
-  return { url: data.url, mimeType: data.mime_type || 'application/octet-stream' }
+  const data = await response.json();
+  if (!data.url) throw new Error('Media URL not found in Meta response');
+  return {
+    url: data.url,
+    mimeType: data.mime_type || 'application/octet-stream',
+  };
 }
 
 export interface DownloadMediaArgs {
-  downloadUrl: string
-  accessToken: string
+  downloadUrl: string;
+  accessToken: string;
 }
 
 /**
@@ -354,25 +405,25 @@ export interface DownloadMediaArgs {
 export async function downloadMedia(
   args: DownloadMediaArgs
 ): Promise<{ buffer: Buffer; contentType: string }> {
-  const { downloadUrl, accessToken } = args
+  const { downloadUrl, accessToken } = args;
   const response = await fetch(downloadUrl, {
     headers: { Authorization: `Bearer ${accessToken}` },
-  })
+  });
   if (!response.ok) {
-    throw new Error(`Media download failed: ${response.status}`)
+    throw new Error(`Media download failed: ${response.status}`);
   }
   const contentType =
-    response.headers.get('content-type') || 'application/octet-stream'
-  const buffer = Buffer.from(await response.arrayBuffer())
-  return { buffer, contentType }
+    response.headers.get('content-type') || 'application/octet-stream';
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return { buffer, contentType };
 }
 
 export interface UploadMediaArgs {
-  phoneNumberId: string
-  accessToken: string
-  file: Blob | Buffer
-  mimeType: string
-  filename?: string
+  phoneNumberId: string;
+  accessToken: string;
+  file: Blob | Buffer;
+  mimeType: string;
+  filename?: string;
 }
 
 /**
@@ -381,19 +432,22 @@ export interface UploadMediaArgs {
 export async function uploadMedia(
   args: UploadMediaArgs
 ): Promise<{ id: string }> {
-  const { phoneNumberId, accessToken, file, mimeType, filename } = args
-  const url = `${META_API_BASE}/${phoneNumberId}/media`
+  const { phoneNumberId, accessToken, file, mimeType, filename } = args;
+  const url = `${META_API_BASE}/${phoneNumberId}/media`;
 
-  const formData = new FormData()
-  formData.append('messaging_product', 'whatsapp')
-  
-  if (file instanceof Buffer) {
-    // Note: Node.js fetch implementation handles FormData with Blobs.
-    const blob = new Blob([file], { type: mimeType })
-    formData.append('file', blob, filename || 'upload')
-  } else {
-    formData.append('file', file, filename || 'upload')
-  }
+  const formData = new FormData();
+  formData.append('messaging_product', 'whatsapp');
+
+  const uploadBlob =
+    file instanceof Blob
+      ? file
+      : (() => {
+          const copied = new Uint8Array(file.byteLength);
+          copied.set(file);
+          return new Blob([copied.buffer], { type: mimeType });
+        })();
+
+  formData.append('file', uploadBlob, filename || 'upload');
 
   const response = await fetch(url, {
     method: 'POST',
@@ -401,11 +455,11 @@ export async function uploadMedia(
       Authorization: `Bearer ${accessToken}`,
     },
     body: formData,
-  })
+  });
 
   if (!response.ok) {
-    await throwMetaError(response, `Media upload failed: ${response.status}`)
+    await throwMetaError(response, `Media upload failed: ${response.status}`);
   }
-  const data = await response.json()
-  return { id: data.id }
+  const data = await response.json();
+  return { id: data.id };
 }

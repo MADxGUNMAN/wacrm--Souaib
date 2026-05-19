@@ -100,8 +100,21 @@ export interface Conversation {
 }
 
 export type SenderType = 'customer' | 'agent' | 'bot';
-export type ContentType = 'text' | 'image' | 'document' | 'audio' | 'video' | 'location' | 'template';
-export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type ContentType =
+  | 'text'
+  | 'image'
+  | 'document'
+  | 'audio'
+  | 'video'
+  | 'location'
+  | 'template'
+  | 'contact_card';
+export type MessageStatus =
+  | 'sending'
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'failed';
 
 export interface Message {
   id: string;
@@ -114,6 +127,14 @@ export interface Message {
   template_name?: string;
   message_id?: string;
   status: MessageStatus;
+  created_at: string;
+}
+
+export interface QuickReply {
+  id: string;
+  user_id?: string;
+  shortcut: string;
+  text: string;
   created_at: string;
 }
 
@@ -186,8 +207,19 @@ export interface Deal {
   assignee?: Profile;
 }
 
-export type BroadcastStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'failed';
-export type RecipientStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'replied' | 'failed';
+export type BroadcastStatus =
+  | 'draft'
+  | 'scheduled'
+  | 'sending'
+  | 'sent'
+  | 'failed';
+export type RecipientStatus =
+  | 'pending'
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'replied'
+  | 'failed';
 
 export interface Broadcast {
   id: string;

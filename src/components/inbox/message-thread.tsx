@@ -1,10 +1,15 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { createClient } from "@/lib/supabase/client";
-import { cn } from "@/lib/utils";
-import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
-import { useAuth } from "@/hooks/use-auth";
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import { cn } from '@/lib/utils';
+import type {
+  Conversation,
+  Message,
+  Contact,
+  ConversationStatus,
+} from '@/types';
+import { useAuth } from '@/hooks/use-auth';
 import {
   MessageSquare,
   ChevronDown,
@@ -13,21 +18,19 @@ import {
   ArrowLeft,
   UserX,
   Check,
-} from "lucide-react";
-import { format, isToday, isYesterday, differenceInHours } from "date-fns";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+} from 'lucide-react';
+import { format, isToday, isYesterday, differenceInHours } from 'date-fns';
+import { Badge } from '@/components/ui/badge';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { MessageBubble } from "./message-bubble";
-import { MessageComposer } from "./message-composer";
-import { toast } from "sonner";
+} from '@/components/ui/dropdown-menu';
+import { MessageBubble } from './message-bubble';
+import { MessageComposer, type ComposerMessage } from './message-composer';
+import { toast } from 'sonner';
 
 interface VendorOption {
   id: string;
@@ -55,17 +58,17 @@ interface MessageThreadProps {
 
 function formatDateSeparator(dateStr: string): string {
   const date = new Date(dateStr);
-  if (isToday(date)) return "Today";
-  if (isYesterday(date)) return "Yesterday";
-  return format(date, "MMMM d, yyyy");
+  if (isToday(date)) return 'Today';
+  if (isYesterday(date)) return 'Yesterday';
+  return format(date, 'MMMM d, yyyy');
 }
 
 function groupMessagesByDate(messages: Message[]) {
   const groups: { date: string; messages: Message[] }[] = [];
-  let currentDate = "";
+  let currentDate = '';
 
   for (const msg of messages) {
-    const day = format(new Date(msg.created_at), "yyyy-MM-dd");
+    const day = format(new Date(msg.created_at), 'yyyy-MM-dd');
     if (day !== currentDate) {
       currentDate = day;
       groups.push({ date: msg.created_at, messages: [msg] });
@@ -77,10 +80,14 @@ function groupMessagesByDate(messages: Message[]) {
   return groups;
 }
 
-const STATUS_OPTIONS: { label: string; value: ConversationStatus; color: string }[] = [
-  { label: "Open", value: "open", color: "text-violet-400" },
-  { label: "Pending", value: "pending", color: "text-amber-400" },
-  { label: "Closed", value: "closed", color: "text-slate-400" },
+const STATUS_OPTIONS: {
+  label: string;
+  value: ConversationStatus;
+  color: string;
+}[] = [
+  { label: 'Open', value: 'open', color: 'text-violet-400' },
+  { label: 'Pending', value: 'pending', color: 'text-amber-400' },
+  { label: 'Closed', value: 'closed', color: 'text-slate-400' },
 ];
 
 export function MessageThread({
@@ -95,9 +102,7 @@ export function MessageThread({
 }: MessageThreadProps) {
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [vendors, setVendors] = useState<VendorOption[]>([]);
-  const [assignedVendor, setAssignedVendor] = useState<VendorOption | null>(null);
   const { isAdmin } = useAuth();
 
   // Fetch vendors for the assign dropdown (admin only)
@@ -105,77 +110,66 @@ export function MessageThread({
     if (!isAdmin) return;
     (async () => {
       try {
-        const res = await fetch("/api/vendors");
+        const res = await fetch('/api/vendors');
         if (res.ok) {
           const data = await res.json();
           setVendors(data.filter((v: VendorOption) => v.is_active));
         }
       } catch (e) {
-        console.error("Failed to fetch vendors:", e);
+        console.error('Failed to fetch vendors:', e);
       }
     })();
   }, [isAdmin]);
 
-  // Resolve assigned vendor name when conversation changes
-  useEffect(() => {
-    if (!conversation?.assigned_agent_id || vendors.length === 0) {
-      setAssignedVendor(null);
-      return;
-    }
-    const match = vendors.find((v) => v.id === conversation.assigned_agent_id);
-    setAssignedVendor(match ?? null);
-  }, [conversation?.assigned_agent_id, vendors]);
+  const assignedVendor = useMemo(() => {
+    if (!conversation?.assigned_agent_id || vendors.length === 0) return null;
+    return vendors.find((v) => v.id === conversation.assigned_agent_id) ?? null;
+  }, [conversation, vendors]);
 
   const handleAssignVendor = useCallback(
     async (vendorId: string | null) => {
       if (!conversation) return;
       const supabase = createClient();
       const { error } = await supabase
-        .from("conversations")
+        .from('conversations')
         .update({ assigned_agent_id: vendorId })
-        .eq("id", conversation.id);
+        .eq('id', conversation.id);
 
       if (error) {
-        toast.error("Failed to assign conversation");
+        toast.error('Failed to assign conversation');
         return;
       }
 
       const vendorName = vendorId
-        ? vendors.find((v) => v.id === vendorId)?.full_name ?? "vendor"
+        ? (vendors.find((v) => v.id === vendorId)?.full_name ?? 'vendor')
         : null;
       toast.success(
-        vendorId
-          ? `Assigned to ${vendorName}`
-          : "Conversation unassigned"
+        vendorId ? `Assigned to ${vendorName}` : 'Conversation unassigned'
       );
-
-      // Update local state
-      if (vendorId) {
-        const match = vendors.find((v) => v.id === vendorId);
-        setAssignedVendor(match ?? null);
-      } else {
-        setAssignedVendor(null);
-      }
     },
     [conversation, vendors]
   );
 
   // 24-hour session timer
   const sessionInfo = useMemo(() => {
-    if (!messages.length) return { expired: false, remaining: "" };
+    if (!messages.length) return { expired: false, remaining: '' };
 
     // Find last customer message
     const lastCustomerMsg = [...messages]
       .reverse()
-      .find((m) => m.sender_type === "customer");
+      .find((m) => m.sender_type === 'customer');
 
-    if (!lastCustomerMsg) return { expired: true, remaining: "No customer messages" };
+    if (!lastCustomerMsg)
+      return { expired: true, remaining: 'No customer messages' };
 
-    const hoursSince = differenceInHours(new Date(), new Date(lastCustomerMsg.created_at));
+    const hoursSince = differenceInHours(
+      new Date(),
+      new Date(lastCustomerMsg.created_at)
+    );
     const expired = hoursSince >= 24;
 
     if (expired) {
-      return { expired: true, remaining: "Expired" };
+      return { expired: true, remaining: 'Expired' };
     }
 
     const hoursLeft = 24 - hoursSince;
@@ -216,15 +210,15 @@ export function MessageThread({
       setLoading(true);
 
       const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true });
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: true });
 
       if (cancelled) return;
 
       if (error) {
-        console.error("Failed to fetch messages:", error);
+        console.error('Failed to fetch messages:', error);
       } else {
         onMessagesLoadedRef.current(data ?? []);
       }
@@ -250,11 +244,11 @@ export function MessageThread({
     if (!conversationId || !hasUnread) return;
     const supabase = createClient();
     supabase
-      .from("conversations")
+      .from('conversations')
       .update({ unread_count: 0 })
-      .eq("id", conversationId)
+      .eq('id', conversationId)
       .then(({ error }) => {
-        if (error) console.error("Failed to reset unread_count:", error);
+        if (error) console.error('Failed to reset unread_count:', error);
       });
   }, [conversationId, hasUnread]);
 
@@ -267,31 +261,88 @@ export function MessageThread({
   }, [messages]);
 
   const handleSend = useCallback(
-    async (text: string) => {
+    async (message: ComposerMessage) => {
       if (!conversation) return;
 
       const tempId = `temp-${Date.now()}`;
+      const contentType = message.messageType;
+      const contentText =
+        message.messageType === 'text'
+          ? message.text
+          : message.messageType === 'location'
+            ? [
+                message.locationName,
+                message.locationAddress,
+                message.locationUrl,
+              ]
+                .filter(Boolean)
+                .join(' - ')
+            : message.messageType === 'contact_card'
+              ? [message.contactName, message.contactPhone]
+                  .filter(Boolean)
+                  .join(' - ')
+              : message.messageType === 'document'
+                ? message.text || message.filename || undefined
+                : message.text || undefined;
+      const mediaUrl =
+        message.messageType === 'image' ||
+        message.messageType === 'video' ||
+        message.messageType === 'audio' ||
+        message.messageType === 'document'
+          ? message.mediaUrl || `/api/whatsapp/media/${message.mediaId}`
+          : undefined;
 
       // Optimistic update — shows the message immediately with "sending" status
       const optimisticMsg: Message = {
         id: tempId,
         conversation_id: conversation.id,
-        sender_type: "agent",
-        content_type: "text",
-        content_text: text,
-        status: "sending",
+        sender_type: 'agent',
+        content_type: contentType,
+        content_text: contentText,
+        media_url: mediaUrl,
+        status: 'sending',
         created_at: new Date().toISOString(),
       };
       onNewMessage(optimisticMsg);
 
       try {
-        const res = await fetch("/api/whatsapp/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch('/api/whatsapp/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             conversation_id: conversation.id,
-            message_type: "text",
-            content_text: text,
+            message_type: message.messageType,
+            content_text: contentText,
+            media_id:
+              message.messageType === 'image' ||
+              message.messageType === 'video' ||
+              message.messageType === 'audio' ||
+              message.messageType === 'document'
+                ? message.mediaId
+                : undefined,
+            media_url: mediaUrl,
+            filename:
+              message.messageType === 'document' ? message.filename : undefined,
+            location_url:
+              message.messageType === 'location'
+                ? message.locationUrl
+                : undefined,
+            location_name:
+              message.messageType === 'location'
+                ? message.locationName
+                : undefined,
+            location_address:
+              message.messageType === 'location'
+                ? message.locationAddress
+                : undefined,
+            contact_name:
+              message.messageType === 'contact_card'
+                ? message.contactName
+                : undefined,
+            contact_phone:
+              message.messageType === 'contact_card'
+                ? message.contactPhone
+                : undefined,
           }),
         });
 
@@ -299,22 +350,22 @@ export function MessageThread({
 
         if (!res.ok) {
           const reason = payload?.error || `HTTP ${res.status}`;
-          console.error("Failed to send message:", reason);
+          console.error('Failed to send message:', reason);
           toast.error(`Failed to send: ${reason}`);
           // Mark the optimistic bubble as failed so the user sees what happened
-          onUpdateMessage(tempId, { status: "failed" });
+          onUpdateMessage(tempId, { status: 'failed' });
           return;
         }
 
         // Success — the realtime INSERT event will replace the temp bubble
         // with the real DB row. If realtime hasn't arrived yet, at least
         // flip status to 'sent' so the UI stops showing "sending".
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, { status: 'sent' });
       } catch (err) {
-        console.error("Failed to send message:", err);
-        const reason = err instanceof Error ? err.message : "network error";
+        console.error('Failed to send message:', err);
+        const reason = err instanceof Error ? err.message : 'network error';
         toast.error(`Failed to send: ${reason}`);
-        onUpdateMessage(tempId, { status: "failed" });
+        onUpdateMessage(tempId, { status: 'failed' });
       }
     },
     [conversation, onNewMessage, onUpdateMessage]
@@ -326,9 +377,9 @@ export function MessageThread({
 
       const supabase = createClient();
       await supabase
-        .from("conversations")
+        .from('conversations')
         .update({ status })
-        .eq("id", conversation.id);
+        .eq('id', conversation.id);
 
       onStatusChange(conversation.id, status);
     },
@@ -336,7 +387,6 @@ export function MessageThread({
   );
 
   const handleOpenTemplates = useCallback(() => {
-    setTemplateModalOpen(true);
     // Template modal implementation would go here
   }, []);
 
@@ -384,7 +434,9 @@ export function MessageThread({
             {displayName.charAt(0).toUpperCase()}
           </div>
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold text-white">{displayName}</h2>
+            <h2 className="truncate text-sm font-semibold text-white">
+              {displayName}
+            </h2>
             <p className="truncate text-xs text-slate-400">{contact.phone}</p>
           </div>
           {/* Session timer badge — hidden on the narrowest phones so
@@ -392,8 +444,8 @@ export function MessageThread({
           <Badge
             variant="outline"
             className={cn(
-              "ml-1 hidden gap-1 border-slate-700 text-[10px] sm:inline-flex sm:ml-2",
-              sessionInfo.expired ? "text-red-400" : "text-violet-400"
+              'ml-1 hidden gap-1 border-slate-700 text-[10px] sm:ml-2 sm:inline-flex',
+              sessionInfo.expired ? 'text-red-400' : 'text-violet-400'
             )}
           >
             <Clock className="h-3 w-3" />
@@ -404,12 +456,14 @@ export function MessageThread({
         <div className="flex items-center gap-2">
           {/* Status dropdown */}
           <DropdownMenu>
-            <DropdownMenuTrigger className={cn(
-                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-slate-800",
-                  currentStatus?.color ?? "text-slate-400"
-                )}>
-                {currentStatus?.label ?? "Status"}
-                <ChevronDown className="h-3 w-3" />
+            <DropdownMenuTrigger
+              className={cn(
+                'inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-slate-800',
+                currentStatus?.color ?? 'text-slate-400'
+              )}
+            >
+              {currentStatus?.label ?? 'Status'}
+              <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
@@ -419,7 +473,7 @@ export function MessageThread({
                 <DropdownMenuItem
                   key={opt.value}
                   onClick={() => handleStatusChange(opt.value)}
-                  className={cn("text-sm", opt.color)}
+                  className={cn('text-sm', opt.color)}
                 >
                   {opt.label}
                 </DropdownMenuItem>
@@ -430,14 +484,14 @@ export function MessageThread({
           {/* Assign button — admin only */}
           {isAdmin && (
             <DropdownMenu>
-              <DropdownMenuTrigger className="inline-flex items-center gap-1 h-7 px-2 text-xs text-slate-400 hover:text-white rounded-md hover:bg-slate-800">
-                  <UserPlus className="h-3 w-3" />
-                  {assignedVendor ? assignedVendor.full_name : "Assign"}
-                  <ChevronDown className="h-3 w-3" />
+              <DropdownMenuTrigger className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-slate-400 hover:bg-slate-800 hover:text-white">
+                <UserPlus className="h-3 w-3" />
+                {assignedVendor ? assignedVendor.full_name : 'Assign'}
+                <ChevronDown className="h-3 w-3" />
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="end"
-                className="border-slate-700 bg-slate-800 min-w-48"
+                className="min-w-48 border-slate-700 bg-slate-800"
               >
                 {vendors.length === 0 ? (
                   <DropdownMenuItem disabled className="text-sm text-slate-500">
