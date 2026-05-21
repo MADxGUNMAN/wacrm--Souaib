@@ -19,7 +19,9 @@ import { ArrowLeft, Send, Clock, Loader2, Users, Lock, Save } from 'lucide-react
 interface AudienceConfig {
   type: string;
   tagIds?: string[];
+  contactIds?: string[];
   csvContacts?: { phone: string; name?: string }[];
+  excludeTagIds?: string[];
 }
 
 interface Step4Props {
@@ -48,6 +50,8 @@ export function Step4ScheduleSend({
   const [timing, setTiming] = useState<'now' | 'later'>('now');
   const [showConfirm, setShowConfirm] = useState(false);
   const [estimatedReach, setEstimatedReach] = useState<number>(0);
+  const [totalReach, setTotalReach] = useState<number>(0);
+  const [excludedReach, setExcludedReach] = useState<number>(0);
   const [loadingReach, setLoadingReach] = useState(true);
 
   useEffect(() => {
@@ -56,24 +60,49 @@ export function Step4ScheduleSend({
       try {
         const supabase = createClient();
 
+        // 1. Calculate the base audience
+        let baseSet: Set<string> | null = null;
+        let total = 0;
+
         if (audience.type === 'all') {
           const { count } = await supabase
             .from('contacts')
             .select('*', { count: 'exact', head: true });
-          setEstimatedReach(count ?? 0);
+          total = count ?? 0;
         } else if (audience.type === 'tags' && audience.tagIds && audience.tagIds.length > 0) {
           const { data: contactTags } = await supabase
             .from('contact_tags')
             .select('contact_id')
             .in('tag_id', audience.tagIds);
-
-          const uniqueIds = new Set((contactTags ?? []).map((ct) => ct.contact_id));
-          setEstimatedReach(uniqueIds.size);
+          baseSet = new Set((contactTags ?? []).map((ct) => ct.contact_id));
+          total = baseSet.size;
+        } else if (audience.type === 'specific_contacts' && audience.contactIds) {
+          baseSet = new Set(audience.contactIds);
+          total = baseSet.size;
         } else if (audience.type === 'csv' && audience.csvContacts) {
-          setEstimatedReach(audience.csvContacts.length);
-        } else {
-          setEstimatedReach(0);
+          total = audience.csvContacts.length;
         }
+
+        // 2. Calculate the exclude set (if any)
+        let excludedCount = 0;
+        if (audience.excludeTagIds && audience.excludeTagIds.length > 0 && audience.type !== 'csv') {
+          const { data: excludeRows } = await supabase
+            .from('contact_tags')
+            .select('contact_id')
+            .in('tag_id', audience.excludeTagIds);
+            
+          const excludeSet = new Set((excludeRows ?? []).map((ct) => ct.contact_id));
+          
+          if (baseSet) {
+             excludedCount = [...baseSet].filter(id => excludeSet.has(id)).length;
+          } else if (audience.type === 'all') {
+             excludedCount = excludeSet.size;
+          }
+        }
+
+        setTotalReach(total);
+        setExcludedReach(excludedCount);
+        setEstimatedReach(Math.max(0, total - excludedCount));
       } finally {
         setLoadingReach(false);
       }
@@ -125,13 +154,20 @@ export function Step4ScheduleSend({
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Estimated Reach</p>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-col gap-1 mt-0.5">
               {loadingReach ? (
                 <Loader2 className="h-3 w-3 animate-spin text-violet-500" />
               ) : (
                 <>
-                  <Users className="h-3.5 w-3.5 text-violet-600" />
-                  <p className="font-medium text-foreground">{estimatedReach.toLocaleString()}</p>
+                  <div className="flex items-center gap-1.5">
+                    <Users className="h-3.5 w-3.5 text-violet-600" />
+                    <p className="font-medium text-foreground">{estimatedReach.toLocaleString()} recipients</p>
+                  </div>
+                  {excludedReach > 0 && (
+                    <p className="text-[10px] text-muted-foreground">
+                      (Total {totalReach.toLocaleString()} - {excludedReach.toLocaleString()} excluded)
+                    </p>
+                  )}
                 </>
               )}
             </div>

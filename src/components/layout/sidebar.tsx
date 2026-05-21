@@ -124,9 +124,6 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               <span className="font-heading text-sm font-extrabold tracking-wider text-sidebar-foreground uppercase">
                 WACRM
               </span>
-              <span className="font-mono text-[8px] text-primary/70 tracking-widest font-semibold">
-                [CORE_v1.0]
-              </span>
             </div>
           </Link>
           <button
@@ -141,10 +138,10 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
         {/* Role badge for vendors */}
         {isVendor && (
-          <div className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-1.5">
+          <div className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-primary/10 bg-primary/5 px-3 py-1.5">
             <User className="h-3.5 w-3.5 text-primary" />
-            <span className="font-mono text-[10px] uppercase font-semibold text-primary tracking-wider">
-              [VENDOR_MODE]
+            <span className="text-xs font-semibold text-primary">
+              Vendor Mode
             </span>
           </div>
         )}

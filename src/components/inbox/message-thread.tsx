@@ -47,6 +47,7 @@ interface MessageThreadProps {
   onNewMessage: (message: Message) => void;
   onUpdateMessage: (id: string, updates: Partial<Message>) => void;
   onStatusChange: (conversationId: string, status: ConversationStatus) => void;
+  onUpdateConversation?: (id: string, updates: Partial<Conversation>) => void;
   /**
    * On mobile, the thread is shown full-screen with the conversation list
    * hidden. This callback lets the page deselect the active conversation
@@ -98,6 +99,7 @@ export function MessageThread({
   onNewMessage,
   onUpdateMessage,
   onStatusChange,
+  onUpdateConversation,
   onBack,
 }: MessageThreadProps) {
   const [loading, setLoading] = useState(false);
@@ -129,6 +131,15 @@ export function MessageThread({
   const handleAssignVendor = useCallback(
     async (vendorId: string | null) => {
       if (!conversation) return;
+
+      // Capture the previous agent BEFORE the optimistic update
+      const previousAgentId = conversation.assigned_agent_id;
+
+      // Optimistic update
+      if (onUpdateConversation) {
+        onUpdateConversation(conversation.id, { assigned_agent_id: vendorId });
+      }
+
       const supabase = createClient();
       const { error } = await supabase
         .from('conversations')
@@ -136,8 +147,33 @@ export function MessageThread({
         .eq('id', conversation.id);
 
       if (error) {
+        // Revert on error
+        if (onUpdateConversation) {
+          onUpdateConversation(conversation.id, { assigned_agent_id: previousAgentId });
+        }
         toast.error('Failed to assign conversation');
         return;
+      }
+
+      // Broadcast assignment change so the old vendor's browser gets
+      // notified even when RLS blocks the postgres_changes event.
+      if (previousAgentId && previousAgentId !== vendorId) {
+        const broadcastChannel = supabase.channel('vendor-assignment-updates');
+        broadcastChannel.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            broadcastChannel.send({
+              type: 'broadcast',
+              event: 'assignment-changed',
+              payload: {
+                conversationId: conversation.id,
+                oldAgentId: previousAgentId,
+                newAgentId: vendorId,
+              },
+            });
+            // Clean up after a short delay to ensure delivery
+            setTimeout(() => supabase.removeChannel(broadcastChannel), 1000);
+          }
+        });
       }
 
       const vendorName = vendorId
@@ -147,7 +183,7 @@ export function MessageThread({
         vendorId ? `Assigned to ${vendorName}` : 'Conversation unassigned'
       );
     },
-    [conversation, vendors]
+    [conversation, vendors, onUpdateConversation]
   );
 
   // 24-hour session timer

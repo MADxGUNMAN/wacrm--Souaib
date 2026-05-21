@@ -1,10 +1,11 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { Shield, Users, MessageSquare, Check, X, AlertTriangle } from "lucide-react"
 import { useAuth } from "@/hooks/use-auth"
 import { createClient } from "@/lib/supabase/client"
 import { Skeleton } from "@/components/dashboard/skeleton"
+import { useRealtime } from "@/hooks/use-realtime"
 
 interface VendorProfile {
   id: string;
@@ -33,7 +34,7 @@ export function VendorDetailsCard() {
   const [assignedCount, setAssignedCount] = useState<number | null>(null)
 
   // Fetch all vendors if admin
-  useEffect(() => {
+  const loadVendors = useCallback(() => {
     if (!isAdmin) return
     setLoading(true)
     fetch("/api/vendors")
@@ -46,8 +47,12 @@ export function VendorDetailsCard() {
       .finally(() => setLoading(false))
   }, [isAdmin])
 
-  // Fetch assigned conversations count if vendor
   useEffect(() => {
+    loadVendors()
+  }, [loadVendors])
+
+  // Fetch assigned conversations count if vendor
+  const loadAssignedCount = useCallback(() => {
     if (!isVendor || !profile?.id) return
     const db = createClient()
     db.from("conversations")
@@ -58,6 +63,20 @@ export function VendorDetailsCard() {
         else setAssignedCount(count ?? 0)
       })
   }, [isVendor, profile?.id])
+
+  useEffect(() => {
+    loadAssignedCount()
+  }, [loadAssignedCount])
+
+  // Listen for realtime conversation assignment changes
+  useRealtime({
+    channelName: "vendor-details-realtime",
+    onConversationEvent: () => {
+      if (isAdmin) loadVendors()
+      if (isVendor) loadAssignedCount()
+    },
+    enabled: isAdmin || isVendor,
+  })
 
   if (!isAdmin && !isVendor) {
     return null // Hide for standard 'user' role without vendor/admin configuration
@@ -70,11 +89,11 @@ export function VendorDetailsCard() {
         <div className="flex items-center gap-2">
           <Shield className="h-4 w-4 text-primary" />
           <h2 className="font-heading text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            {isAdmin ? "System Vendor Registry" : "Vendor Node Telemetry"}
+            {isAdmin ? "Vendor Registry" : "Vendor Profile"}
           </h2>
         </div>
-        <span className="font-mono text-[9px] uppercase px-1.5 py-0.5 rounded border border-primary/20 bg-primary/5 text-primary">
-          {isAdmin ? "[SYS_VENDORS]" : "[VENDOR_MODE]"}
+        <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded border border-primary/10 bg-primary/5 text-primary">
+          {isAdmin ? "Admin" : "Vendor"}
         </span>
       </div>
 
@@ -90,7 +109,7 @@ export function VendorDetailsCard() {
           ) : !vendors || vendors.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-6 text-center border border-dashed border-border rounded-md bg-background/20">
               <Users className="h-8 w-8 text-slate-600 mb-2" />
-              <p className="font-mono text-xs text-muted-foreground uppercase">[NO_VENDORS_PROVISIONED]</p>
+              <p className="text-xs font-medium text-muted-foreground">No vendors registered</p>
               <p className="text-[11px] text-muted-foreground mt-1 max-w-[200px]">
                 Create vendor profiles in system settings to delegate conversation assignments.
               </p>
@@ -107,13 +126,13 @@ export function VendorDetailsCard() {
                     <p className="font-mono text-[10px] text-muted-foreground truncate">{vendor.email}</p>
                   </div>
                   <div className="flex items-center gap-2.5 shrink-0">
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      [{vendor.assigned_conversations_count}_CONVS]
+                    <span className="text-xs text-muted-foreground font-medium">
+                      {vendor.assigned_conversations_count} {vendor.assigned_conversations_count === 1 ? 'chat' : 'chats'}
                     </span>
                     <span
-                      className={`font-mono text-[9px] px-1 py-0.5 rounded border ${
+                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
                         vendor.is_active
-                          ? "border-primary/20 bg-primary/5 text-primary"
+                          ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-600"
                           : "border-red-500/20 bg-red-500/5 text-red-600"
                       }`}
                     >
@@ -133,13 +152,13 @@ export function VendorDetailsCard() {
           {/* Active Vendor Details */}
           <div className="grid grid-cols-2 gap-3">
             <div className="p-3 rounded border border-border/60 bg-background/20">
-              <p className="font-heading text-[10px] text-muted-foreground uppercase tracking-wider">Node Operator</p>
+              <p className="font-heading text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Vendor Name</p>
               <p className="text-sm font-bold text-foreground truncate mt-1">{profile.full_name}</p>
             </div>
             <div className="p-3 rounded border border-border/60 bg-background/20">
-              <p className="font-heading text-[10px] text-muted-foreground uppercase tracking-wider">Assigned Inbox</p>
-              <p className="font-mono text-sm font-bold text-primary mt-1">
-                {assignedCount !== null ? `[${assignedCount}_CONVS]` : "[-]"}
+              <p className="font-heading text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Assigned Chats</p>
+              <p className="text-sm font-bold text-primary mt-1">
+                {assignedCount !== null ? `${assignedCount} ${assignedCount === 1 ? 'chat' : 'chats'}` : "-"}
               </p>
             </div>
           </div>

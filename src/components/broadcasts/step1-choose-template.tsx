@@ -7,9 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Loader2, FileText, ArrowRight } from 'lucide-react';
 
 const categoryColors: Record<string, string> = {
-  Marketing: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  Utility: 'bg-blue-500/10 text-blue-600 border-blue-500/20',
-  Authentication: 'bg-orange-500/10 text-orange-600 border-orange-500/20',
+  Marketing: 'bg-purple-500/10 text-purple-600 border-purple-500/20 dark:text-purple-400',
+  Utility: 'bg-blue-500/10 text-blue-600 border-blue-500/20 dark:text-blue-400',
+  Authentication: 'bg-orange-500/10 text-orange-600 border-orange-500/20 dark:text-orange-400',
 };
 
 interface Step1Props {
@@ -86,27 +86,42 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
               <button
                 key={template.id}
                 onClick={() => onSelect(template)}
-                className={`flex flex-col gap-3 rounded-xl border p-4 text-left transition-all ${
+                className={`group flex flex-col justify-between gap-4 rounded-xl border p-4 text-left transition-all duration-200 cursor-pointer ${
                   isSelected
-                    ? 'border-violet-500 bg-violet-500/5 ring-1 ring-violet-500/30'
-                    : 'border-border bg-card/50 hover:border-border hover:bg-card'
+                    ? 'border-violet-500 bg-violet-500/5 ring-1 ring-violet-500/30 shadow-sm'
+                    : 'border-border bg-card/50 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-card hover:shadow-sm'
                 }`}
               >
-                <div className="flex items-start justify-between">
-                  <h3 className="text-sm font-medium text-foreground">{template.name}</h3>
-                  <span
-                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${catColor}`}
-                  >
-                    {template.category}
-                  </span>
+                <div className="space-y-3 w-full">
+                  <div className="flex w-full items-start justify-between gap-2 min-w-0">
+                    <h3 
+                      className="min-w-0 flex-1 text-sm font-semibold text-foreground break-all tracking-tight leading-tight" 
+                      title={template.name}
+                    >
+                      {template.name}
+                    </h3>
+                    <span
+                      className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${catColor}`}
+                    >
+                      {template.category}
+                    </span>
+                  </div>
+                  <p className="line-clamp-3 text-xs text-muted-foreground leading-relaxed bg-muted/30 p-2.5 rounded-lg border border-border/30">
+                    {template.body_text}
+                  </p>
                 </div>
-                <p className="line-clamp-3 text-xs text-muted-foreground">{template.body_text}</p>
-                <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                  <span>{template.language ?? 'en_US'}</span>
+                <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/80 mt-1 font-mono uppercase">
+                  <span className="bg-muted px-1.5 py-0.5 rounded border border-border/40 font-medium">{template.language ?? 'en_US'}</span>
                   {template.status && (
                     <>
-                      <span>-</span>
-                      <span>{template.status}</span>
+                      <span className="text-muted-foreground/40">•</span>
+                      <span className={`px-1.5 py-0.5 rounded border border-border/40 font-medium ${
+                        template.status.toLowerCase() === 'approved' 
+                          ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 border-emerald-500/10' 
+                          : 'text-amber-600 dark:text-amber-400 bg-amber-500/5 border-amber-500/10'
+                      }`}>
+                        {template.status}
+                      </span>
                     </>
                   )}
                 </div>

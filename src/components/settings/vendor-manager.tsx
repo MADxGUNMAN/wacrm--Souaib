@@ -36,6 +36,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { VendorPermissions } from "@/types";
+import { useRealtime } from "@/hooks/use-realtime";
 
 interface VendorProfile {
   id: string;
@@ -84,6 +85,19 @@ export function VendorManager() {
   useEffect(() => {
     fetchVendors();
   }, [fetchVendors]);
+
+  // Listen for realtime conversation assignment changes to update counts
+  useRealtime({
+    channelName: "vendor-manager-realtime",
+    onConversationEvent: () => {
+      // Background refetch so we don't flash the loading spinner
+      fetch("/api/vendors")
+        .then((res) => res.json())
+        .then((data) => setVendors(data))
+        .catch(() => {});
+    },
+    enabled: true,
+  });
 
   const handleToggleActive = async (vendor: VendorProfile) => {
     try {

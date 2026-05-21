@@ -32,6 +32,7 @@ import { PipelineDonut } from '@/components/dashboard/pipeline-donut'
 import { ResponseTimeChart } from '@/components/dashboard/response-time-chart'
 import { ActivityFeed } from '@/components/dashboard/activity-feed'
 import { VendorDetailsCard } from '@/components/dashboard/vendor-details'
+import { VendorAnalyticsCard } from '@/components/dashboard/vendor-analytics'
 
 type RangeDays = 7 | 30 | 90
 
@@ -121,10 +122,10 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex flex-col gap-1 border-b border-border pb-4">
         <h1 className="font-heading text-2xl font-black uppercase tracking-widest text-foreground">
-          Dashboard <span className="font-mono text-xs text-primary font-normal tracking-normal">[SYS_ANALYTICS]</span>
+          Dashboard
         </h1>
-        <p className="font-mono text-[11px] text-muted-foreground uppercase tracking-wider">
-          Live telemetry across conversations, contacts, pipeline stages, and automations.
+        <p className="text-xs text-muted-foreground">
+          Real-time overview of conversations, contacts, pipeline stages, and automations.
         </p>
       </div>
 
@@ -215,6 +216,9 @@ export default function DashboardPage() {
           <VendorDetailsCard />
         </div>
       </div>
+
+      {/* Full Vendor Analytics — admin only */}
+      <VendorAnalyticsCard />
     </div>
   )
 }
@@ -222,12 +226,12 @@ export default function DashboardPage() {
 // ------------------------------------------------------------
 
 function formatCurrency(v: number): string {
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat('en-IN', {
     style: 'currency',
-    currency: 'USD',
+    currency: 'INR',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(v)
+  }).format(v);
 }
 
 function deltaLabel(delta: number, suffix: string): string {

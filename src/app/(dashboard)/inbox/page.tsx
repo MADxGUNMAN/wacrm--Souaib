@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 
 export default function InboxPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isVendor, profile } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   /**
@@ -114,6 +114,42 @@ export default function InboxPage() {
     [activeConversation]
   );
 
+  const fetchSingleConversation = useCallback(async (id: string) => {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("conversations")
+      .select("*, contact:contacts(*)")
+      .eq("id", id)
+      .single();
+
+    if (data && !error) {
+      setConversations((prev) => {
+        if (prev.some((c) => c.id === id)) {
+          return prev.map((c) => (c.id === id ? data : c));
+        }
+        return [data, ...prev].sort(
+          (a, b) =>
+            new Date(b.last_message_at || 0).getTime() -
+            new Date(a.last_message_at || 0).getTime()
+        );
+      });
+      setActiveConversation((prev) => (prev?.id === id ? data : prev));
+    }
+  }, []);
+
+  // Mobile "back" — deselect the conversation so the list pane comes
+  // back. Also clears the ?c= param so a refresh lands on the list
+  // instead of re-opening the thread the user just backed out of.
+  const handleCloseConversation = useCallback(() => {
+    setActiveConversation(null);
+    setActiveContact(null);
+    setMessages([]);
+    // Clearing the ref lets the deep-link auto-selector fire again if
+    // the user later visits /inbox?c=<same-id> — desirable UX.
+    autoSelectedForDeepLinkRef.current = null;
+    router.replace("/inbox", { scroll: false });
+  }, [router]);
+
   // Handle realtime conversation events
   const handleConversationEvent = useCallback(
     (event: {
@@ -121,26 +157,60 @@ export default function InboxPage() {
       new: Conversation;
       old: Partial<Conversation>;
     }) => {
+      if (event.eventType === "DELETE") {
+        const deletedId = event.old?.id;
+        if (!deletedId) return;
+        
+        setConversations((prev) => prev.filter((c) => c.id !== deletedId));
+        setActiveConversation((prev) => {
+          if (prev?.id === deletedId) {
+            setTimeout(() => handleCloseConversation(), 0);
+            return null;
+          }
+          return prev;
+        });
+        return;
+      }
+
       const conv = event.new;
 
       if (event.eventType === "INSERT") {
-        setConversations((prev) => [conv, ...prev]);
+        if (isVendor && profile && conv.assigned_agent_id !== profile.id) return;
+        // Fetch to get contact info since realtime payload lacks joined tables
+        fetchSingleConversation(conv.id);
       }
 
       if (event.eventType === "UPDATE") {
-        setConversations((prev) =>
-          prev.map((c) => (c.id === conv.id ? { ...c, ...conv } : c))
-        );
+        // If we are a vendor and it's removed from our assignment
+        if (isVendor && profile && conv.assigned_agent_id !== profile.id) {
+          setConversations((prev) => prev.filter((c) => c.id !== conv.id));
+          setActiveConversation((prev) => {
+            if (prev?.id === conv.id) {
+              setTimeout(() => handleCloseConversation(), 0);
+              return null;
+            }
+            return prev;
+          });
+          return;
+        }
+
+        setConversations((prev) => {
+          const exists = prev.some((c) => c.id === conv.id);
+          if (!exists) {
+            // Newly assigned to us!
+            fetchSingleConversation(conv.id);
+            return prev;
+          }
+          return prev.map((c) => (c.id === conv.id ? { ...c, ...conv } : c));
+        });
 
         // Update active conversation if it changed
-        if (activeConversation && conv.id === activeConversation.id) {
-          setActiveConversation((prev) =>
-            prev ? { ...prev, ...conv } : prev
-          );
-        }
+        setActiveConversation((prev) =>
+          prev?.id === conv.id ? { ...prev, ...conv } : prev
+        );
       }
     },
-    [activeConversation]
+    [isVendor, profile, fetchSingleConversation, handleCloseConversation]
   );
 
   // Subscribe to realtime
@@ -150,6 +220,46 @@ export default function InboxPage() {
     onConversationEvent: handleConversationEvent,
     enabled: true,
   });
+
+  // Listen for vendor assignment broadcasts.
+  // When a conversation is unassigned from a vendor, RLS hides the row
+  // from the vendor's postgres_changes subscription so they never get the
+  // UPDATE event.  We use a Supabase broadcast channel to bypass RLS and
+  // explicitly notify the old vendor so they can remove the conversation
+  // from their local state in real-time.
+  useEffect(() => {
+    if (!isVendor || !profile) return;
+
+    const supabase = createClient();
+    const channel = supabase
+      .channel("vendor-assignment-updates")
+      .on("broadcast", { event: "assignment-changed" }, ({ payload }) => {
+        const { conversationId, oldAgentId } = payload as {
+          conversationId: string;
+          oldAgentId: string;
+          newAgentId: string | null;
+        };
+
+        // Only act if we are the old agent (conversation was taken away from us)
+        if (oldAgentId !== profile.id) return;
+
+        setConversations((prev) =>
+          prev.filter((c) => c.id !== conversationId)
+        );
+        setActiveConversation((prev) => {
+          if (prev?.id === conversationId) {
+            setTimeout(() => handleCloseConversation(), 0);
+            return null;
+          }
+          return prev;
+        });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [isVendor, profile, handleCloseConversation]);
 
   const handleConversationsLoaded = useCallback(
     (loaded: Conversation[]) => {
@@ -212,18 +322,6 @@ export default function InboxPage() {
     [activeConversation?.id, router]
   );
 
-  // Mobile "back" — deselect the conversation so the list pane comes
-  // back. Also clears the ?c= param so a refresh lands on the list
-  // instead of re-opening the thread the user just backed out of.
-  const handleCloseConversation = useCallback(() => {
-    setActiveConversation(null);
-    setActiveContact(null);
-    setMessages([]);
-    // Clearing the ref lets the deep-link auto-selector fire again if
-    // the user later visits /inbox?c=<same-id> — desirable UX.
-    autoSelectedForDeepLinkRef.current = null;
-    router.replace("/inbox", { scroll: false });
-  }, [router]);
 
 
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
@@ -253,6 +351,18 @@ export default function InboxPage() {
       );
       if (activeConversation?.id === conversationId) {
         setActiveConversation((prev) => (prev ? { ...prev, status } : prev));
+      }
+    },
+    [activeConversation]
+  );
+
+  const handleUpdateConversation = useCallback(
+    (conversationId: string, updates: Partial<Conversation>) => {
+      setConversations((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, ...updates } : c))
+      );
+      if (activeConversation?.id === conversationId) {
+        setActiveConversation((prev) => (prev ? { ...prev, ...updates } : prev));
       }
     },
     [activeConversation]
@@ -314,6 +424,7 @@ export default function InboxPage() {
             onNewMessage={handleNewMessage}
             onUpdateMessage={handleUpdateMessage}
             onStatusChange={handleStatusChange}
+            onUpdateConversation={handleUpdateConversation}
             onBack={handleCloseConversation}
           />
         </div>

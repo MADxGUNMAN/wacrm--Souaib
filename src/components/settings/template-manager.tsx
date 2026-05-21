@@ -302,7 +302,7 @@ export function TemplateManager() {
               <CardContent className="flex items-start justify-between pt-4">
                 <div className="space-y-2 min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-medium text-foreground">{template.name}</h3>
+                    <h3 className="font-medium text-foreground break-all" title={template.name}>{template.name}</h3>
                     <Badge
                       className={`text-xs border ${categoryColors[template.category] || ''}`}
                     >

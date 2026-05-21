@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
@@ -7,6 +8,7 @@ import {
   isValidE164,
   phoneVariants,
   isRecipientNotAllowedError,
+  normalizePhone,
 } from '@/lib/whatsapp/phone-utils'
 import {
   checkRateLimit,
@@ -46,6 +48,19 @@ interface BroadcastResult {
 interface NewRecipient {
   phone: string
   params?: string[]
+}
+
+// Lazy-initialized service-role client for DB writes that bypass RLS
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _adminDb: any = null
+function adminDb() {
+  if (!_adminDb) {
+    _adminDb = createAdminClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    )
+  }
+  return _adminDb
 }
 
 export async function POST(request: Request) {
@@ -180,6 +195,103 @@ export async function POST(request: Request) {
           whatsapp_message_id: sentMessageId,
         })
         sentCount++
+
+        // ─── Save broadcast message to DB ─────────────────────────
+        // Find or create the contact + conversation so the message
+        // appears in the admin's / vendor's inbox thread.
+        try {
+          const normalized = normalizePhone(recipient.phone)
+
+          const cleanPhone = recipient.phone.replace(/[^+\d]/g, '')
+          const orQueries = [
+            `phone.eq.${normalized}`,
+            `phone.eq.+${normalized}`,
+            cleanPhone ? `phone.eq.${cleanPhone}` : null
+          ].filter(Boolean)
+
+          // Find existing contact by phone
+          const { data: existingContact } = await adminDb()
+            .from('contacts')
+            .select('id')
+            .eq('user_id', user.id)
+            .or(orQueries.join(','))
+            .limit(1)
+            .maybeSingle()
+
+          let contactId: string | null = existingContact?.id ?? null
+
+          // Create contact if it doesn't exist
+          if (!contactId) {
+            const { data: newContact } = await adminDb()
+              .from('contacts')
+              .insert({
+                user_id: user.id,
+                phone: normalized,
+                name: normalized,
+              })
+              .select('id')
+              .single()
+            contactId = newContact?.id ?? null
+          }
+
+          if (contactId) {
+            // Find or create conversation
+            const { data: existingConv } = await adminDb()
+              .from('conversations')
+              .select('id')
+              .eq('user_id', user.id)
+              .eq('contact_id', contactId)
+              .maybeSingle()
+
+            let conversationId: string | null = existingConv?.id ?? null
+
+            if (!conversationId) {
+              const { data: newConv } = await adminDb()
+                .from('conversations')
+                .insert({
+                  user_id: user.id,
+                  contact_id: contactId,
+                })
+                .select('id')
+                .single()
+              conversationId = newConv?.id ?? null
+            }
+
+            if (conversationId) {
+              const templateText = `[Template: ${template_name}]`
+
+              // Insert the message record
+              await adminDb()
+                .from('messages')
+                .insert({
+                  conversation_id: conversationId,
+                  sender_type: 'agent',
+                  content_type: 'template',
+                  content_text: templateText,
+                  template_name: template_name,
+                  message_id: sentMessageId,
+                  status: 'sent',
+                })
+
+              // Update conversation preview
+              await adminDb()
+                .from('conversations')
+                .update({
+                  last_message_text: templateText,
+                  last_message_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', conversationId)
+            }
+          }
+        } catch (dbErr) {
+          // Don't fail the broadcast if DB save fails — the message
+          // was already sent via Meta successfully.
+          console.error(
+            `[broadcast] Failed to save message to DB for ${recipient.phone}:`,
+            dbErr
+          )
+        }
       } else {
         console.error(
           `Failed to send broadcast to ${recipient.phone}:`,
