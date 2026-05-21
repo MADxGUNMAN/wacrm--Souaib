@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -44,6 +44,23 @@ export function PipelineBoard({
   onEditDeal,
 }: PipelineBoardProps) {
   const [activeDealId, setActiveDealId] = useState<string | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      // If deltaX is 0, they are using a standard vertical mouse wheel
+      if (e.deltaY !== 0 && e.deltaX === 0) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    };
+
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, []);
 
   const sortedStages = useMemo(
     () => [...stages].sort((a, b) => a.position - b.position),
@@ -106,7 +123,10 @@ export function PipelineBoard({
           stage cleanly at the viewport edge instead of mid-column.
           Disabled on lg+ because the full board fits without scroll
           there and snapping would interfere with the natural layout. */}
-      <div className="pipeline-scroll flex snap-x snap-mandatory gap-3 overflow-x-auto pb-4 lg:snap-none">
+      <div 
+        ref={scrollContainerRef}
+        className="pipeline-scroll flex snap-x snap-mandatory gap-3 overflow-x-auto pb-4 lg:snap-none"
+      >
         {sortedStages.map((stage) => {
           const stageDeals = dealsByStage.get(stage.id) ?? [];
           const totalValue = stageDeals.reduce(
