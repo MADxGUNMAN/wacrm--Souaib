@@ -4812,8 +4812,8 @@
       "source_file": "src\\components\\automations\\automation-builder.tsx",
       "source_location": "L499",
       "weight": 1.0,
-      "_src": "automations_automation_builder_patch",
-      "_tgt": "settings_page_onchange",
+      "_src": "settings_page_onchange",
+      "_tgt": "automations_automation_builder_patch",
       "source": "settings_page_onchange",
       "target": "automations_automation_builder_patch"
     },
@@ -8904,8 +8904,8 @@
       "source_file": "src\\lib\\automations\\engine.ts",
       "source_location": "L86",
       "weight": 1.0,
-      "_src": "automations_engine_runduetimebasedautomations",
-      "_tgt": "automations_admin_client_supabaseadmin",
+      "_src": "automations_admin_client_supabaseadmin",
+      "_tgt": "automations_engine_runduetimebasedautomations",
       "source": "automations_admin_client_supabaseadmin",
       "target": "automations_engine_runduetimebasedautomations"
     },
@@ -8976,8 +8976,8 @@
       "source_file": "src\\lib\\automations\\engine.ts",
       "source_location": "L620",
       "weight": 1.0,
-      "_src": "automations_engine_claimtimeautomationrun",
-      "_tgt": "automations_admin_client_supabaseadmin",
+      "_src": "automations_admin_client_supabaseadmin",
+      "_tgt": "automations_engine_claimtimeautomationrun",
       "source": "automations_admin_client_supabaseadmin",
       "target": "automations_engine_claimtimeautomationrun"
     },
