@@ -23,51 +23,51 @@ export interface StatusDisplay {
 export const broadcastStatusConfig: Record<BroadcastStatus, StatusDisplay> = {
   draft: {
     label: "Draft",
-    classes: "bg-slate-500/10 text-slate-400 border-slate-500/20",
+    classes: "bg-slate-100 text-slate-700 border-slate-200",
   },
   scheduled: {
     label: "Scheduled",
-    classes: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+    classes: "bg-blue-50 text-blue-700 border-blue-200",
   },
   sending: {
     label: "Sending",
-    classes: "bg-yellow-500/10 text-yellow-400 border-yellow-500/20",
+    classes: "bg-amber-50 text-amber-700 border-amber-200",
     pulse: true,
   },
   sent: {
     label: "Sent",
-    classes: "bg-violet-500/10 text-violet-400 border-violet-500/20",
+    classes: "bg-emerald-50 text-emerald-700 border-emerald-200",
   },
   failed: {
     label: "Failed",
-    classes: "bg-red-500/10 text-red-400 border-red-500/20",
+    classes: "bg-red-50 text-red-700 border-red-200",
   },
 };
 
 export const recipientStatusConfig: Record<RecipientStatus, StatusDisplay> = {
   pending: {
     label: "Pending",
-    classes: "bg-slate-500/10 text-slate-400 border-slate-500/20",
+    classes: "bg-slate-100 text-slate-700 border-slate-200",
   },
   sent: {
     label: "Sent",
-    classes: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+    classes: "bg-emerald-50 text-emerald-700 border-emerald-200",
   },
   delivered: {
     label: "Delivered",
-    classes: "bg-violet-500/10 text-violet-400 border-violet-500/20",
+    classes: "bg-blue-50 text-blue-700 border-blue-200",
   },
   read: {
     label: "Read",
-    classes: "bg-violet-500/10 text-violet-300 border-violet-500/20",
+    classes: "bg-sky-50 text-sky-700 border-sky-200",
   },
   replied: {
     label: "Replied",
-    classes: "bg-purple-500/10 text-purple-400 border-purple-500/20",
+    classes: "bg-purple-50 text-purple-700 border-purple-200",
   },
   failed: {
     label: "Failed",
-    classes: "bg-red-500/10 text-red-400 border-red-500/20",
+    classes: "bg-red-50 text-red-700 border-red-200",
   },
 };
 

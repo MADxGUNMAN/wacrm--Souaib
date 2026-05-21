@@ -28,7 +28,9 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev-with-automation-cron.mjs",
+    "dev:next": "next dev",
+    "automation:cron": "node scripts/dev-with-automation-cron.mjs --cron-only",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

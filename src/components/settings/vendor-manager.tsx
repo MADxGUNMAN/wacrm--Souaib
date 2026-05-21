@@ -120,7 +120,7 @@ export function VendorManager() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <Card className="border-slate-800 bg-slate-900/50">
+      <Card className="border-border bg-card/50">
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -128,10 +128,10 @@ export function VendorManager() {
                 <Users className="h-5 w-5 text-violet-500" />
               </div>
               <div>
-                <CardTitle className="text-lg text-white">
+                <CardTitle className="text-lg text-foreground">
                   Vendor Management
                 </CardTitle>
-                <CardDescription className="text-slate-400">
+                <CardDescription className="text-muted-foreground">
                   Create and manage vendor accounts. Vendors can only see
                   conversations assigned to them.
                 </CardDescription>
@@ -154,17 +154,17 @@ export function VendorManager() {
           <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
         </div>
       ) : vendors.length === 0 ? (
-        <Card className="border-slate-800 bg-slate-900/50">
+        <Card className="border-border bg-card/50">
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Users className="mb-3 h-12 w-12 text-slate-600" />
-            <p className="text-sm text-slate-400">No vendors yet</p>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="text-sm text-muted-foreground">No vendors yet</p>
+            <p className="mt-1 text-xs text-muted-foreground">
               Create your first vendor account to start assigning conversations
             </p>
             <Button
               onClick={() => setShowCreateDialog(true)}
               variant="outline"
-              className="mt-4 gap-2 border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+              className="mt-4 gap-2 border-border text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <Plus className="h-4 w-4" />
               Add Vendor
@@ -176,38 +176,38 @@ export function VendorManager() {
           {vendors.map((vendor) => (
             <Card
               key={vendor.id}
-              className="border-slate-800 bg-slate-900/50 transition-colors hover:border-slate-700"
+              className="border-border bg-card/50 transition-colors hover:border-border"
             >
               <CardContent className="flex items-center gap-4 p-4">
                 {/* Avatar */}
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-sm font-semibold text-violet-400">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-sm font-semibold text-violet-600">
                   {vendor.full_name.charAt(0).toUpperCase()}
                 </div>
 
                 {/* Info */}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <p className="truncate text-sm font-medium text-white">
+                    <p className="truncate text-sm font-medium text-foreground">
                       {vendor.full_name}
                     </p>
                     <Badge
                       variant="secondary"
                       className={
                         vendor.is_active
-                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                          : "bg-red-500/10 text-red-400 border-red-500/20"
+                          ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+                          : "bg-red-500/10 text-red-600 border-red-500/20"
                       }
                     >
                       {vendor.is_active ? "Active" : "Suspended"}
                     </Badge>
                   </div>
-                  <p className="truncate text-xs text-slate-400">{vendor.email}</p>
+                  <p className="truncate text-xs text-muted-foreground">{vendor.email}</p>
                 </div>
 
                 {/* Stats */}
                 <div className="hidden items-center gap-1.5 sm:flex">
-                  <MessageSquare className="h-3.5 w-3.5 text-slate-500" />
-                  <span className="text-xs text-slate-400">
+                  <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">
                     {vendor.assigned_conversations_count} assigned
                   </span>
                 </div>
@@ -217,7 +217,7 @@ export function VendorManager() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-8 w-8 p-0 text-slate-400 hover:text-violet-400"
+                    className="h-8 w-8 p-0 text-muted-foreground hover:text-violet-600"
                     onClick={() => setShowPermissions(vendor)}
                     title="Permissions"
                   >
@@ -226,7 +226,7 @@ export function VendorManager() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-8 w-8 p-0 text-slate-400 hover:text-white"
+                    className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
                     onClick={() => setEditVendor(vendor)}
                     title="Edit"
                   >
@@ -235,7 +235,7 @@ export function VendorManager() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-8 w-8 p-0 text-slate-400 hover:text-amber-400"
+                    className="h-8 w-8 p-0 text-muted-foreground hover:text-amber-600"
                     onClick={() => handleToggleActive(vendor)}
                     title={vendor.is_active ? "Suspend" : "Activate"}
                   >
@@ -248,7 +248,7 @@ export function VendorManager() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-8 w-8 p-0 text-slate-400 hover:text-red-400"
+                    className="h-8 w-8 p-0 text-muted-foreground hover:text-red-600"
                     onClick={() => setDeleteConfirm(vendor)}
                     title="Delete"
                   >
@@ -290,12 +290,12 @@ export function VendorManager() {
 
       {/* Delete Confirmation */}
       <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
-        <DialogContent className="border-slate-700 bg-slate-900 text-white sm:max-w-md">
+        <DialogContent className="border-border bg-card text-foreground sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Delete Vendor</DialogTitle>
-            <DialogDescription className="text-slate-400">
+            <DialogDescription className="text-muted-foreground">
               Are you sure you want to delete{" "}
-              <span className="font-medium text-white">
+              <span className="font-medium text-foreground">
                 {deleteConfirm?.full_name}
               </span>
               ? This will unassign all their conversations and remove their
@@ -306,7 +306,7 @@ export function VendorManager() {
             <Button
               variant="outline"
               onClick={() => setDeleteConfirm(null)}
-              className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+              className="border-border text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               Cancel
             </Button>
@@ -371,10 +371,10 @@ function CreateVendorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="border-slate-700 bg-slate-900 text-white sm:max-w-md">
+      <DialogContent className="border-border bg-card text-foreground sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Add New Vendor</DialogTitle>
-          <DialogDescription className="text-slate-400">
+          <DialogDescription className="text-muted-foreground">
             Create a vendor account. They&apos;ll use these credentials to log in
             and will only see conversations assigned to them.
           </DialogDescription>
@@ -382,7 +382,7 @@ function CreateVendorDialog({
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="vendor-name" className="text-slate-300">
+            <Label htmlFor="vendor-name" className="text-muted-foreground">
               Full Name
             </Label>
             <Input
@@ -391,12 +391,12 @@ function CreateVendorDialog({
               onChange={(e) => setFullName(e.target.value)}
               placeholder="Ahmed Khan"
               required
-              className="border-slate-700 bg-slate-800 text-white placeholder:text-slate-500"
+              className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="vendor-email" className="text-slate-300">
+            <Label htmlFor="vendor-email" className="text-muted-foreground">
               Email
             </Label>
             <Input
@@ -406,12 +406,12 @@ function CreateVendorDialog({
               onChange={(e) => setEmail(e.target.value)}
               placeholder="vendor@company.com"
               required
-              className="border-slate-700 bg-slate-800 text-white placeholder:text-slate-500"
+              className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="vendor-password" className="text-slate-300">
+            <Label htmlFor="vendor-password" className="text-muted-foreground">
               Password
             </Label>
             <div className="relative">
@@ -423,12 +423,12 @@ function CreateVendorDialog({
                 placeholder="Min 6 characters"
                 required
                 minLength={6}
-                className="border-slate-700 bg-slate-800 pr-10 text-white placeholder:text-slate-500"
+                className="border-border bg-muted pr-10 text-foreground placeholder:text-muted-foreground"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
                 {showPassword ? (
                   <EyeOff className="h-4 w-4" />
@@ -444,7 +444,7 @@ function CreateVendorDialog({
               type="button"
               variant="outline"
               onClick={onClose}
-              className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+              className="border-border text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               Cancel
             </Button>
@@ -512,17 +512,17 @@ function EditVendorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="border-slate-700 bg-slate-900 text-white sm:max-w-md">
+      <DialogContent className="border-border bg-card text-foreground sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Edit Vendor</DialogTitle>
-          <DialogDescription className="text-slate-400">
+          <DialogDescription className="text-muted-foreground">
             Update {vendor.full_name}&apos;s account details.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="edit-name" className="text-slate-300">
+            <Label htmlFor="edit-name" className="text-muted-foreground">
               Full Name
             </Label>
             <Input
@@ -530,12 +530,12 @@ function EditVendorDialog({
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               required
-              className="border-slate-700 bg-slate-800 text-white"
+              className="border-border bg-muted text-foreground"
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="edit-email" className="text-slate-300">
+            <Label htmlFor="edit-email" className="text-muted-foreground">
               Email
             </Label>
             <Input
@@ -544,14 +544,14 @@ function EditVendorDialog({
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="border-slate-700 bg-slate-800 text-white"
+              className="border-border bg-muted text-foreground"
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="edit-password" className="text-slate-300">
+            <Label htmlFor="edit-password" className="text-muted-foreground">
               New Password{" "}
-              <span className="text-xs text-slate-500">(leave blank to keep current)</span>
+              <span className="text-xs text-muted-foreground">(leave blank to keep current)</span>
             </Label>
             <Input
               id="edit-password"
@@ -560,7 +560,7 @@ function EditVendorDialog({
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter new password"
               minLength={6}
-              className="border-slate-700 bg-slate-800 text-white placeholder:text-slate-500"
+              className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
             />
           </div>
 
@@ -569,7 +569,7 @@ function EditVendorDialog({
               type="button"
               variant="outline"
               onClick={onClose}
-              className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+              className="border-border text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               Cancel
             </Button>
@@ -633,13 +633,13 @@ function PermissionsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="border-slate-700 bg-slate-900 text-white sm:max-w-md">
+      <DialogContent className="border-border bg-card text-foreground sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Shield className="h-5 w-5 text-violet-400" />
+            <Shield className="h-5 w-5 text-violet-600" />
             Permissions — {vendor.full_name}
           </DialogTitle>
-          <DialogDescription className="text-slate-400">
+          <DialogDescription className="text-muted-foreground">
             Control which CRM sections this vendor can access.
           </DialogDescription>
         </DialogHeader>
@@ -649,13 +649,13 @@ function PermissionsDialog({
             (key) => (
               <div
                 key={key}
-                className="flex items-center justify-between rounded-lg border border-slate-800 p-3"
+                className="flex items-center justify-between rounded-lg border border-border p-3"
               >
                 <div>
-                  <p className="text-sm font-medium text-white">
+                  <p className="text-sm font-medium text-foreground">
                     {PERMISSION_LABELS[key].label}
                   </p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-muted-foreground">
                     {PERMISSION_LABELS[key].desc}
                   </p>
                 </div>
@@ -674,7 +674,7 @@ function PermissionsDialog({
           <Button
             variant="outline"
             onClick={onClose}
-            className="border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+            className="border-border text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             Cancel
           </Button>

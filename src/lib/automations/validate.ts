@@ -161,8 +161,46 @@ export function validateTriggerForActivation(
       })
     }
   } else if (triggerType === 'time_based') {
-    if (!nonEmpty(cfg.schedule)) {
+    const hasNewInterval = cfg.every_amount !== undefined || cfg.every_unit !== undefined
+    const amount = Number(cfg.every_amount)
+    if (hasNewInterval && (!Number.isFinite(amount) || amount < 1)) {
+      issues.push({
+        path: 'trigger.every_amount',
+        message: 'interval amount must be at least 1',
+      })
+    }
+    if (
+      hasNewInterval &&
+      !['seconds', 'minutes', 'hours'].includes(String(cfg.every_unit))
+    ) {
+      issues.push({
+        path: 'trigger.every_unit',
+        message: 'interval unit must be seconds, minutes, or hours',
+      })
+    }
+
+    const everyMinutes = Number(cfg.every_minutes)
+    if (
+      !hasNewInterval &&
+      cfg.every_minutes !== undefined &&
+      (!Number.isFinite(everyMinutes) || everyMinutes < 1)
+    ) {
+      issues.push({
+        path: 'trigger.every_minutes',
+        message: 'interval must be at least 1 minute',
+      })
+    }
+    if (!hasNewInterval && cfg.every_minutes === undefined && !nonEmpty(cfg.schedule)) {
       issues.push({ path: 'trigger.schedule', message: 'schedule is required' })
+    }
+    if (cfg.audience === 'selected') {
+      const ids = cfg.contact_ids
+      if (!Array.isArray(ids) || ids.length === 0) {
+        issues.push({
+          path: 'trigger.contact_ids',
+          message: 'select at least one contact',
+        })
+      }
     }
   } else if (triggerType === 'tag_added') {
     if (!nonEmpty(cfg.tag_id)) {

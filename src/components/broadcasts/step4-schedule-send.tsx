@@ -94,85 +94,85 @@ export function Step4ScheduleSend({
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-white">Review & Send</h2>
-        <p className="mt-1 text-sm text-slate-400">
+        <h2 className="text-lg font-semibold text-foreground">Review & Send</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
           Name your broadcast, review the details, and send.
         </p>
       </div>
 
       {/* Broadcast Name */}
       <div>
-        <label className="mb-1.5 block text-sm font-medium text-white">Broadcast Name</label>
+        <label className="mb-1.5 block text-sm font-medium text-foreground">Broadcast Name</label>
         <Input
           value={name}
           onChange={(e) => onNameChange(e.target.value)}
           placeholder="e.g. Summer Sale Announcement"
-          className="border-slate-700 bg-slate-800 text-white placeholder:text-slate-500"
+          className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
         />
       </div>
 
       {/* Summary Card */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 space-y-3">
-        <p className="text-sm font-medium text-white">Summary</p>
+      <div className="rounded-xl border border-border bg-card/50 p-4 space-y-3">
+        <p className="text-sm font-medium text-foreground">Summary</p>
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div>
-            <p className="text-xs text-slate-400">Template</p>
-            <p className="text-white">{template.name}</p>
+            <p className="text-xs text-muted-foreground">Template</p>
+            <p className="text-foreground">{template.name}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-400">Audience</p>
-            <p className="text-white">{audienceLabel}</p>
+            <p className="text-xs text-muted-foreground">Audience</p>
+            <p className="text-foreground">{audienceLabel}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-400">Estimated Reach</p>
+            <p className="text-xs text-muted-foreground">Estimated Reach</p>
             <div className="flex items-center gap-1.5">
               {loadingReach ? (
                 <Loader2 className="h-3 w-3 animate-spin text-violet-500" />
               ) : (
                 <>
-                  <Users className="h-3.5 w-3.5 text-violet-400" />
-                  <p className="font-medium text-white">{estimatedReach.toLocaleString()}</p>
+                  <Users className="h-3.5 w-3.5 text-violet-600" />
+                  <p className="font-medium text-foreground">{estimatedReach.toLocaleString()}</p>
                 </>
               )}
             </div>
           </div>
           <div>
-            <p className="text-xs text-slate-400">Language</p>
-            <p className="text-white">{template.language ?? 'en_US'}</p>
+            <p className="text-xs text-muted-foreground">Language</p>
+            <p className="text-foreground">{template.language ?? 'en_US'}</p>
           </div>
         </div>
       </div>
 
       {/* Delivery Timing */}
       <div className="space-y-3">
-        <p className="text-sm font-medium text-white">Delivery Timing</p>
+        <p className="text-sm font-medium text-foreground">Delivery Timing</p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <button
             onClick={() => setTiming('now')}
             className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-all ${
               timing === 'now'
                 ? 'border-violet-500 bg-violet-500/5 ring-1 ring-violet-500/30'
-                : 'border-slate-800 bg-slate-900/50 hover:border-slate-700'
+                : 'border-border bg-card/50 hover:border-border'
             }`}
           >
-            <Send className={`mt-0.5 h-4 w-4 ${timing === 'now' ? 'text-violet-400' : 'text-slate-400'}`} />
+            <Send className={`mt-0.5 h-4 w-4 ${timing === 'now' ? 'text-violet-600' : 'text-muted-foreground'}`} />
             <div>
-              <p className="text-sm font-medium text-white">Send Immediately</p>
-              <p className="mt-0.5 text-xs text-slate-400">Start sending right away</p>
+              <p className="text-sm font-medium text-foreground">Send Immediately</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">Start sending right away</p>
             </div>
           </button>
 
-          <div className="relative flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-900/30 p-4 opacity-60">
-            <Clock className="mt-0.5 h-4 w-4 text-slate-500" />
+          <div className="relative flex items-start gap-3 rounded-xl border border-border bg-card/30 p-4 opacity-60">
+            <Clock className="mt-0.5 h-4 w-4 text-muted-foreground" />
             <div>
               <div className="flex items-center gap-2">
-                <p className="text-sm font-medium text-slate-400">Schedule for Later</p>
-                <span className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-400">
+                <p className="text-sm font-medium text-muted-foreground">Schedule for Later</p>
+                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                   <Lock className="h-2.5 w-2.5" />
                   Pro
                 </span>
               </div>
-              <p className="mt-0.5 text-xs text-slate-500">Pick a date and time</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">Pick a date and time</p>
             </div>
           </div>
         </div>
@@ -184,11 +184,11 @@ export function Step4ScheduleSend({
           <div className="mb-2 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
-              <p className="text-sm font-medium text-white">Sending broadcast...</p>
+              <p className="text-sm font-medium text-foreground">Sending broadcast...</p>
             </div>
-            <span className="text-xs font-medium text-violet-400">{progress}%</span>
+            <span className="text-xs font-medium text-violet-600">{progress}%</span>
           </div>
-          <div className="h-1.5 w-full rounded-full bg-slate-800">
+          <div className="h-1.5 w-full rounded-full bg-muted">
             <div
               className="h-1.5 rounded-full bg-violet-500 transition-all duration-300"
               style={{ width: `${progress}%` }}
@@ -197,12 +197,12 @@ export function Step4ScheduleSend({
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
         <Button
           variant="outline"
           onClick={onBack}
           disabled={isProcessing}
-          className="border-slate-700 text-slate-300"
+          className="border-border text-muted-foreground"
         >
           <ArrowLeft className="h-4 w-4" />
           Back
@@ -214,7 +214,7 @@ export function Step4ScheduleSend({
               variant="outline"
               onClick={onSaveDraft}
               disabled={!name.trim() || isProcessing}
-              className="border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+              className="border-border text-muted-foreground hover:bg-muted disabled:opacity-50"
             >
               <Save className="h-4 w-4" />
               Save as Draft
@@ -233,14 +233,14 @@ export function Step4ScheduleSend({
             <Send className="h-4 w-4" />
             Send Broadcast
           </DialogTrigger>
-          <DialogContent className="border-slate-700 bg-slate-900 sm:max-w-md">
+          <DialogContent className="border-border bg-card sm:max-w-md">
             <DialogHeader>
-              <DialogTitle className="text-white">Confirm Broadcast</DialogTitle>
-              <DialogDescription className="text-slate-400">
+              <DialogTitle className="text-foreground">Confirm Broadcast</DialogTitle>
+              <DialogDescription className="text-muted-foreground">
                 You are about to send this broadcast to{' '}
-                <span className="font-medium text-white">{estimatedReach.toLocaleString()}</span>{' '}
+                <span className="font-medium text-foreground">{estimatedReach.toLocaleString()}</span>{' '}
                 contacts using the{' '}
-                <span className="font-medium text-white">{template.name}</span> template.
+                <span className="font-medium text-foreground">{template.name}</span> template.
                 This action cannot be undone.
               </DialogDescription>
             </DialogHeader>
@@ -248,7 +248,7 @@ export function Step4ScheduleSend({
               <Button
                 variant="outline"
                 onClick={() => setShowConfirm(false)}
-                className="border-slate-700 text-slate-300"
+                className="border-border text-muted-foreground"
               >
                 Cancel
               </Button>

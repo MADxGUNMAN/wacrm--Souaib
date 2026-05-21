@@ -304,9 +304,16 @@ export interface TagTriggerConfig {
 }
 
 export interface TimeBasedTriggerConfig {
-  /** Cron expression or simple HH:mm string; engine can accept either. */
-  schedule: string;
+  /** Preferred interval format for time-based automations. */
+  every_amount?: number;
+  every_unit?: 'seconds' | 'minutes' | 'hours';
+  /** Minute interval used by the cron endpoint. */
+  every_minutes?: number;
+  /** Legacy cron expression or simple HH:mm string. */
+  schedule?: string;
   timezone?: string;
+  audience?: 'all' | 'selected';
+  contact_ids?: string[];
 }
 
 export type AutomationTriggerConfig =

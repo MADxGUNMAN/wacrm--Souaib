@@ -31,6 +31,7 @@ import { ConversationsChart } from '@/components/dashboard/conversations-chart'
 import { PipelineDonut } from '@/components/dashboard/pipeline-donut'
 import { ResponseTimeChart } from '@/components/dashboard/response-time-chart'
 import { ActivityFeed } from '@/components/dashboard/activity-feed'
+import { VendorDetailsCard } from '@/components/dashboard/vendor-details'
 
 type RangeDays = 7 | 30 | 90
 
@@ -116,12 +117,14 @@ export default function DashboardPage() {
   )
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Live analytics across conversations, contacts, deals, broadcasts, and automations.
+      <div className="flex flex-col gap-1 border-b border-border pb-4">
+        <h1 className="font-heading text-2xl font-black uppercase tracking-widest text-foreground">
+          Dashboard <span className="font-mono text-xs text-primary font-normal tracking-normal">[SYS_ANALYTICS]</span>
+        </h1>
+        <p className="font-mono text-[11px] text-muted-foreground uppercase tracking-wider">
+          Live telemetry across conversations, contacts, pipeline stages, and automations.
         </p>
       </div>
 
@@ -203,8 +206,15 @@ export default function DashboardPage() {
       {/* Response time */}
       <ResponseTimeChart data={responseTime} loading={responseTimeLoading} />
 
-      {/* Activity feed */}
-      <ActivityFeed items={activity} loading={activityLoading} />
+      {/* Activity & Vendors row */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5 items-start">
+        <div className="lg:col-span-3">
+          <ActivityFeed items={activity} loading={activityLoading} />
+        </div>
+        <div className="lg:col-span-2">
+          <VendorDetailsCard />
+        </div>
+      </div>
     </div>
   )
 }

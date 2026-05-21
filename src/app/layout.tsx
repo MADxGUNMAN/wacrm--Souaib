@@ -8,6 +8,12 @@ const inter = Inter({
   subsets: ["latin"],
 });
 
+const interHeading = Inter({
+  variable: "--font-heading",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+});
+
 export const metadata: Metadata = {
   title: {
     default: "wacrm",
@@ -29,8 +35,8 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#020617",
-  colorScheme: "dark",
+  themeColor: "#f8fafc",
+  colorScheme: "light",
 };
 
 export default function RootLayout({
@@ -39,17 +45,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} h-full antialiased`}>
-      <body className="min-h-full bg-slate-950 text-white font-sans">
+    <html lang="en" className={`${inter.variable} ${interHeading.variable} h-full antialiased`}>
+      <body className="min-h-full bg-background text-foreground font-sans">
         {children}
         <Toaster
-          theme="dark"
+          theme="light"
           position="top-right"
           toastOptions={{
             style: {
-              background: "rgb(30 41 59)",
-              border: "1px solid rgb(51 65 85)",
-              color: "white",
+              background: "white",
+              border: "1px solid var(--border)",
+              color: "var(--foreground)",
             },
           }}
         />

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
-import { resumePendingExecution } from '@/lib/automations/engine'
+import { resumePendingExecution, runDueTimeBasedAutomations } from '@/lib/automations/engine'
 import type { AutomationContext } from '@/lib/automations/engine'
 
 /**
@@ -25,19 +25,20 @@ export async function GET(request: Request) {
   }
 
   const admin = supabaseAdmin()
+  const now = new Date()
+  const scheduled = await runDueTimeBasedAutomations(now)
   const { data: due, error } = await admin
     .from('automation_pending_executions')
     .select('*')
     .eq('status', 'pending')
-    .lte('run_at', new Date().toISOString())
+    .lte('run_at', now.toISOString())
     .order('run_at', { ascending: true })
     .limit(50)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (!due || due.length === 0) return NextResponse.json({ processed: 0 })
 
   let processed = 0
-  for (const row of due) {
+  for (const row of due ?? []) {
     const { data: claim } = await admin
       .from('automation_pending_executions')
       .update({ status: 'running' })
@@ -61,5 +62,33 @@ export async function GET(request: Request) {
     processed++
   }
 
-  return NextResponse.json({ processed })
+  const nextPendingMs = await getNextPendingExecutionMs(now)
+  const nextCheckMs = minNullable(scheduled.next_check_ms, nextPendingMs) ?? 60_000
+
+  return NextResponse.json({
+    processed,
+    scheduled_automations: scheduled.automations,
+    scheduled_contacts: scheduled.contacts,
+    next_check_ms: nextCheckMs,
+  })
+}
+
+async function getNextPendingExecutionMs(now: Date): Promise<number | null> {
+  const { data } = await supabaseAdmin()
+    .from('automation_pending_executions')
+    .select('run_at')
+    .eq('status', 'pending')
+    .gt('run_at', now.toISOString())
+    .order('run_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (!data?.run_at) return null
+  return Math.max(0, new Date(data.run_at as string).getTime() - now.getTime())
+}
+
+function minNullable(a: number | null, b: number | null): number | null {
+  if (a === null) return b
+  if (b === null) return a
+  return Math.min(a, b)
 }

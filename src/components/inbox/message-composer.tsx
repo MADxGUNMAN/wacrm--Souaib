@@ -619,16 +619,16 @@ export function MessageComposer({
   }, [onSend, selectedContacts]);
 
   return (
-    <div className="border-t border-slate-800 bg-slate-900 p-3">
+    <div className="border-t border-border bg-card p-3">
       {sessionExpired && (
         <div className="mb-2 flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2">
-          <p className="text-xs text-amber-400">
+          <p className="text-xs text-amber-600">
             24-hour session expired. Use a template to re-engage.
           </p>
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 text-xs text-amber-400 hover:text-amber-300"
+            className="h-7 text-xs text-amber-600 hover:text-amber-700"
             onClick={onOpenTemplates}
           >
             <LayoutTemplate className="mr-1 h-3 w-3" />
@@ -663,16 +663,16 @@ export function MessageComposer({
       />
 
       {pendingAttachments.length > 0 && (
-        <div className="mb-2 rounded-lg border border-slate-700 bg-slate-800 p-2">
+        <div className="mb-2 rounded-lg border border-border bg-muted p-2">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="text-xs font-medium text-slate-300">
+            <p className="text-xs font-medium text-muted-foreground">
               {pendingAttachments.length} attachment
               {pendingAttachments.length === 1 ? '' : 's'} selected
             </p>
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 px-2 text-xs text-slate-400 hover:text-white"
+              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
               onClick={clearPendingAttachments}
               disabled={sending}
             >
@@ -683,9 +683,9 @@ export function MessageComposer({
             {pendingAttachments.map((attachment) => (
               <div
                 key={attachment.id}
-                className="flex min-w-0 items-center gap-2 rounded-md bg-slate-900/70 p-2"
+                className="flex min-w-0 items-center gap-2 rounded-md bg-card/70 p-2"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-950">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-background">
                   {attachment.messageType === 'image' &&
                   attachment.previewUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -702,21 +702,21 @@ export function MessageComposer({
                       muted
                     />
                   ) : (
-                    <FileText className="h-4 w-4 text-slate-400" />
+                    <FileText className="h-4 w-4 text-muted-foreground" />
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium text-slate-100">
+                  <p className="truncate text-xs font-medium text-foreground">
                     {attachment.file.name}
                   </p>
-                  <p className="text-[10px] capitalize text-slate-500">
+                  <p className="text-[10px] capitalize text-muted-foreground">
                     {attachment.messageType}
                   </p>
                 </div>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-7 w-7 shrink-0 p-0 text-slate-400 hover:text-white"
+                  className="h-7 w-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
                   onClick={() => removePendingAttachment(attachment.id)}
                   disabled={sending}
                   title="Remove attachment"
@@ -730,14 +730,14 @@ export function MessageComposer({
       )}
 
       {showInlineQuickReplies && (
-        <div className="mb-2 max-h-48 overflow-y-auto rounded-lg border border-slate-700 bg-slate-900 p-1 shadow-lg">
+        <div className="mb-2 max-h-48 overflow-y-auto rounded-lg border border-border bg-card p-1 shadow-lg">
           {quickRepliesOpen && (
-            <div className="flex items-center gap-2 border-b border-slate-800 p-2">
+            <div className="flex items-center gap-2 border-b border-border p-2">
               <Input
                 value={quickSearch}
                 onChange={(e) => setQuickSearch(e.target.value)}
                 placeholder="Search quick replies"
-                className="h-8 border-slate-700 bg-slate-800 text-xs text-white"
+                className="h-8 border-border bg-muted text-xs text-foreground"
               />
               <Button
                 type="button"
@@ -754,16 +754,16 @@ export function MessageComposer({
             </div>
           )}
           {loadingQuickReplies ? (
-            <div className="flex items-center gap-2 px-3 py-2 text-xs text-slate-400">
+            <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Loading
             </div>
           ) : quickRepliesUnavailable ? (
-            <div className="px-3 py-2 text-xs text-amber-300">
+            <div className="px-3 py-2 text-xs text-amber-700">
               Apply migration 009 to enable quick replies.
             </div>
           ) : visibleQuickReplies.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-slate-400">
+            <div className="px-3 py-2 text-xs text-muted-foreground">
               No quick replies yet.
             </div>
           ) : (
@@ -772,12 +772,12 @@ export function MessageComposer({
                 key={reply.id}
                 type="button"
                 onClick={() => insertQuickReply(reply)}
-                className="block w-full rounded-md px-3 py-2 text-left hover:bg-slate-800"
+                className="block w-full rounded-md px-3 py-2 text-left hover:bg-muted"
               >
-                <span className="block text-xs font-medium text-violet-300">
+                <span className="block text-xs font-medium text-violet-700">
                   /{reply.shortcut}
                 </span>
-                <span className="line-clamp-2 text-xs text-slate-300">
+                <span className="line-clamp-2 text-xs text-muted-foreground">
                   {reply.text}
                 </span>
               </button>
@@ -790,7 +790,7 @@ export function MessageComposer({
         <Button
           variant="ghost"
           size="sm"
-          className="h-9 w-9 shrink-0 p-0 text-slate-400 hover:text-white"
+          className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
           onClick={onOpenTemplates}
           title="Templates"
         >
@@ -803,7 +803,7 @@ export function MessageComposer({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-9 w-9 shrink-0 p-0 text-slate-400 hover:text-white"
+                className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
                 disabled={sessionExpired || sending || Boolean(uploadingLabel)}
                 title="Attachments"
               />
@@ -818,7 +818,7 @@ export function MessageComposer({
           <PopoverContent
             align="start"
             side="top"
-            className="w-64 border border-slate-700 bg-slate-900 p-1"
+            className="w-64 border border-border bg-card p-1"
           >
             {ATTACHMENT_OPTIONS.map((option) => {
               const Icon = option.icon;
@@ -827,9 +827,9 @@ export function MessageComposer({
                   key={option.action}
                   type="button"
                   onClick={() => handleAttachmentAction(option.action)}
-                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm text-slate-200 hover:bg-slate-800"
+                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm text-card-foreground hover:bg-muted"
                 >
-                  <Icon className="h-4 w-4 text-slate-400" />
+                  <Icon className="h-4 w-4 text-muted-foreground" />
                   <span>{option.label}</span>
                 </button>
               );
@@ -846,7 +846,7 @@ export function MessageComposer({
           disabled={sessionExpired || sending}
           rows={1}
           className={cn(
-            'flex-1 resize-none rounded-xl border border-slate-700 bg-slate-800 px-4 py-2.5 text-sm text-white placeholder-slate-500 transition-colors outline-none focus:border-violet-500/50',
+            'flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-slate-500 transition-colors outline-none focus:border-violet-500/50',
             sessionExpired && 'cursor-not-allowed opacity-50'
           )}
         />
@@ -871,13 +871,13 @@ export function MessageComposer({
       </div>
 
       {uploadingLabel && (
-        <p className="mt-1 pl-[5.8rem] text-[10px] text-slate-500">
+        <p className="mt-1 pl-[5.8rem] text-[10px] text-muted-foreground">
           Uploading {uploadingLabel}
         </p>
       )}
 
       <Dialog open={locationOpen} onOpenChange={setLocationOpen}>
-        <DialogContent className="border border-slate-700 bg-slate-900 text-slate-100">
+        <DialogContent className="border border-border bg-card text-foreground">
           <DialogHeader>
             <DialogTitle>Location</DialogTitle>
           </DialogHeader>
@@ -889,7 +889,7 @@ export function MessageComposer({
                 value={locationUrl}
                 onChange={(e) => setLocationUrl(e.target.value)}
                 placeholder="https://maps.google.com/..."
-                className="border-slate-700 bg-slate-800 text-white"
+                className="border-border bg-muted text-foreground"
               />
             </div>
             <div className="grid gap-1.5">
@@ -898,7 +898,7 @@ export function MessageComposer({
                 id="location-name"
                 value={locationName}
                 onChange={(e) => setLocationName(e.target.value)}
-                className="border-slate-700 bg-slate-800 text-white"
+                className="border-border bg-muted text-foreground"
               />
             </div>
             <div className="grid gap-1.5">
@@ -907,11 +907,11 @@ export function MessageComposer({
                 id="location-address"
                 value={locationAddress}
                 onChange={(e) => setLocationAddress(e.target.value)}
-                className="border-slate-700 bg-slate-800 text-white"
+                className="border-border bg-muted text-foreground"
               />
             </div>
           </div>
-          <DialogFooter className="border-slate-800 bg-slate-900">
+          <DialogFooter className="border-border bg-card">
             <Button
               className="bg-violet-600 hover:bg-violet-500"
               onClick={() => void handleSendLocation()}
@@ -924,7 +924,7 @@ export function MessageComposer({
       </Dialog>
 
       <Dialog open={createQuickReplyOpen} onOpenChange={setCreateQuickReplyOpen}>
-        <DialogContent className="border border-slate-700 bg-slate-900 text-slate-100">
+        <DialogContent className="border border-border bg-card text-foreground">
           <DialogHeader>
             <DialogTitle>Quick Reply</DialogTitle>
           </DialogHeader>
@@ -936,7 +936,7 @@ export function MessageComposer({
                 value={newQuickShortcut}
                 onChange={(e) => setNewQuickShortcut(e.target.value)}
                 placeholder="/price"
-                className="border-slate-700 bg-slate-800 text-white"
+                className="border-border bg-muted text-foreground"
               />
             </div>
             <div className="grid gap-1.5">
@@ -946,11 +946,11 @@ export function MessageComposer({
                 value={newQuickText}
                 onChange={(e) => setNewQuickText(e.target.value)}
                 rows={4}
-                className="min-h-24 resize-none rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-500/50"
+                className="min-h-24 resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder-slate-500 outline-none focus:border-violet-500/50"
               />
             </div>
           </div>
-          <DialogFooter className="border-slate-800 bg-slate-900">
+          <DialogFooter className="border-border bg-card">
             <Button
               className="bg-violet-600 hover:bg-violet-500"
               onClick={() => void handleCreateQuickReply()}
@@ -974,39 +974,39 @@ export function MessageComposer({
           if (!open) setContactSearch('');
         }}
       >
-        <DialogContent className="max-w-lg border border-slate-700 bg-slate-900 text-slate-100">
+        <DialogContent className="max-w-lg border border-border bg-card text-foreground">
           <DialogHeader>
             <DialogTitle>Contact</DialogTitle>
           </DialogHeader>
           <div className="grid gap-3">
             <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={contactSearch}
                 onChange={(e) => setContactSearch(e.target.value)}
                 placeholder="Search by name or number"
-                className="border-slate-700 bg-slate-800 pl-9 text-white"
+                className="border-border bg-muted pl-9 text-foreground"
               />
             </div>
 
-            <div className="min-h-48 overflow-hidden rounded-lg border border-slate-700 bg-slate-950/40">
+            <div className="min-h-48 overflow-hidden rounded-lg border border-border bg-background/40">
               {loadingContacts ? (
-                <div className="flex h-48 items-center justify-center gap-2 text-sm text-slate-400">
+                <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Loading contacts
                 </div>
               ) : savedContacts.length === 0 ? (
                 <div className="flex h-48 flex-col items-center justify-center text-center">
                   <Users className="mb-2 h-6 w-6 text-slate-600" />
-                  <p className="text-sm font-medium text-slate-300">
+                  <p className="text-sm font-medium text-muted-foreground">
                     No saved contacts
                   </p>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-muted-foreground">
                     Add contacts first, then share them here.
                   </p>
                 </div>
               ) : visibleContacts.length === 0 ? (
-                <div className="flex h-48 items-center justify-center text-sm text-slate-500">
+                <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
                   No contacts match your search.
                 </div>
               ) : (
@@ -1024,7 +1024,7 @@ export function MessageComposer({
                           'flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors',
                           selected
                             ? 'bg-violet-500/15'
-                            : 'hover:bg-slate-800'
+                            : 'hover:bg-muted'
                         )}
                       >
                         <span
@@ -1032,19 +1032,19 @@ export function MessageComposer({
                             'flex h-5 w-5 shrink-0 items-center justify-center rounded border',
                             selected
                               ? 'border-violet-500 bg-violet-600 text-white'
-                              : 'border-slate-600 bg-slate-900'
+                              : 'border-slate-600 bg-card'
                           )}
                         >
                           {selected && <Check className="h-3.5 w-3.5" />}
                         </span>
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-800 text-xs font-medium text-slate-200">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-card-foreground">
                           {displayName.charAt(0).toUpperCase()}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-slate-100">
+                          <span className="block truncate text-sm font-medium text-foreground">
                             {displayName}
                           </span>
-                          <span className="block truncate text-xs text-slate-400">
+                          <span className="block truncate text-xs text-muted-foreground">
                             {contact.phone}
                           </span>
                         </span>
@@ -1055,8 +1055,8 @@ export function MessageComposer({
               )}
             </div>
           </div>
-          <DialogFooter className="border-slate-800 bg-slate-900">
-            <p className="mr-auto text-xs text-slate-500">
+          <DialogFooter className="border-border bg-card">
+            <p className="mr-auto text-xs text-muted-foreground">
               {selectedContacts.length} selected
             </p>
             <Button

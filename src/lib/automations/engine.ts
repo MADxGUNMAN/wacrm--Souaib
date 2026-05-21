@@ -9,6 +9,7 @@ import type {
   SendTemplateStepConfig,
   SendWebhookStepConfig,
   TagStepConfig,
+  TimeBasedTriggerConfig,
   UpdateContactFieldStepConfig,
   WaitStepConfig,
   CreateDealStepConfig,
@@ -75,6 +76,85 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
   } catch (err) {
     console.error('[automations] dispatch failed:', err)
   }
+}
+
+export async function runDueTimeBasedAutomations(now = new Date()): Promise<{
+  automations: number
+  contacts: number
+  next_check_ms: number | null
+}> {
+  const db = supabaseAdmin()
+  const { data: automations, error } = await db
+    .from('automations')
+    .select('*')
+    .eq('trigger_type', 'time_based')
+    .eq('is_active', true)
+
+  if (error) {
+    console.error('[automations] scheduled fetch failed:', error)
+    return { automations: 0, contacts: 0, next_check_ms: null }
+  }
+
+  let automationCount = 0
+  let contactCount = 0
+  const claimedAutomationIds = new Set<string>()
+  for (const automation of (automations ?? []) as Automation[]) {
+    if (!isTimeAutomationDue(automation, now)) continue
+    const claimed = await claimTimeAutomationRun(automation, now)
+    if (!claimed) continue
+    claimedAutomationIds.add(automation.id)
+
+    const cfg = (automation.trigger_config ?? {}) as TimeBasedTriggerConfig
+    let contactQuery = db
+      .from('contacts')
+      .select('id')
+      .eq('user_id', automation.user_id)
+      .order('created_at', { ascending: true })
+
+    if (cfg.audience === 'selected') {
+      const ids = Array.isArray(cfg.contact_ids) ? cfg.contact_ids.filter(Boolean) : []
+      if (ids.length === 0) continue
+      contactQuery = contactQuery.in('id', ids)
+    }
+
+    const { data: contacts, error: contactsErr } = await contactQuery
+    if (contactsErr) {
+      console.error('[automations] scheduled contacts fetch failed:', contactsErr)
+      continue
+    }
+
+    let ranForAnyContact = false
+    for (const contact of contacts ?? []) {
+      try {
+        await executeAutomation(automation, {
+          userId: automation.user_id,
+          triggerType: 'time_based',
+          contactId: contact.id as string,
+          context: {
+            vars: {
+              scheduled_at: now.toISOString(),
+            },
+          },
+        })
+        ranForAnyContact = true
+        contactCount++
+      } catch (err) {
+        console.error('[automations] scheduled execute failed:', automation.id, err)
+      }
+    }
+
+    if (ranForAnyContact) {
+      automationCount++
+    }
+  }
+
+  const next_check_ms = getNextTimeBasedCheckMs(
+    (automations ?? []) as Automation[],
+    now,
+    claimedAutomationIds,
+  )
+
+  return { automations: automationCount, contacts: contactCount, next_check_ms }
 }
 
 /**
@@ -470,8 +550,142 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
     .eq('contact_id', args.contactId)
     .maybeSingle()
   if (error) throw new Error(`conversation lookup failed: ${error.message}`)
-  if (!data?.id) throw new Error('no conversation for contact')
+  if (!data?.id) {
+    const { data: created, error: createErr } = await supabaseAdmin()
+      .from('conversations')
+      .insert({
+        user_id: args.automation.user_id,
+        contact_id: args.contactId,
+        status: 'open',
+      })
+      .select('id')
+      .single()
+    if (createErr || !created?.id) {
+      throw new Error(`conversation create failed: ${createErr?.message ?? 'unknown error'}`)
+    }
+    return created.id as string
+  }
   return data.id as string
+}
+
+function isTimeAutomationDue(automation: Automation, now: Date): boolean {
+  const cfg = (automation.trigger_config ?? {}) as TimeBasedTriggerConfig
+  const scheduleMs = getScheduleMs(cfg)
+  if (scheduleMs !== null) {
+    if (!automation.last_executed_at) return true
+    const elapsedMs = now.getTime() - new Date(automation.last_executed_at).getTime()
+    return elapsedMs >= scheduleMs
+  }
+
+  const schedule = cfg.schedule?.trim()
+  if (!schedule) return false
+  if (/^\d{2}:\d{2}$/.test(schedule)) {
+    const [hour, minute] = schedule.split(':').map(Number)
+    if (now.getHours() !== hour || now.getMinutes() !== minute) return false
+    if (!automation.last_executed_at) return true
+    return !sameMinute(now, new Date(automation.last_executed_at))
+  }
+
+  return false
+}
+
+function getScheduleMs(cfg: TimeBasedTriggerConfig): number | null {
+  const amount = Number(cfg.every_amount)
+  const unit = cfg.every_unit
+  if (Number.isFinite(amount) && amount >= 1 && unit) {
+    const wholeAmount = Math.floor(amount)
+    if (unit === 'seconds') return wholeAmount * 1_000
+    if (unit === 'minutes') return wholeAmount * 60_000
+    if (unit === 'hours') return wholeAmount * 3_600_000
+  }
+
+  const every = Number(cfg.every_minutes)
+  if (Number.isFinite(every) && every >= 1) return Math.floor(every) * 60_000
+
+  const schedule = cfg.schedule?.trim() ?? ''
+  const cronEvery = schedule.match(/^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/)
+  if (cronEvery) {
+    const minutes = Number(cronEvery[1])
+    if (Number.isFinite(minutes) && minutes >= 1) return Math.floor(minutes) * 60_000
+  }
+  return null
+}
+
+function sameMinute(a: Date, b: Date): boolean {
+  return Math.floor(a.getTime() / 60_000) === Math.floor(b.getTime() / 60_000)
+}
+
+async function claimTimeAutomationRun(automation: Automation, now: Date): Promise<boolean> {
+  const cutoff = lastExecutionCutoff(automation, now)
+  let query = supabaseAdmin()
+    .from('automations')
+    .update({ last_executed_at: now.toISOString() })
+    .eq('id', automation.id)
+    .eq('is_active', true)
+    .select('id')
+
+  if (cutoff) {
+    query = query.or(`last_executed_at.is.null,last_executed_at.lte.${cutoff.toISOString()}`)
+  } else {
+    query = query.is('last_executed_at', null)
+  }
+
+  const { data, error } = await query.maybeSingle()
+  if (error) {
+    console.error('[automations] scheduled claim failed:', automation.id, error)
+    return false
+  }
+  return !!data?.id
+}
+
+function lastExecutionCutoff(automation: Automation, now: Date): Date | null {
+  const cfg = (automation.trigger_config ?? {}) as TimeBasedTriggerConfig
+  const scheduleMs = getScheduleMs(cfg)
+  if (scheduleMs !== null) {
+    return new Date(now.getTime() - scheduleMs)
+  }
+
+  const schedule = cfg.schedule?.trim()
+  if (/^\d{2}:\d{2}$/.test(schedule ?? '')) {
+    const startOfMinute = new Date(now)
+    startOfMinute.setSeconds(0, 0)
+    return startOfMinute
+  }
+
+  return null
+}
+
+function getNextTimeBasedCheckMs(
+  automations: Automation[],
+  now: Date,
+  claimedAutomationIds: Set<string>,
+): number | null {
+  let next: number | null = null
+  for (const automation of automations) {
+    const ms = getNextCheckMsForAutomation(automation, now, claimedAutomationIds)
+    if (ms === null) continue
+    next = next === null ? ms : Math.min(next, ms)
+  }
+  return next
+}
+
+function getNextCheckMsForAutomation(
+  automation: Automation,
+  now: Date,
+  claimedAutomationIds: Set<string>,
+): number | null {
+  const cfg = (automation.trigger_config ?? {}) as TimeBasedTriggerConfig
+  const scheduleMs = getScheduleMs(cfg)
+  if (scheduleMs !== null) {
+    if (claimedAutomationIds.has(automation.id)) return scheduleMs
+    if (!automation.last_executed_at) return 0
+    const nextAt = new Date(automation.last_executed_at).getTime() + scheduleMs
+    return Math.max(0, nextAt - now.getTime())
+  }
+
+  // Legacy HH:mm schedules only need minute-level checks.
+  if (/^\d{2}:\d{2}$/.test(cfg.schedule?.trim() ?? '')) return 60_000
+  return null
 }
 
 function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {

@@ -38,8 +38,8 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-white">Settings</h1>
-        <p className="text-sm text-slate-400 mt-1">
+        <h1 className="text-2xl font-bold text-foreground">Settings</h1>
+        <p className="text-sm text-muted-foreground mt-1">
           {isVendor
             ? 'Manage your profile and password.'
             : 'Manage your profile, WhatsApp® integration, message templates, tags, and vendors.'}
@@ -47,10 +47,10 @@ export default function SettingsPage() {
       </div>
 
       <Tabs value={tab} onValueChange={(v) => onChange(v as TabValue)}>
-        <TabsList className="bg-slate-900 border border-slate-700">
+        <TabsList className="bg-card border border-border">
           <TabsTrigger
             value="profile"
-            className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
+            className="data-active:bg-muted data-active:text-violet-600 text-muted-foreground"
           >
             <User className="size-4" />
             Profile
@@ -59,21 +59,21 @@ export default function SettingsPage() {
             <>
               <TabsTrigger
                 value="whatsapp"
-                className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
+                className="data-active:bg-muted data-active:text-violet-600 text-muted-foreground"
               >
                 <Settings className="size-4" />
                 WhatsApp Config
               </TabsTrigger>
               <TabsTrigger
                 value="templates"
-                className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
+                className="data-active:bg-muted data-active:text-violet-600 text-muted-foreground"
               >
                 <MessageSquare className="size-4" />
                 Templates
               </TabsTrigger>
               <TabsTrigger
                 value="tags"
-                className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
+                className="data-active:bg-muted data-active:text-violet-600 text-muted-foreground"
               >
                 <Tag className="size-4" />
                 Tags
@@ -83,7 +83,7 @@ export default function SettingsPage() {
           {isAdmin && (
             <TabsTrigger
               value="vendors"
-              className="data-active:bg-slate-800 data-active:text-violet-400 text-slate-400"
+              className="data-active:bg-muted data-active:text-violet-600 text-muted-foreground"
             >
               <Users className="size-4" />
               Vendors

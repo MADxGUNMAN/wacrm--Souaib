@@ -85,9 +85,9 @@ const STATUS_OPTIONS: {
   value: ConversationStatus;
   color: string;
 }[] = [
-  { label: 'Open', value: 'open', color: 'text-violet-400' },
-  { label: 'Pending', value: 'pending', color: 'text-amber-400' },
-  { label: 'Closed', value: 'closed', color: 'text-slate-400' },
+  { label: 'Open', value: 'open', color: 'text-violet-600' },
+  { label: 'Pending', value: 'pending', color: 'text-amber-600' },
+  { label: 'Closed', value: 'closed', color: 'text-muted-foreground' },
 ];
 
 export function MessageThread({
@@ -393,11 +393,11 @@ export function MessageThread({
   // Empty state
   if (!conversation || !contact) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center bg-slate-950">
-        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-800">
+      <div className="flex flex-1 flex-col items-center justify-center bg-background">
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
           <MessageSquare className="h-8 w-8 text-slate-600" />
         </div>
-        <h3 className="mt-4 text-sm font-medium text-slate-400">
+        <h3 className="mt-4 text-sm font-medium text-muted-foreground">
           Select a conversation
         </h3>
         <p className="mt-1 text-xs text-slate-600">
@@ -414,9 +414,9 @@ export function MessageThread({
   );
 
   return (
-    <div className="flex flex-1 flex-col bg-slate-950">
+    <div className="flex flex-1 flex-col bg-background">
       {/* Header */}
-      <div className="flex items-center justify-between gap-2 border-b border-slate-800 bg-slate-900 px-3 py-3 sm:px-4">
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           {/* Back-to-list button — mobile only. Hidden on lg+ where the
               conversation list is always visible next to the thread. */}
@@ -425,7 +425,7 @@ export function MessageThread({
               type="button"
               onClick={onBack}
               aria-label="Back to conversations"
-              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-slate-300 hover:bg-slate-800 hover:text-white lg:hidden"
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground lg:hidden"
             >
               <ArrowLeft className="h-5 w-5" />
             </button>
@@ -434,18 +434,18 @@ export function MessageThread({
             {displayName.charAt(0).toUpperCase()}
           </div>
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold text-white">
+            <h2 className="truncate text-sm font-semibold text-foreground">
               {displayName}
             </h2>
-            <p className="truncate text-xs text-slate-400">{contact.phone}</p>
+            <p className="truncate text-xs text-muted-foreground">{contact.phone}</p>
           </div>
           {/* Session timer badge — hidden on the narrowest phones so
               the name + back arrow keep their room. */}
           <Badge
             variant="outline"
             className={cn(
-              'ml-1 hidden gap-1 border-slate-700 text-[10px] sm:ml-2 sm:inline-flex',
-              sessionInfo.expired ? 'text-red-400' : 'text-violet-400'
+              'ml-1 hidden gap-1 border-border text-[10px] sm:ml-2 sm:inline-flex',
+              sessionInfo.expired ? 'text-red-600' : 'text-violet-600'
             )}
           >
             <Clock className="h-3 w-3" />
@@ -458,8 +458,8 @@ export function MessageThread({
           <DropdownMenu>
             <DropdownMenuTrigger
               className={cn(
-                'inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-slate-800',
-                currentStatus?.color ?? 'text-slate-400'
+                'inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted',
+                currentStatus?.color ?? 'text-muted-foreground'
               )}
             >
               {currentStatus?.label ?? 'Status'}
@@ -467,7 +467,7 @@ export function MessageThread({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
-              className="border-slate-700 bg-slate-800"
+              className="border-border bg-muted"
             >
               {STATUS_OPTIONS.map((opt) => (
                 <DropdownMenuItem
@@ -484,17 +484,17 @@ export function MessageThread({
           {/* Assign button — admin only */}
           {isAdmin && (
             <DropdownMenu>
-              <DropdownMenuTrigger className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-slate-400 hover:bg-slate-800 hover:text-white">
+              <DropdownMenuTrigger className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
                 <UserPlus className="h-3 w-3" />
                 {assignedVendor ? assignedVendor.full_name : 'Assign'}
                 <ChevronDown className="h-3 w-3" />
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="end"
-                className="min-w-48 border-slate-700 bg-slate-800"
+                className="min-w-48 border-border bg-muted"
               >
                 {vendors.length === 0 ? (
-                  <DropdownMenuItem disabled className="text-sm text-slate-500">
+                  <DropdownMenuItem disabled className="text-sm text-muted-foreground">
                     No vendors — create one in Settings
                   </DropdownMenuItem>
                 ) : (
@@ -503,14 +503,14 @@ export function MessageThread({
                       <DropdownMenuItem
                         key={vendor.id}
                         onClick={() => handleAssignVendor(vendor.id)}
-                        className="flex items-center gap-2 text-sm text-slate-300"
+                        className="flex items-center gap-2 text-sm text-muted-foreground"
                       >
-                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-xs font-medium text-violet-400">
+                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-xs font-medium text-violet-600">
                           {vendor.full_name.charAt(0).toUpperCase()}
                         </div>
                         <span className="flex-1">{vendor.full_name}</span>
                         {assignedVendor?.id === vendor.id && (
-                          <Check className="h-3.5 w-3.5 text-violet-400" />
+                          <Check className="h-3.5 w-3.5 text-violet-600" />
                         )}
                       </DropdownMenuItem>
                     ))}
@@ -519,7 +519,7 @@ export function MessageThread({
                         <DropdownMenuSeparator className="bg-slate-700" />
                         <DropdownMenuItem
                           onClick={() => handleAssignVendor(null)}
-                          className="flex items-center gap-2 text-sm text-red-400"
+                          className="flex items-center gap-2 text-sm text-red-600"
                         >
                           <UserX className="h-4 w-4" />
                           Unassign
@@ -542,7 +542,7 @@ export function MessageThread({
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">
-            <p className="text-sm text-slate-500">No messages yet</p>
+            <p className="text-sm text-muted-foreground">No messages yet</p>
             <p className="text-xs text-slate-600">
               Send a template to start the conversation
             </p>
@@ -553,7 +553,7 @@ export function MessageThread({
               <div key={group.date}>
                 {/* Date separator */}
                 <div className="mb-4 flex items-center justify-center">
-                  <span className="rounded-full bg-slate-800 px-3 py-1 text-[10px] font-medium text-slate-400">
+                  <span className="rounded-full bg-muted px-3 py-1 text-[10px] font-medium text-muted-foreground">
                     {formatDateSeparator(group.date)}
                   </span>
                 </div>

@@ -9,7 +9,7 @@ export interface TriggerMeta {
 export const TRIGGER_META: Record<AutomationTriggerType, TriggerMeta> = {
   new_message_received: {
     label: 'New Message',
-    pillClass: 'border-blue-500/30 bg-blue-500/10 text-blue-300',
+    pillClass: 'border-blue-200 bg-blue-500/10 text-blue-700',
   },
   first_inbound_message: {
     label: 'First Message from Contact',
@@ -21,19 +21,19 @@ export const TRIGGER_META: Record<AutomationTriggerType, TriggerMeta> = {
   },
   new_contact_created: {
     label: 'New Contact',
-    pillClass: 'border-violet-500/30 bg-violet-500/10 text-violet-300',
+    pillClass: 'border-violet-200 bg-violet-500/10 text-violet-700',
   },
   conversation_assigned: {
     label: 'Conversation Assigned',
-    pillClass: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300',
+    pillClass: 'border-cyan-200 bg-cyan-500/10 text-cyan-700',
   },
   tag_added: {
     label: 'Tag Added',
-    pillClass: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+    pillClass: 'border-amber-200 bg-amber-500/10 text-amber-700',
   },
   time_based: {
     label: 'Time-Based',
-    pillClass: 'border-slate-500/30 bg-slate-500/10 text-slate-300',
+    pillClass: 'border-slate-200 bg-slate-500/10 text-muted-foreground',
   },
 }
 
@@ -41,7 +41,7 @@ export function triggerMeta(t: AutomationTriggerType | string): TriggerMeta {
   return (
     TRIGGER_META[t as AutomationTriggerType] ?? {
       label: t,
-      pillClass: 'border-slate-500/30 bg-slate-500/10 text-slate-300',
+      pillClass: 'border-slate-200 bg-slate-500/10 text-muted-foreground',
     }
   )
 }
