@@ -58,6 +58,12 @@ export type ComposerMessage =
       text?: string;
     }
   | {
+      messageType: 'template';
+      templateName: string;
+      templateLanguage: string;
+      templateParams?: string[];
+    }
+  | {
       messageType: 'location';
       locationUrl: string;
       locationName?: string;

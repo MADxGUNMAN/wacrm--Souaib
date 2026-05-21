@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { format, isToday, isYesterday, differenceInHours } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,12 +31,15 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { MessageBubble } from './message-bubble';
 import { MessageComposer, type ComposerMessage } from './message-composer';
+import { ImageViewer } from './image-viewer';
+import { TemplateModal } from './template-modal';
 import { toast } from 'sonner';
 
 interface VendorOption {
   id: string;
   full_name: string;
   email: string;
+  avatar_url?: string;
   is_active: boolean;
 }
 
@@ -105,6 +109,8 @@ export function MessageThread({
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [vendors, setVendors] = useState<VendorOption[]>([]);
+  const [viewerImageId, setViewerImageId] = useState<string | null>(null);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const { isAdmin } = useAuth();
 
   // Fetch vendors for the assign dropdown (admin only)
@@ -319,7 +325,9 @@ export function MessageThread({
                   .join(' - ')
               : message.messageType === 'document'
                 ? message.text || message.filename || undefined
-                : message.text || undefined;
+                : message.messageType === 'template'
+                  ? `[Template: ${message.templateName}]`
+                  : message.text || undefined;
       const mediaUrl =
         message.messageType === 'image' ||
         message.messageType === 'video' ||
@@ -379,6 +387,14 @@ export function MessageThread({
               message.messageType === 'contact_card'
                 ? message.contactPhone
                 : undefined,
+            template_name:
+              message.messageType === 'template'
+                ? message.templateName
+                : undefined,
+            template_params:
+              message.messageType === 'template'
+                ? message.templateParams
+                : undefined,
           }),
         });
 
@@ -423,8 +439,13 @@ export function MessageThread({
   );
 
   const handleOpenTemplates = useCallback(() => {
-    // Template modal implementation would go here
+    setIsTemplateModalOpen(true);
   }, []);
+
+  const mediaMessages = useMemo(() => 
+    messages.filter((m) => (m.content_type === 'image' || m.content_type === 'video') && m.media_url),
+    [messages]
+  );
 
   // Empty state
   if (!conversation || !contact) {
@@ -443,7 +464,13 @@ export function MessageThread({
     );
   }
 
-  const displayName = contact.name || contact.phone;
+  let displayName = contact.name || contact.phone;
+  if (contact.name) {
+    const words = contact.name.trim().split(/\s+/);
+    if (words.length > 2) {
+      displayName = `${words[0]} ${words[1]}...`;
+    }
+  }
   const messageGroups = groupMessagesByDate(messages);
   const currentStatus = STATUS_OPTIONS.find(
     (s) => s.value === conversation.status
@@ -520,8 +547,17 @@ export function MessageThread({
           {/* Assign button — admin only */}
           {isAdmin && (
             <DropdownMenu>
-              <DropdownMenuTrigger className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
-                <UserPlus className="h-3 w-3" />
+              <DropdownMenuTrigger className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
+                {assignedVendor ? (
+                  <Avatar className="h-4 w-4 shrink-0">
+                    <AvatarImage src={assignedVendor.avatar_url || ''} alt={assignedVendor.full_name} />
+                    <AvatarFallback className="bg-violet-500/10 text-[8px] font-medium text-violet-600">
+                      {assignedVendor.full_name.charAt(0).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                ) : (
+                  <UserPlus className="h-3 w-3" />
+                )}
                 {assignedVendor ? assignedVendor.full_name : 'Assign'}
                 <ChevronDown className="h-3 w-3" />
               </DropdownMenuTrigger>
@@ -539,11 +575,14 @@ export function MessageThread({
                       <DropdownMenuItem
                         key={vendor.id}
                         onClick={() => handleAssignVendor(vendor.id)}
-                        className="flex items-center gap-2 text-sm text-muted-foreground"
+                        className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer"
                       >
-                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-xs font-medium text-violet-600">
-                          {vendor.full_name.charAt(0).toUpperCase()}
-                        </div>
+                        <Avatar className="h-6 w-6 shrink-0">
+                          <AvatarImage src={vendor.avatar_url || ''} alt={vendor.full_name} />
+                          <AvatarFallback className="bg-violet-500/10 text-[10px] font-medium text-violet-600">
+                            {vendor.full_name.charAt(0).toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
                         <span className="flex-1">{vendor.full_name}</span>
                         {assignedVendor?.id === vendor.id && (
                           <Check className="h-3.5 w-3.5 text-violet-600" />
@@ -596,7 +635,11 @@ export function MessageThread({
                 {/* Messages */}
                 <div className="space-y-2">
                   {group.messages.map((msg) => (
-                    <MessageBubble key={msg.id} message={msg} />
+                    <MessageBubble 
+                      key={msg.id} 
+                      message={msg} 
+                      onMediaClick={(m) => setViewerImageId(m.id)}
+                    />
                   ))}
                 </div>
               </div>
@@ -611,6 +654,22 @@ export function MessageThread({
         sessionExpired={sessionInfo.expired}
         onSend={handleSend}
         onOpenTemplates={handleOpenTemplates}
+      />
+
+      {/* Lightbox Viewer */}
+      {viewerImageId && (
+        <ImageViewer
+          images={mediaMessages}
+          initialImageId={viewerImageId}
+          onClose={() => setViewerImageId(null)}
+        />
+      )}
+
+      {/* Template Modal */}
+      <TemplateModal
+        open={isTemplateModalOpen}
+        onOpenChange={setIsTemplateModalOpen}
+        onSend={handleSend}
       />
     </div>
   );

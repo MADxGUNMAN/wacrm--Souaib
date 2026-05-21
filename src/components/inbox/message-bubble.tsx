@@ -18,6 +18,7 @@ import { format } from 'date-fns';
 
 interface MessageBubbleProps {
   message: Message;
+  onMediaClick?: (message: Message) => void;
 }
 
 function StatusIcon({ status, isAgent }: { status: Message['status']; isAgent: boolean }) {
@@ -48,7 +49,7 @@ function MediaUnavailable({ label }: { label: string }) {
   );
 }
 
-function MediaImage({ url, alt }: { url: string; alt: string }) {
+function MediaImage({ url, alt, onClick }: { url: string; alt: string; onClick?: () => void }) {
   const [error, setError] = useState(false);
 
   if (error) {
@@ -63,13 +64,14 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
     <img
       src={url}
       alt={alt}
-      className="max-h-64 max-w-60 rounded-lg object-cover"
+      className={cn("max-h-64 max-w-60 rounded-lg object-cover", onClick && "cursor-pointer hover:opacity-90 transition-opacity")}
       onError={() => setError(true)}
+      onClick={onClick}
     />
   );
 }
 
-function MessageContent({ message }: { message: Message }) {
+function MessageContent({ message, onMediaClick }: { message: Message; onMediaClick?: (message: Message) => void }) {
   switch (message.content_type) {
     case 'text':
       return (
@@ -82,7 +84,7 @@ function MessageContent({ message }: { message: Message }) {
       return (
         <div>
           {message.media_url ? (
-            <MediaImage url={message.media_url} alt="Shared image" />
+            <MediaImage url={message.media_url} alt="Shared image" onClick={onMediaClick ? () => onMediaClick(message) : undefined} />
           ) : (
             <MediaUnavailable label="Image" />
           )}
@@ -96,12 +98,18 @@ function MessageContent({ message }: { message: Message }) {
 
     case 'video':
       return (
-        <div>
+        <div className="relative">
           {message.media_url ? (
             <video
               src={message.media_url}
               controls
-              className="max-h-64 max-w-60 rounded-lg"
+              className={cn("max-h-64 max-w-60 rounded-lg", onMediaClick && "cursor-pointer hover:opacity-90 transition-opacity")}
+              onClick={(e) => {
+                if (onMediaClick) {
+                  e.preventDefault();
+                  onMediaClick(message);
+                }
+              }}
             />
           ) : (
             <MediaUnavailable label="Video" />
@@ -183,7 +191,7 @@ function MessageContent({ message }: { message: Message }) {
   }
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onMediaClick }: MessageBubbleProps) {
   const isAgent =
     message.sender_type === 'agent' || message.sender_type === 'bot';
   const time = format(new Date(message.created_at), 'HH:mm');
@@ -200,7 +208,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             : 'rounded-bl-md bg-slate-200 text-slate-900'
         )}
       >
-        <MessageContent message={message} />
+        <MessageContent message={message} onMediaClick={onMediaClick} />
         <div
           className={cn(
             'mt-1 flex items-center gap-1',
