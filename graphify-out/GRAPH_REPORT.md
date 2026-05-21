@@ -1,11 +1,11 @@
 # Graph Report - wacrm--Souaib  (2026-05-21)
 
 ## Corpus Check
-- 127 files · ~86,785 words
+- 127 files · ~86,851 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 461 nodes · 566 edges · 17 communities detected
+- 462 nodes · 567 edges · 17 communities detected
 - Extraction: 78% EXTRACTED · 22% INFERRED · 0% AMBIGUOUS · INFERRED: 126 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
@@ -22,10 +22,10 @@
 - [[_COMMUNITY_Community 11|Community 11]]
 - [[_COMMUNITY_Community 13|Community 13]]
 - [[_COMMUNITY_Community 14|Community 14]]
-- [[_COMMUNITY_Community 18|Community 18]]
+- [[_COMMUNITY_Community 19|Community 19]]
 - [[_COMMUNITY_Community 22|Community 22]]
 - [[_COMMUNITY_Community 28|Community 28]]
-- [[_COMMUNITY_Community 35|Community 35]]
+- [[_COMMUNITY_Community 34|Community 34]]
 - [[_COMMUNITY_Community 36|Community 36]]
 
 ## God Nodes (most connected - your core abstractions)
@@ -102,7 +102,7 @@ Nodes (2): fetchTags(), handleSave()
 Cohesion: 0.47
 Nodes (3): confirmDelete(), duplicate(), load()
 
-### Community 18 - "Community 18"
+### Community 19 - "Community 19"
 Cohesion: 0.5
 Nodes (2): parseCronResponse(), tick()
 
@@ -114,7 +114,7 @@ Nodes (3): fetchTemplates(), handleSave(), handleSyncFromMeta()
 Cohesion: 0.83
 Nodes (3): GET(), POST(), requireAdmin()
 
-### Community 35 - "Community 35"
+### Community 34 - "Community 34"
 Cohesion: 0.5
 Nodes (2): cn(), Badge()
 
@@ -125,9 +125,9 @@ Nodes (2): processFile(), walkDir()
 ## Knowledge Gaps
 - **Thin community `Community 13`** (7 nodes): `confirmDelete()`, `fetchTags()`, `handleDelete()`, `handleSave()`, `openEditDialog()`, `toggleContact()`, `tag-manager.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 18`** (5 nodes): `dev-with-automation-cron.mjs`, `parseCronResponse()`, `readEnvFile()`, `scheduleNext()`, `tick()`
+- **Thin community `Community 19`** (5 nodes): `dev-with-automation-cron.mjs`, `parseCronResponse()`, `readEnvFile()`, `scheduleNext()`, `tick()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 35`** (4 nodes): `cn()`, `badge.tsx`, `utils.ts`, `Badge()`
+- **Thin community `Community 34`** (4 nodes): `cn()`, `badge.tsx`, `utils.ts`, `Badge()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 36`** (3 nodes): `replace_colors.js`, `processFile()`, `walkDir()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
