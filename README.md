@@ -1,100 +1,91 @@
-# wacrm — CRM Template for WhatsApp
+# Replai - AI-Powered WhatsApp CRM
 
-> Self-hostable CRM template for WhatsApp® — shared inbox, contacts,
-> sales pipelines, broadcasts, and no-code automations. Fork it, brand
-> it, host it.
+![Replai](/public/Replai-logo.png)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-violet.svg)](./LICENSE)
-[![CI](https://github.com/ArnasDon/wacrm/actions/workflows/ci.yml/badge.svg)](https://github.com/ArnasDon/wacrm/actions/workflows/ci.yml)
-[![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)](https://nextjs.org)
-[![Supabase](https://img.shields.io/badge/Supabase-Postgres%20%2B%20Auth-3ecf8e?logo=supabase)](https://supabase.com)
-[![Stars](https://img.shields.io/github/stars/ArnasDon/wacrm?style=social)](https://github.com/ArnasDon/wacrm/stargazers)
+A self-hostable CRM template for WhatsApp built on **Next.js** and **Supabase** — featuring a shared inbox, contact management, sales pipelines, broadcast campaigns, AI knowledge base, and no-code visual automations.
 
-The marketing site and self-host docs live in a separate repo:
-[ArnasDon/wacrm-site](https://github.com/ArnasDon/wacrm-site)
-([wacrm.tech](https://wacrm.tech)). This repo is the product —
-clone or fork it to run your own CRM.
+## 🚀 Features
 
-## What you get out of the box
+* **Shared Team Inbox:** Manage WhatsApp conversations collaboratively with your team. Assign chats, leave internal notes, and never miss a message.
+* **Smart Contact Management:** Automatic contact profile creation, deduplication, custom tags, and filtering.
+* **Visual No-Code Automations (Flows):** Build powerful chat flows, interactive messages, and automated reply sequences using a drag-and-drop builder (powered by React Flow).
+* **Broadcast Campaigns:** Send bulk WhatsApp messages, manage recipient lists, and track campaign performance (delivered, read, replied).
+* **AI Knowledge Base & Auto-Replies:** Train your CRM on your company's documents and enable AI to draft or automatically send replies to customer queries.
+* **Sales Pipelines:** Visualize leads and deals in a drag-and-drop Kanban board (powered by DnD Kit).
+* **Dynamic Landing Page & Super Admin CMS:** Manage your SaaS website's navigation, SEO, theming, and footer directly from the built-in Super Admin panel.
+* **Meta Business Integration:** Native integration with WhatsApp Cloud API (Webhooks, Templates, and Cloud API messages).
 
-- **Shared inbox** on the official WhatsApp Business API — multiple
-  agents working one number, per-conversation assignment, status, and
-  notes.
-- **Contacts + tags + custom fields**, CSV import, deduplication.
-- **Sales pipelines** (Kanban) with deals linked to conversations.
-- **Broadcasts** with Meta-approved templates, delivery + read
-  tracking, per-recipient variable substitution.
-- **No-code automations** — triggers on inbound messages, new
-  contacts, keywords, or schedule; conditional branches, waits,
-  tags, webhooks. Visual builder.
-- **Real-time dashboard** — response times, daily volume, pipeline
-  value, cross-module activity feed.
-- **Account management** — email, password, avatar, global sign-out.
+## 🛠 Tech Stack
 
-## Why fork this?
+* **Framework:** Next.js 15 (App Router)
+* **Database & Auth:** Supabase (PostgreSQL, Row Level Security, Realtime, Storage)
+* **Styling:** Tailwind CSS, Base UI, Lucide Icons
+* **Drag & Drop:** `@dnd-kit` for Kanban boards, `@xyflow/react` for the Automation Flow builder
+* **Forms & State:** React Hook Form, Zod validation
+* **Language:** TypeScript
 
-This is a **template**, not a product. Forking means you get:
+## 📦 Getting Started
 
-- **Full ownership** — your code, your Supabase project, your domain,
-  your data. No SaaS lock-in, no seat pricing, no trust dance.
-- **Full customisation** — add the fields your team needs, remove the
-  modules you don't, redesign anything. The stack is boring on
-  purpose (Next.js + Supabase + Tailwind) so the learning curve is
-  short.
-- **Zero ops to start** — Hostinger Managed Node.js deploys a fork in
-  a few clicks. No Docker, no Kubernetes, no infra team needed.
-- **Real security primitives** — token encryption (AES-256-GCM), RLS
-  on every table, HMAC-verified webhooks, CSP, rate limiting, CI
-  typecheck/build on every PR.
+### 1. Prerequisites
+- Node.js >= 20.0.0
+- A Supabase project (Local or Cloud)
+- A Meta Developer Account with WhatsApp Cloud API configured
 
-Not a framework. Not an SDK. A concrete, working CRM you can stand up
-in an afternoon and make yours.
+### 2. Clone the Repository
+```bash
+git clone https://github.com/JunkiesCoder/replai.git
+cd replai
+```
 
-## Quick start
+### 3. Install Dependencies
+```bash
+npm install
+```
+
+### 4. Environment Configuration
+Copy the `.env.example` file to `.env.local` and fill in the required values:
 
 ```bash
-# Fork on GitHub first: https://github.com/ArnasDon/wacrm → Fork
-git clone https://github.com/<your-username>/wacrm.git
-cd wacrm
-npm install
-cp .env.local.example .env.local   # fill in Supabase + Meta creds
+cp .env.example .env.local
+```
+
+**Key variables needed:**
+- `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `ENCRYPTION_KEY` (Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`)
+- `META_APP_SECRET` (From your Meta App Dashboard)
+
+### 5. Database Setup
+Ensure you run all the provided Supabase migrations to set up the necessary tables, triggers, and Row Level Security (RLS) policies.
+
+```bash
+npx supabase db push
+```
+
+### 6. Run the Development Server
+```bash
 npm run dev
 ```
 
-Open <http://localhost:3000>. You'll be redirected to `/login` (or
-`/dashboard` if already signed in).
+Your app should now be running on [http://localhost:3000](http://localhost:3000).
 
-## Documentation
+## 🔗 WhatsApp Webhook Setup
+To receive incoming WhatsApp messages:
+1. Expose your local server using a tool like `ngrok`: 
+   ```bash
+   ngrok http 3000
+   ```
+2. Navigate to your Meta App Dashboard -> WhatsApp -> Configuration.
+3. Set the Webhook URL to `https://<your-ngrok-url>/api/webhooks/whatsapp`.
+4. Enter your custom verify token (ensure it matches your backend configuration).
+5. Subscribe to the `messages` field.
 
-Full self-host documentation — Supabase migrations, WhatsApp Business
-API config, and production deploy — lives at
-**[wacrm.tech/docs](https://wacrm.tech/docs)**
-(source: [ArnasDon/wacrm-site](https://github.com/ArnasDon/wacrm-site)).
+## 🤝 Contributing
+Contributions, issues, and feature requests are welcome!
+Feel free to check the [issues page](https://github.com/JunkiesCoder/replai/issues).
 
-Key pages:
-- [Getting started](https://wacrm.tech/docs/getting-started)
-- [Supabase setup](https://wacrm.tech/docs/supabase-setup)
-- [WhatsApp setup](https://wacrm.tech/docs/whatsapp-setup)
-- [Environment variables](https://wacrm.tech/docs/environment-variables)
-- [Deploy on Hostinger](https://wacrm.tech/docs/deployment-hostinger)
-- [Architecture](https://wacrm.tech/docs/architecture)
-- [Troubleshooting](https://wacrm.tech/docs/troubleshooting)
+## 📝 License
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Stack
-
-- **App** — Next.js 16 (App Router), React 19, TypeScript, Tailwind v4.
-- **Data** — Supabase (Postgres + Auth + Storage + RLS).
-- **WhatsApp** — Meta Cloud API (official WhatsApp Business API).
-
-## Contributing
-
-This is a template, not a collaborative product — the expected flow is
-fork → customise → deploy, **not** upstream contribution. Bug reports
-and security issues are welcome; feature PRs often belong in your fork
-rather than here. Details in
-[`CONTRIBUTING.md`](./CONTRIBUTING.md) and
-[`.github/SECURITY.md`](./.github/SECURITY.md).
-
-## License
-
-[MIT](./LICENSE). Fork it, brand it, host it.
+---
+*Built with ❤️ by Souaib Ansari*

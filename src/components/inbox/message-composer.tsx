@@ -1,1083 +1,875 @@
-'use client';
+"use client";
 
 import {
   useState,
   useRef,
   useCallback,
   useEffect,
-  useMemo,
-  type ChangeEvent,
-  type KeyboardEvent,
-} from 'react';
+  KeyboardEvent,
+} from "react";
 import {
   Send,
   LayoutTemplate,
   Paperclip,
+  Image as ImageIcon,
+  Video,
   FileText,
-  Image,
-  Music,
-  MapPin,
-  Contact as ContactIcon,
-  Zap,
-  Loader2,
+  Mic,
+  Square,
   X,
+  Loader2,
+  Sparkles,
   Plus,
-  Search,
-  Users,
-  Check,
-} from 'lucide-react';
-import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
-import { createClient } from '@/lib/supabase/client';
+  MessageSquareDashed,
+  Zap,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { GatedButton } from "@/components/ui/gated-button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+} from "@/components/ui/dialog";
+import { useCan } from "@/hooks/use-can";
+import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
-import { cn } from '@/lib/utils';
-import type { Contact as SavedContact, QuickReply } from '@/types';
+  uploadAccountMedia,
+  deleteAccountMedia,
+  MEDIA_MAX_BYTES_BY_KIND,
+} from "@/lib/storage/upload-media";
+import { ReplyQuote } from "./reply-quote";
+import { useTranslations } from "next-intl";
+import {
+  InteractiveBuilder,
+  blankButtonsPayload,
+} from "@/components/interactive/interactive-builder";
+import { validateInteractivePayload } from "@/lib/whatsapp/interactive";
+import type { InteractiveMessagePayload, QuickReply } from "@/types";
+import { QuickReplyPicker } from "./quick-reply-picker";
 
-type MediaMessageType = 'image' | 'video' | 'audio' | 'document';
+/** Media content types an agent can send from the composer. */
+export type ComposerMediaKind = "image" | "video" | "document" | "audio";
 
-export type ComposerMessage =
-  | { messageType: 'text'; text: string }
-  | {
-      messageType: MediaMessageType;
-      mediaId: string;
-      mediaUrl?: string;
-      filename?: string;
-      text?: string;
-    }
-  | {
-      messageType: 'template';
-      templateName: string;
-      templateLanguage: string;
-      templateParams?: string[];
-    }
-  | {
-      messageType: 'location';
-      locationUrl: string;
-      locationName?: string;
-      locationAddress?: string;
-    }
-  | {
-      messageType: 'contact_card';
-      contactName: string;
-      contactPhone: string;
-    };
+/** Supabase Storage bucket holding agent-sent chat attachments (migration 023). */
+export const CHAT_MEDIA_BUCKET = "chat-media";
+
+/** Meta caps media captions at 1024 chars. Enforced here and in the send route. */
+export const MEDIA_CAPTION_MAX = 1024;
+
+/** Hard cap on a single voice recording so it can't blow the upload/
+ *  transcode limits — auto-stops the recorder when reached. */
+const MAX_RECORDING_SECONDS = 5 * 60;
+
+export interface SendMediaPayload {
+  kind: ComposerMediaKind;
+  /** Public chat-media URL Meta fetches at send time. */
+  mediaUrl: string;
+  /** Storage object path — lets the caller GC the object if the send fails. */
+  path: string;
+  /** Optional caption (image/video/document only). */
+  caption?: string;
+  /** Original file name — surfaced to the recipient for documents. */
+  filename?: string;
+  replyToId?: string;
+}
+
+interface ReplyDraft {
+  /** Internal UUID of the message being replied to — sent back through onSend. */
+  id: string;
+  authorLabel: string;
+  preview: string;
+}
+
+// Mirrors the chat-media bucket's allowed_mime_types (migration 023) for
+// the file picker so unsupported files are rejected before upload rather
+// than failing with a confusing Storage error. Audio has no picker — it's
+// captured via the recorder.
+const PICKER_ACCEPT: Record<"image" | "video" | "document", string> = {
+  image: "image/png,image/jpeg,image/webp",
+  video: "video/mp4,video/3gpp",
+  document:
+    "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain",
+};
+
+interface MediaDraft {
+  kind: ComposerMediaKind;
+  mediaUrl: string;
+  /** Storage path — used to GC the object if the draft is discarded. */
+  path: string;
+  filename: string;
+  caption: string;
+}
 
 interface MessageComposerProps {
   conversationId: string;
   sessionExpired: boolean;
-  onSend: (message: ComposerMessage) => void | Promise<void>;
+  onSend: (text: string, replyToId?: string) => void;
+  onSendMedia: (payload: SendMediaPayload) => void;
+  onSendInteractive: (payload: InteractiveMessagePayload, replyToId?: string) => void;
   onOpenTemplates: () => void;
+  replyTo?: ReplyDraft | null;
+  onClearReply?: () => void;
+  isFloating?: boolean;
 }
 
-const MAX_MEDIA_SIZE = 16 * 1024 * 1024;
-const MAX_DOCUMENT_SIZE = 100 * 1024 * 1024;
-
-function isVideoFile(file: File, lowerName = file.name.toLowerCase()) {
-  return (
-    file.type.startsWith('video/') ||
-    lowerName.endsWith('.mp4') ||
-    lowerName.endsWith('.3gp')
-  );
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-type PendingAttachment = {
-  id: string;
-  messageType: MediaMessageType;
-  file: File;
-  previewUrl?: string;
-};
-
-const ATTACHMENT_OPTIONS: Array<{
-  label: string;
-  icon: typeof FileText;
-  action: 'document' | 'photos' | 'audio' | 'location' | 'contact' | 'quick';
-}> = [
-  { label: 'Document', icon: FileText, action: 'document' },
-  { label: 'Photos & Videos', icon: Image, action: 'photos' },
-  { label: 'Audio', icon: Music, action: 'audio' },
-  { label: 'Location', icon: MapPin, action: 'location' },
-  { label: 'Contact', icon: ContactIcon, action: 'contact' },
-  { label: 'Quick Replies', icon: Zap, action: 'quick' },
-];
+/** Worker that encodes mic input to Ogg/Opus entirely in the browser
+ *  (vendored from opus-recorder into /public). Recording client-side in a
+ *  Meta-accepted format means no server ffmpeg / transcode step. */
+const OPUS_ENCODER_PATH = "/opus/encoderWorker.min.js";
 
 export function MessageComposer({
   conversationId,
   sessionExpired,
   onSend,
+  onSendMedia,
+  onSendInteractive,
   onOpenTemplates,
+  replyTo,
+  onClearReply,
+  isFloating,
 }: MessageComposerProps) {
-  const [text, setText] = useState('');
+  const t = useTranslations("Inbox.composer");
+
+  const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const [attachmentOpen, setAttachmentOpen] = useState(false);
-  const [quickRepliesOpen, setQuickRepliesOpen] = useState(false);
-  const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
-  const [quickSearch, setQuickSearch] = useState('');
-  const [loadingQuickReplies, setLoadingQuickReplies] = useState(false);
-  const [quickRepliesUnavailable, setQuickRepliesUnavailable] = useState(false);
-  const [createQuickReplyOpen, setCreateQuickReplyOpen] = useState(false);
-  const [newQuickShortcut, setNewQuickShortcut] = useState('');
-  const [newQuickText, setNewQuickText] = useState('');
-  const [savingQuickReply, setSavingQuickReply] = useState(false);
-  const [uploadingLabel, setUploadingLabel] = useState<string | null>(null);
-  const [pendingAttachments, setPendingAttachments] = useState<
-    PendingAttachment[]
-  >([]);
-  const [locationOpen, setLocationOpen] = useState(false);
-  const [contactOpen, setContactOpen] = useState(false);
-  const [locationUrl, setLocationUrl] = useState('');
-  const [locationName, setLocationName] = useState('');
-  const [locationAddress, setLocationAddress] = useState('');
-  const [savedContacts, setSavedContacts] = useState<SavedContact[]>([]);
-  const [loadingContacts, setLoadingContacts] = useState(false);
-  const [contactSearch, setContactSearch] = useState('');
-  const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
+  const [drafting, setDrafting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Interactive-message builder dialog + quick-reply picker.
+  const [interactiveOpen, setInteractiveOpen] = useState(false);
+  const [interactivePayload, setInteractivePayload] =
+    useState<InteractiveMessagePayload>(blankButtonsPayload);
+  const [savingQuickReply, setSavingQuickReply] = useState(false);
+  const [quickReplyOpen, setQuickReplyOpen] = useState(false);
+
+  // Media attachment state. `draft` holds an uploaded-but-not-yet-sent
+  // attachment; `busy` covers the upload/transcode window.
+  const [draft, setDraft] = useState<MediaDraft | null>(null);
+  const [busy, setBusy] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
-  const photosInputRef = useRef<HTMLInputElement>(null);
-  const audioInputRef = useRef<HTMLInputElement>(null);
-  const pendingAttachmentsRef = useRef<PendingAttachment[]>([]);
-
-  const clearPendingAttachments = useCallback(() => {
-    setPendingAttachments((current) => {
-      current.forEach((attachment) => {
-        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
-      });
-      return [];
-    });
-  }, []);
-
-  const removePendingAttachment = useCallback((id: string) => {
-    setPendingAttachments((current) =>
-      current.filter((attachment) => {
-        if (attachment.id !== id) return true;
-        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
-        return false;
-      })
-    );
-  }, []);
-
+  // Mirror of `draft` for the unmount cleanup, which can't read render
+  // state. Kept in sync below so navigating away with a staged-but-unsent
+  // attachment GCs the orphaned object.
+  const draftRef = useRef<MediaDraft | null>(null);
   useEffect(() => {
-    pendingAttachmentsRef.current = pendingAttachments;
-  }, [pendingAttachments]);
+    draftRef.current = draft;
+  }, [draft]);
 
-  useEffect(
-    () => () => {
-      pendingAttachmentsRef.current.forEach((attachment) => {
-        if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
-      });
-    },
-    []
-  );
+  // Best-effort GC of a staged object the user never sent. Fire-and-forget.
+  const removeStaged = useCallback((path: string | undefined) => {
+    if (!path) return;
+    void deleteAccountMedia(CHAT_MEDIA_BUCKET, path).catch(() => {});
+  }, []);
+
+  // Voice recording state. The recorder encodes Ogg/Opus in-browser
+  // (opus-recorder) so there's no server-side transcode.
+  const [recording, setRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const recorderRef = useRef<import("opus-recorder").default | null>(null);
+  const cancelledRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Viewers (read-only role) can browse the inbox but never send.
+  // For solo users this is always true — single-owner accounts pass
+  // every capability — so the disabled branch is a no-op there.
+  const canSend = useCan("send-messages");
+  const readOnly = !canSend;
+  // Media (like free-form text) is only allowed inside the 24h window.
+  const inputsDisabled = readOnly || sessionExpired;
+
+  const clearTimer = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  // Tear down any live recording + timer on unmount so a mid-record
+  // navigation doesn't leak the mic, and GC a staged-but-unsent
+  // attachment so it doesn't orphan in the bucket.
+  useEffect(() => {
+    return () => {
+      clearTimer();
+      cancelledRef.current = true;
+      // stop() releases the mic stream + audio context inside opus-recorder.
+      void recorderRef.current?.stop().catch(() => {});
+      removeStaged(draftRef.current?.path);
+    };
+  }, [clearTimer, removeStaged]);
 
   const adjustHeight = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
+    el.style.height = "auto";
+    // Max 4 lines (~96px)
     el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
   }, []);
 
-  const resetTextarea = useCallback(() => {
-    setText('');
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
-  }, []);
-
-  const fetchQuickReplies = useCallback(async () => {
-    if (
-      quickReplies.length > 0 ||
-      loadingQuickReplies ||
-      quickRepliesUnavailable
-    ) {
-      return;
-    }
-
-    setLoadingQuickReplies(true);
-    try {
-      const res = await fetch('/api/quick-replies');
-      const payload = await res.json().catch(() => []);
-
-      if (!res.ok) {
-        throw new Error(payload?.error || `HTTP ${res.status}`);
-      }
-
-      setQuickReplies(payload);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : 'unknown error';
-      const tableMissing = reason.includes('Quick replies are not installed');
-      if (tableMissing) {
-        setQuickRepliesUnavailable(true);
-        toast.error('Quick replies table is missing. Apply migration 009.');
-      } else {
-        toast.error(`Failed to load quick replies: ${reason}`);
-      }
-    } finally {
-      setLoadingQuickReplies(false);
-    }
-  }, [loadingQuickReplies, quickReplies.length, quickRepliesUnavailable]);
-
-  const fetchSavedContacts = useCallback(async () => {
-    if (savedContacts.length > 0 || loadingContacts) return;
-
-    setLoadingContacts(true);
-    try {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from('contacts')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setSavedContacts(data ?? []);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : 'unknown error';
-      toast.error(`Failed to load contacts: ${reason}`);
-    } finally {
-      setLoadingContacts(false);
-    }
-  }, [loadingContacts, savedContacts.length]);
-
-  useEffect(() => {
-    if (quickRepliesOpen || text.trimStart().startsWith('/')) {
-      void fetchQuickReplies();
-    }
-  }, [fetchQuickReplies, quickRepliesOpen, text]);
-
-  useEffect(() => {
-    if (contactOpen) void fetchSavedContacts();
-  }, [contactOpen, fetchSavedContacts]);
-
-  const slashQuery = text.trimStart().startsWith('/')
-    ? text.trimStart().slice(1).toLowerCase()
-    : '';
-  const replyQuery = (
-    quickRepliesOpen ? quickSearch : slashQuery
-  ).toLowerCase();
-  const visibleQuickReplies = quickReplies.filter((reply) => {
-    if (!replyQuery) return true;
-    return (
-      reply.shortcut.toLowerCase().includes(replyQuery) ||
-      reply.text.toLowerCase().includes(replyQuery)
-    );
-  });
-  const showInlineQuickReplies =
-    !sessionExpired &&
-    (quickRepliesOpen || text.trimStart().startsWith('/')) &&
-    (quickRepliesOpen || loadingQuickReplies || visibleQuickReplies.length > 0);
-
-  const visibleContacts = useMemo(() => {
-    const query = contactSearch.trim().toLowerCase();
-    if (!query) return savedContacts;
-
-    return savedContacts.filter((contact) =>
-      [contact.name, contact.phone, contact.email]
-        .filter(Boolean)
-        .some((value) => value!.toLowerCase().includes(query))
-    );
-  }, [contactSearch, savedContacts]);
-
-  const selectedContacts = useMemo(() => {
-    const byId = new Map(savedContacts.map((contact) => [contact.id, contact]));
-    return selectedContactIds
-      .map((id) => byId.get(id))
-      .filter((contact): contact is SavedContact => Boolean(contact));
-  }, [savedContacts, selectedContactIds]);
-
-  const insertQuickReply = useCallback(
-    (reply: QuickReply) => {
-      setText(reply.text);
-      setQuickRepliesOpen(false);
-      setQuickSearch('');
-      requestAnimationFrame(() => {
-        adjustHeight();
-        textareaRef.current?.focus();
-      });
-    },
-    [adjustHeight]
-  );
-
-  const handleCreateQuickReply = useCallback(async () => {
-    const shortcut = newQuickShortcut.trim().replace(/^\/+/, '');
-    const replyText = newQuickText.trim();
-
-    if (!shortcut || !replyText) {
-      toast.error('Shortcut and message are required.');
-      return;
-    }
-
-    setSavingQuickReply(true);
-    try {
-      const res = await fetch('/api/quick-replies', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shortcut, text: replyText }),
-      });
-      const payload = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(payload?.error || `HTTP ${res.status}`);
-      }
-
-      setQuickReplies((current) =>
-        [...current, payload].sort((a, b) =>
-          a.shortcut.localeCompare(b.shortcut)
-        )
-      );
-      setQuickRepliesUnavailable(false);
-      setCreateQuickReplyOpen(false);
-      setNewQuickShortcut('');
-      setNewQuickText('');
-      toast.success('Quick reply created');
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : 'unknown error';
-      if (reason.includes('Quick replies are not installed')) {
-        setQuickRepliesUnavailable(true);
-        toast.error('Quick replies table is missing. Apply migration 009.');
-      } else {
-        toast.error(`Failed to create quick reply: ${reason}`);
-      }
-    } finally {
-      setSavingQuickReply(false);
-    }
-  }, [newQuickShortcut, newQuickText]);
-
-  const uploadAndSendAttachment = useCallback(
-    async (attachment: PendingAttachment, caption?: string) => {
-      const { messageType, file } = attachment;
-      const sizeLimit =
-        messageType === 'document' ? MAX_DOCUMENT_SIZE : MAX_MEDIA_SIZE;
-      if (file.size > sizeLimit) {
-        toast.error(
-          `File is too large. Limit is ${Math.floor(sizeLimit / 1024 / 1024)}MB.`
-        );
-        return false;
-      }
-
-      setUploadingLabel(file.name);
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('conversation_id', conversationId);
-        formData.append('message_type', messageType);
-
-        const res = await fetch('/api/whatsapp/media/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        const payload = await res.json().catch(() => ({}));
-
-        if (!res.ok) {
-          throw new Error(payload?.error || `HTTP ${res.status}`);
-        }
-
-        await onSend({
-          messageType,
-          mediaId: payload.media_id,
-          mediaUrl: payload.media_url,
-          filename: messageType === 'document' ? file.name : undefined,
-          text:
-            messageType === 'audio'
-              ? undefined
-              : caption || undefined,
-        });
-        return true;
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : 'upload failed';
-        toast.error(`Attachment failed: ${reason}`);
-        return false;
-      } finally {
-        setUploadingLabel(null);
-      }
-    },
-    [conversationId, onSend]
-  );
-
-  const sendAttachments = useCallback(
-    async (attachments: PendingAttachment[]) => {
-      const caption = text.trim();
-      const sentIds = new Set<string>();
-
-      for (const [index, attachment] of attachments.entries()) {
-        const sent = await uploadAndSendAttachment(
-          attachment,
-          index === 0 ? caption : undefined
-        );
-        if (sent) sentIds.add(attachment.id);
-      }
-
-      if (sentIds.size === attachments.length) {
-        clearPendingAttachments();
-        if (caption) resetTextarea();
-        return;
-      }
-
-      setPendingAttachments((current) => {
-        current.forEach((attachment) => {
-          if (sentIds.has(attachment.id) && attachment.previewUrl) {
-            URL.revokeObjectURL(attachment.previewUrl);
-          }
-        });
-        return current.filter((attachment) => !sentIds.has(attachment.id));
-      });
-
-      if (sentIds.size > 0) {
-        toast.error(`${attachments.length - sentIds.size} attachment(s) failed.`);
-      }
-    },
-    [
-      clearPendingAttachments,
-      resetTextarea,
-      text,
-      uploadAndSendAttachment,
-    ]
-  );
-
-  const handleSendMessage = useCallback(async () => {
-    if (sending || sessionExpired) return;
-    if (pendingAttachments.length > 0) {
-      setSending(true);
-      try {
-        await sendAttachments(pendingAttachments);
-      } finally {
-        setSending(false);
-      }
-      return;
-    }
-
+  const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed || sending || sessionExpired) return;
 
     setSending(true);
     try {
-      await onSend({ messageType: 'text', text: trimmed });
-      resetTextarea();
+      onSend(trimmed, replyTo?.id);
+      setText("");
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+      }
     } finally {
       setSending(false);
     }
-  }, [
-    pendingAttachments,
-    sending,
-    sendAttachments,
-    sessionExpired,
-    onSend,
-    resetTextarea,
-    text,
-  ]);
+  }, [text, sending, sessionExpired, onSend, replyTo?.id]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        void handleSendMessage();
+        handleSend();
       }
     },
-    [handleSendMessage]
+    [handleSend]
   );
 
   const handleChange = useCallback(
-    (e: ChangeEvent<HTMLTextAreaElement>) => {
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setText(e.target.value);
       adjustHeight();
     },
     [adjustHeight]
   );
 
-  const stageFiles = useCallback(
-    (messageType: MediaMessageType | 'photos', files: File[]) => {
-      const validAttachments = files.flatMap((file, index) => {
-        const lowerName = file.name.toLowerCase();
-        const selectedVideo = isVideoFile(file, lowerName);
-        const resolvedType: MediaMessageType =
-          messageType === 'photos' && selectedVideo
-            ? file.size > MAX_MEDIA_SIZE
-              ? 'document'
-              : 'video'
-            : messageType === 'photos'
-              ? 'image'
-              : messageType;
-        const resolvedSizeLimit =
-          resolvedType === 'document' ? MAX_DOCUMENT_SIZE : MAX_MEDIA_SIZE;
-
-        if (file.size > resolvedSizeLimit) {
-          toast.error(
-            `${file.name} is too large. Limit is ${Math.floor(
-              resolvedSizeLimit / 1024 / 1024
-            )}MB.`
-          );
-          return [];
-        }
-
-        const canPreview = resolvedType === 'image' || resolvedType === 'video';
-        return [
-          {
-            id: `${Date.now()}-${index}-${file.name}`,
-            messageType: resolvedType,
-            file,
-            previewUrl: canPreview ? URL.createObjectURL(file) : undefined,
-          },
-        ];
-      });
-
-      if (validAttachments.length === 0) return;
-      setPendingAttachments((current) => [...current, ...validAttachments]);
-    },
-    []
-  );
-
-  const handleFileChange = useCallback(
-    (messageType: MediaMessageType | 'photos') =>
-      (e: ChangeEvent<HTMLInputElement>) => {
-        const files = Array.from(e.target.files ?? []);
-        e.target.value = '';
-        if (files.length === 0 || sessionExpired) return;
-        stageFiles(messageType, files);
-      },
-    [sessionExpired, stageFiles]
-  );
-
-  const handleAttachmentAction = useCallback(
-    (action: (typeof ATTACHMENT_OPTIONS)[number]['action']) => {
-      setAttachmentOpen(false);
-      if (sessionExpired) return;
-
-      if (action === 'document') documentInputRef.current?.click();
-      if (action === 'photos') photosInputRef.current?.click();
-      if (action === 'audio') audioInputRef.current?.click();
-      if (action === 'location') setLocationOpen(true);
-      if (action === 'contact') setContactOpen(true);
-      if (action === 'quick') setQuickRepliesOpen(true);
-    },
-    [sessionExpired]
-  );
-
-  const handleSendLocation = useCallback(async () => {
-    const trimmedUrl = locationUrl.trim();
-
-    if (!trimmedUrl) {
-      toast.error('Paste a Google Maps URL.');
-      return;
-    }
-
-    if (!/^https?:\/\//i.test(trimmedUrl)) {
-      toast.error('Enter a full Google Maps URL.');
-      return;
-    }
-
-    setSending(true);
+  // Ask the AI assistant for a suggested reply and drop it into the
+  // composer for the agent to edit + send. Read-only server-side —
+  // nothing is sent until the agent hits Send.
+  const handleDraft = useCallback(async () => {
+    if (drafting) return;
+    setDrafting(true);
     try {
-      await onSend({
-        messageType: 'location',
-        locationUrl: trimmedUrl,
-        locationName: locationName.trim() || undefined,
-        locationAddress: locationAddress.trim() || undefined,
+      const res = await fetch("/api/ai/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversation_id: conversationId }),
       });
-      setLocationOpen(false);
-      setLocationUrl('');
-      setLocationName('');
-      setLocationAddress('');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (data.code === "ai_not_configured") {
+          toast.error("AI isn't set up yet — enable it in Settings → AI Assistant.");
+        } else {
+          toast.error(data.error ?? "Couldn't draft a reply.");
+        }
+        return;
+      }
+      const draftText = typeof data.draft === "string" ? data.draft.trim() : "";
+      if (!draftText) {
+        toast.error("The assistant didn't return a reply.");
+        return;
+      }
+      setText(draftText);
+      // Let the textarea grow to fit and drop the cursor at the end so
+      // the agent can tweak immediately.
+      requestAnimationFrame(() => {
+        adjustHeight();
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(el.value.length, el.value.length);
+        }
+      });
+    } catch {
+      toast.error("Couldn't reach the AI assistant.");
     } finally {
-      setSending(false);
+      setDrafting(false);
     }
-  }, [locationAddress, locationName, locationUrl, onSend]);
+  }, [drafting, conversationId, adjustHeight]);
 
-  const toggleSelectedContact = useCallback((contactId: string) => {
-    setSelectedContactIds((current) =>
-      current.includes(contactId)
-        ? current.filter((id) => id !== contactId)
-        : [...current, contactId]
-    );
+  // ---- Interactive message + quick replies --------------------------
+
+  const openInteractiveBuilder = useCallback(
+    (seed?: InteractiveMessagePayload) => {
+      setInteractivePayload(seed ?? blankButtonsPayload());
+      setInteractiveOpen(true);
+    },
+    [],
+  );
+
+  const sendInteractive = useCallback(() => {
+    const result = validateInteractivePayload(interactivePayload);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    onSendInteractive(interactivePayload, replyTo?.id);
+    setInteractiveOpen(false);
+    onClearReply?.();
+  }, [interactivePayload, onSendInteractive, replyTo?.id, onClearReply]);
+
+  // Persist the current builder payload as a reusable interactive snippet.
+  const saveAsQuickReply = useCallback(async () => {
+    const result = validateInteractivePayload(interactivePayload);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    const title = window
+      .prompt(t("quickReplyNamePrompt"))
+      ?.trim();
+    if (!title) return;
+    setSavingQuickReply(true);
+    try {
+      const res = await fetch("/api/quick-replies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          kind: "interactive",
+          interactive_payload: interactivePayload,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.error ?? t("quickReplySaveError"));
+        return;
+      }
+      toast.success(t("quickReplySaved"));
+    } catch {
+      toast.error(t("quickReplySaveError"));
+    } finally {
+      setSavingQuickReply(false);
+    }
+  }, [interactivePayload, t]);
+
+  // A picked quick reply: text fills the composer; interactive opens the
+  // builder pre-filled so the agent can tweak before sending.
+  const handlePickQuickReply = useCallback(
+    (qr: QuickReply) => {
+      setQuickReplyOpen(false);
+      if (qr.kind === "interactive" && qr.interactive_payload) {
+        openInteractiveBuilder(qr.interactive_payload);
+        return;
+      }
+      const body = qr.content_text ?? "";
+      // Separate the snippet from any existing draft with a newline so the
+      // words don't run together ("Thanks" + "we'll…" → "Thankswe'll…").
+      setText((prev) =>
+        prev && !/\s$/.test(prev) ? `${prev}\n${body}` : `${prev}${body}`,
+      );
+      requestAnimationFrame(() => {
+        adjustHeight();
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(el.value.length, el.value.length);
+        }
+      });
+    },
+    [openInteractiveBuilder, adjustHeight],
+  );
+
+  // Upload a captured file to chat-media and stage it as a draft.
+  const stageUpload = useCallback(
+    async (kind: ComposerMediaKind, file: File) => {
+      // Per-kind ceiling mirrors Meta's caps (image 5 MB, etc.) so we
+      // reject before upload rather than orphaning an object that Meta
+      // would then refuse at send.
+      const max = MEDIA_MAX_BYTES_BY_KIND[kind];
+      if (file.size > max) {
+        toast.error(
+          `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — ${kind} limit is ${Math.round(
+            max / 1024 / 1024,
+          )} MB.`,
+        );
+        return;
+      }
+      setBusy(true);
+      try {
+        const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
+        // Replacing an existing draft? GC the previous object first.
+        removeStaged(draftRef.current?.path);
+        setDraft({ kind, mediaUrl: publicUrl, path, filename: file.name, caption: "" });
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Upload failed.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [removeStaged],
+  );
+
+  const handlePicked = useCallback(
+    (kind: "image" | "video" | "document", file: File | undefined) => {
+      if (file) void stageUpload(kind, file);
+    },
+    [stageUpload],
+  );
+
+  // ---- Voice recording (client-side Ogg/Opus, no server transcode) ---
+
+  // The encoded Ogg/Opus file from opus-recorder → upload as an audio
+  // draft. WhatsApp renders Ogg/Opus as a playable voice note.
+  const finalizeRecording = useCallback(
+    async (bytes: Uint8Array) => {
+      // Uint8Array is a valid BlobPart at runtime; the cast sidesteps the
+      // lib.dom ArrayBufferLike-vs-ArrayBuffer generic mismatch.
+      const file = new File([bytes as unknown as BlobPart], `voice-${Date.now()}.ogg`, {
+        type: "audio/ogg",
+      });
+      if (file.size === 0) return; // cancelled / empty take
+      if (file.size > MEDIA_MAX_BYTES_BY_KIND.audio) {
+        toast.error("Recording is too long (over 16 MB).");
+        return;
+      }
+      setBusy(true);
+      try {
+        const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
+        removeStaged(draftRef.current?.path);
+        setDraft({ kind: "audio", mediaUrl: publicUrl, path, filename: file.name, caption: "" });
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Upload failed.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [removeStaged],
+  );
+
+  const startRecording = useCallback(async () => {
+    if (inputsDisabled || busy || recording) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof AudioContext === "undefined") {
+      toast.error("Voice recording isn't supported in this browser.");
+      return;
+    }
+    try {
+      // Lazy-load the encoder (≈400 KB worker) only when the user records,
+      // keeping it out of the main bundle.
+      const { default: Recorder } = await import("opus-recorder");
+      const recorder = new Recorder({
+        encoderPath: OPUS_ENCODER_PATH,
+        numberOfChannels: 1,
+        encoderApplication: 2048, // VOIP — tuned for speech
+        encoderSampleRate: 48000,
+        streamPages: false, // one callback with the complete file on stop
+      });
+      cancelledRef.current = false;
+      recorder.ondataavailable = (bytes) => {
+        if (cancelledRef.current) return;
+        void finalizeRecording(bytes);
+      };
+      recorderRef.current = recorder;
+      await recorder.start();
+      setRecording(true);
+      setRecordSeconds(0);
+      timerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
+    } catch {
+      void recorderRef.current?.stop().catch(() => {});
+      recorderRef.current = null;
+      toast.error("Microphone access denied or unavailable.");
+    }
+  }, [inputsDisabled, busy, recording, finalizeRecording]);
+
+  const stopRecording = useCallback(() => {
+    clearTimer();
+    setRecording(false);
+    void recorderRef.current?.stop().catch(() => {});
+  }, [clearTimer]);
+
+  const cancelRecording = useCallback(() => {
+    cancelledRef.current = true;
+    clearTimer();
+    setRecording(false);
+    void recorderRef.current?.stop().catch(() => {});
+  }, [clearTimer]);
+
+  // Auto-stop at the cap so a forgotten recording can't blow the
+  // upload size limit.
+  useEffect(() => {
+    if (recording && recordSeconds >= MAX_RECORDING_SECONDS) {
+      stopRecording();
+    }
+  }, [recording, recordSeconds, stopRecording]);
+
+  // ---- Draft send / discard -----------------------------------------
+
+  const sendDraft = useCallback(() => {
+    if (!draft || busy) return;
+    onSendMedia({
+      kind: draft.kind,
+      mediaUrl: draft.mediaUrl,
+      path: draft.path,
+      // Audio takes no caption (Meta rejects it). Everything else: the
+      // trimmed caption, or undefined when blank.
+      caption:
+        draft.kind === "audio" ? undefined : draft.caption.trim() || undefined,
+      filename: draft.kind === "document" ? draft.filename : undefined,
+      replyToId: replyTo?.id,
+    });
+    // The object is now owned by the sent message — clear without GC.
+    setDraft(null);
+    onClearReply?.();
+  }, [draft, busy, onSendMedia, replyTo?.id, onClearReply]);
+
+  // Discard GCs the staged object — it was uploaded but never sent.
+  const discardDraft = useCallback(() => {
+    removeStaged(draft?.path);
+    setDraft(null);
+  }, [draft?.path, removeStaged]);
+
+  const setCaption = useCallback((caption: string) => {
+    setDraft((d) => (d ? { ...d, caption } : d));
   }, []);
 
-  const handleSendContact = useCallback(async () => {
-    if (selectedContacts.length === 0) {
-      toast.error('Select at least one contact.');
-      return;
-    }
-
-    setSending(true);
-    try {
-      for (const contact of selectedContacts) {
-        await onSend({
-          messageType: 'contact_card',
-          contactName: contact.name?.trim() || contact.phone,
-          contactPhone: contact.phone,
-        });
-      }
-      setContactOpen(false);
-      setContactSearch('');
-      setSelectedContactIds([]);
-    } finally {
-      setSending(false);
-    }
-  }, [onSend, selectedContacts]);
+  // ---- Render --------------------------------------------------------
 
   return (
     <div className="border-t border-border bg-card p-3">
+      {replyTo && (
+        <div className="mb-2">
+          <ReplyQuote
+            authorLabel={replyTo.authorLabel}
+            preview={replyTo.preview}
+            onDismiss={onClearReply}
+          />
+        </div>
+      )}
       {sessionExpired && (
         <div className="mb-2 flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2">
-          <p className="text-xs text-amber-600">
-            24-hour session expired. Use a template to re-engage.
+          <p className="text-xs text-amber-400">
+            {t("sessionExpiredHint")}
           </p>
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 text-xs text-amber-600 hover:text-amber-700"
+            className="h-7 text-xs text-amber-400 hover:text-amber-300"
             onClick={onOpenTemplates}
           >
             <LayoutTemplate className="mr-1 h-3 w-3" />
-            Templates
+            {t("templates")}
           </Button>
         </div>
       )}
 
+      {/* Hidden file inputs driven by the attach menu. */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept={PICKER_ACCEPT.image}
+        className="hidden"
+        onChange={(e) => {
+          handlePicked("image", e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept={PICKER_ACCEPT.video}
+        className="hidden"
+        onChange={(e) => {
+          handlePicked("video", e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
       <input
         ref={documentInputRef}
         type="file"
-        multiple
+        accept={PICKER_ACCEPT.document}
         className="hidden"
-        accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
-        onChange={handleFileChange('document')}
-      />
-      <input
-        ref={photosInputRef}
-        type="file"
-        multiple
-        className="hidden"
-        accept=".jpg,.jpeg,.png,.gif,.mp4,.3gp"
-        onChange={handleFileChange('photos')}
-      />
-      <input
-        ref={audioInputRef}
-        type="file"
-        multiple
-        className="hidden"
-        accept=".mp3,.ogg,.amr,.aac"
-        onChange={handleFileChange('audio')}
+        onChange={(e) => {
+          handlePicked("document", e.target.files?.[0]);
+          e.target.value = "";
+        }}
       />
 
-      {pendingAttachments.length > 0 && (
-        <div className="mb-2 rounded-lg border border-border bg-muted p-2">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="text-xs font-medium text-muted-foreground">
-              {pendingAttachments.length} attachment
-              {pendingAttachments.length === 1 ? '' : 's'} selected
-            </p>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-              onClick={clearPendingAttachments}
-              disabled={sending}
-            >
-              Clear
-            </Button>
-          </div>
-          <div className="grid max-h-40 gap-2 overflow-y-auto sm:grid-cols-2">
-            {pendingAttachments.map((attachment) => (
-              <div
-                key={attachment.id}
-                className="flex min-w-0 items-center gap-2 rounded-md bg-card/70 p-2"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-background">
-                  {attachment.messageType === 'image' &&
-                  attachment.previewUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={attachment.previewUrl}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : attachment.messageType === 'video' &&
-                    attachment.previewUrl ? (
-                    <video
-                      src={attachment.previewUrl}
-                      className="h-full w-full object-cover"
-                      muted
-                    />
-                  ) : (
-                    <FileText className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium text-foreground">
-                    {attachment.file.name}
-                  </p>
-                  <p className="text-[10px] capitalize text-muted-foreground">
-                    {attachment.messageType}
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 w-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
-                  onClick={() => removePendingAttachment(attachment.id)}
-                  disabled={sending}
-                  title="Remove attachment"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {showInlineQuickReplies && (
-        <div className="mb-2 max-h-48 overflow-y-auto rounded-lg border border-border bg-card p-1 shadow-lg">
-          {quickRepliesOpen && (
-            <div className="flex items-center gap-2 border-b border-border p-2">
-              <Input
-                value={quickSearch}
-                onChange={(e) => setQuickSearch(e.target.value)}
-                placeholder="Search quick replies"
-                className="h-8 border-border bg-muted text-xs text-foreground"
-              />
-              <Button
-                type="button"
-                size="sm"
-                className="h-8 shrink-0 bg-violet-600 px-2 text-xs hover:bg-violet-500"
-                onClick={() => {
-                  setCreateQuickReplyOpen(true);
-                  setQuickRepliesOpen(false);
-                }}
-              >
-                <Plus className="mr-1 h-3.5 w-3.5" />
-                New
-              </Button>
-            </div>
-          )}
-          {loadingQuickReplies ? (
-            <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Loading
-            </div>
-          ) : quickRepliesUnavailable ? (
-            <div className="px-3 py-2 text-xs text-amber-700">
-              Apply migration 009 to enable quick replies.
-            </div>
-          ) : visibleQuickReplies.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-muted-foreground">
-              No quick replies yet.
-            </div>
-          ) : (
-            visibleQuickReplies.slice(0, 6).map((reply) => (
-              <button
-                key={reply.id}
-                type="button"
-                onClick={() => insertQuickReply(reply)}
-                className="block w-full rounded-md px-3 py-2 text-left hover:bg-muted"
-              >
-                <span className="block text-xs font-medium text-violet-700">
-                  /{reply.shortcut}
-                </span>
-                <span className="line-clamp-2 text-xs text-muted-foreground">
-                  {reply.text}
-                </span>
-              </button>
-            ))
-          )}
-        </div>
-      )}
-
-      <div className="flex items-end gap-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
-          onClick={onOpenTemplates}
-          title="Templates"
-        >
-          <LayoutTemplate className="h-4 w-4" />
-        </Button>
-
-        <Popover open={attachmentOpen} onOpenChange={setAttachmentOpen}>
-          <PopoverTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
-                disabled={sessionExpired || sending || Boolean(uploadingLabel)}
-                title="Attachments"
-              />
-            }
-          >
-            {uploadingLabel ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Paperclip className="h-4 w-4" />
-            )}
-          </PopoverTrigger>
-          <PopoverContent
-            align="start"
-            side="top"
-            className="w-64 border border-border bg-card p-1"
-          >
-            {ATTACHMENT_OPTIONS.map((option) => {
-              const Icon = option.icon;
-              return (
-                <button
-                  key={option.action}
-                  type="button"
-                  onClick={() => handleAttachmentAction(option.action)}
-                  className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm text-card-foreground hover:bg-muted"
-                >
-                  <Icon className="h-4 w-4 text-muted-foreground" />
-                  <span>{option.label}</span>
-                </button>
-              );
-            })}
-          </PopoverContent>
-        </Popover>
-
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={sessionExpired ? 'Session expired' : 'Type a message...'}
-          disabled={sessionExpired || sending}
-          rows={1}
-          className={cn(
-            'flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-slate-500 transition-colors outline-none focus:border-violet-500/50',
-            sessionExpired && 'cursor-not-allowed opacity-50'
-          )}
+      {draft ? (
+        <MediaDraftPreview
+          draft={draft}
+          busy={busy}
+          readOnly={readOnly}
+          onCaptionChange={setCaption}
+          onDiscard={discardDraft}
+          onSend={sendDraft}
+          t={t}
         />
+      ) : recording ? (
+        // Recording bar — replaces the composer while the mic is live.
+        <div className="flex items-center gap-3 rounded-xl border border-border bg-muted px-4 py-2.5">
+          <span className="flex h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-500" />
+          <span className="flex-1 text-sm text-foreground">
+            {t("recording", { current: formatDuration(recordSeconds), max: formatDuration(MAX_RECORDING_SECONDS) })}
+          </span>
+          <button
+            type="button"
+            onClick={cancelRecording}
+            className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-card hover:text-foreground"
+          >
+            {t("cancel")}
+          </button>
+          <Button
+            size="sm"
+            onClick={stopRecording}
+            className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90"
+            title={t("stopAndAttach")}
+          >
+            <Square className="h-4 w-4" />
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-end gap-2">
+          {/* Unified Action Menu (+ button) */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              disabled={inputsDisabled || busy}
+              title={
+                readOnly
+                  ? t("readOnlyTitle")
+                  : inputsDisabled
+                    ? undefined
+                    : t("moreActions")
+              }
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy || drafting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="h-4 w-4" />
+              )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56 border-border bg-popover">
+              <DropdownMenuItem onClick={() => imageInputRef.current?.click()} disabled={readOnly}>
+                <ImageIcon className="mr-2 h-4 w-4 text-muted-foreground" />
+                {t("photo")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => videoInputRef.current?.click()} disabled={readOnly}>
+                <Video className="mr-2 h-4 w-4 text-muted-foreground" />
+                {t("video")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => documentInputRef.current?.click()} disabled={readOnly}>
+                <FileText className="mr-2 h-4 w-4 text-muted-foreground" />
+                {t("document")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void startRecording()} disabled={readOnly}>
+                <Mic className="mr-2 h-4 w-4 text-muted-foreground" />
+                {t("voiceNote")}
+              </DropdownMenuItem>
+              
+              <DropdownMenuSeparator className="bg-border" />
+              
+              <DropdownMenuItem onClick={() => openInteractiveBuilder()} disabled={readOnly}>
+                <MessageSquareDashed className="mr-2 h-4 w-4 text-muted-foreground" />
+                {t("interactiveMessage")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setQuickReplyOpen(true)} disabled={readOnly}>
+                <Zap className="mr-2 h-4 w-4 text-muted-foreground" />
+                {t("quickReplies")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onOpenTemplates} disabled={readOnly}>
+                <LayoutTemplate className="mr-2 h-4 w-4 text-muted-foreground" />
+                {t("sendTemplate")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleDraft} disabled={readOnly || drafting}>
+                <Sparkles className="mr-2 h-4 w-4 text-primary" />
+                <span className={drafting ? "opacity-50" : ""}>{t("draftWithAI")}</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-        <Button
-          size="sm"
-          className="h-9 w-9 shrink-0 bg-violet-600 p-0 hover:bg-violet-500 disabled:opacity-40"
-          disabled={
-            (!text.trim() && pendingAttachments.length === 0) ||
-            sessionExpired ||
-            sending
-          }
-          onClick={() => void handleSendMessage()}
-          title="Send"
-        >
-          {sending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              readOnly
+                ? t("readOnlyTitle")
+                : sessionExpired
+                  ? t("sessionExpiredPlaceholder")
+                  : isFloating 
+                    ? t("typeMessagePlaceholder").split("(")[0].trim() 
+                    : t("typeMessagePlaceholder")
+            }
+            disabled={sessionExpired || readOnly}
+            rows={1}
+            // Textarea keeps its own inline title — the GatedButton
+            // wrapping pattern doesn't apply to non-button inputs.
+            // The placeholder text also surfaces the read-only state.
+            title={readOnly ? t("readOnlyTitle") : undefined}
+            className={cn(
+              "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+              (sessionExpired || readOnly) && "cursor-not-allowed opacity-50"
+            )}
+          />
+
+          <GatedButton
+            size="sm"
+            canAct={!readOnly}
+            gateReason="send messages"
+            disabled={!text.trim() || sessionExpired || sending}
+            onClick={handleSend}
+            className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
+          >
             <Send className="h-4 w-4" />
-          )}
-        </Button>
-      </div>
+          </GatedButton>
+        </div>
+      )}
 
-      {uploadingLabel && (
-        <p className="mt-1 pl-[5.8rem] text-[10px] text-muted-foreground">
-          Uploading {uploadingLabel}
+      {/* Hint sits outside the flex row so its height doesn't push
+          `items-end` buttons below the textarea. Indented to line up
+          under the textarea left edge. */}
+      {!draft && !recording && !isFloating && (
+        <p className="mt-1 pl-[2.75rem] text-[10px] text-muted-foreground">
+          {t("draftHint")}
         </p>
       )}
 
-      <Dialog open={locationOpen} onOpenChange={setLocationOpen}>
-        <DialogContent className="border border-border bg-card text-foreground">
+      {/* Interactive-message builder dialog. */}
+      <Dialog open={interactiveOpen} onOpenChange={setInteractiveOpen}>
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Location</DialogTitle>
+            <DialogTitle>{t("interactiveMessage")}</DialogTitle>
           </DialogHeader>
-          <div className="grid gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="location-url">Google Maps URL</Label>
-              <Input
-                id="location-url"
-                value={locationUrl}
-                onChange={(e) => setLocationUrl(e.target.value)}
-                placeholder="https://maps.google.com/..."
-                className="border-border bg-muted text-foreground"
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="location-name">Name</Label>
-              <Input
-                id="location-name"
-                value={locationName}
-                onChange={(e) => setLocationName(e.target.value)}
-                className="border-border bg-muted text-foreground"
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="location-address">Address</Label>
-              <Input
-                id="location-address"
-                value={locationAddress}
-                onChange={(e) => setLocationAddress(e.target.value)}
-                className="border-border bg-muted text-foreground"
-              />
-            </div>
+          <div className="max-h-[70vh] overflow-y-auto">
+            <InteractiveBuilder
+              value={interactivePayload}
+              onChange={setInteractivePayload}
+            />
           </div>
-          <DialogFooter className="border-border bg-card">
+          <DialogFooter>
             <Button
-              className="bg-violet-600 hover:bg-violet-500"
-              onClick={() => void handleSendLocation()}
-              disabled={sending}
-            >
-              Send
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={createQuickReplyOpen} onOpenChange={setCreateQuickReplyOpen}>
-        <DialogContent className="border border-border bg-card text-foreground">
-          <DialogHeader>
-            <DialogTitle>Quick Reply</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="quick-reply-shortcut">Shortcut</Label>
-              <Input
-                id="quick-reply-shortcut"
-                value={newQuickShortcut}
-                onChange={(e) => setNewQuickShortcut(e.target.value)}
-                placeholder="/price"
-                className="border-border bg-muted text-foreground"
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="quick-reply-text">Message</Label>
-              <textarea
-                id="quick-reply-text"
-                value={newQuickText}
-                onChange={(e) => setNewQuickText(e.target.value)}
-                rows={4}
-                className="min-h-24 resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder-slate-500 outline-none focus:border-violet-500/50"
-              />
-            </div>
-          </div>
-          <DialogFooter className="border-border bg-card">
-            <Button
-              className="bg-violet-600 hover:bg-violet-500"
-              onClick={() => void handleCreateQuickReply()}
+              variant="outline"
               disabled={savingQuickReply}
+              onClick={saveAsQuickReply}
             >
               {savingQuickReply ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
               ) : (
-                <Plus className="mr-2 h-4 w-4" />
+                <Zap className="mr-1 h-4 w-4" />
               )}
-              Create
+              {t("saveAsQuickReply")}
+            </Button>
+            <Button onClick={sendInteractive}>
+              <Send className="mr-1 h-4 w-4" />
+              {t("send")}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={contactOpen}
-        onOpenChange={(open) => {
-          setContactOpen(open);
-          if (!open) setContactSearch('');
-        }}
-      >
-        <DialogContent className="max-w-lg border border-border bg-card text-foreground">
-          <DialogHeader>
-            <DialogTitle>Contact</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={contactSearch}
-                onChange={(e) => setContactSearch(e.target.value)}
-                placeholder="Search by name or number"
-                className="border-border bg-muted pl-9 text-foreground"
-              />
-            </div>
+      {/* Quick-reply picker. */}
+      <QuickReplyPicker
+        open={quickReplyOpen}
+        onOpenChange={setQuickReplyOpen}
+        onPick={handlePickQuickReply}
+      />
+    </div>
+  );
+}
 
-            <div className="min-h-48 overflow-hidden rounded-lg border border-border bg-background/40">
-              {loadingContacts ? (
-                <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading contacts
-                </div>
-              ) : savedContacts.length === 0 ? (
-                <div className="flex h-48 flex-col items-center justify-center text-center">
-                  <Users className="mb-2 h-6 w-6 text-slate-600" />
-                  <p className="text-sm font-medium text-muted-foreground">
-                    No saved contacts
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Add contacts first, then share them here.
-                  </p>
-                </div>
-              ) : visibleContacts.length === 0 ? (
-                <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
-                  No contacts match your search.
-                </div>
-              ) : (
-                <div className="max-h-72 overflow-y-auto p-1">
-                  {visibleContacts.map((contact) => {
-                    const selected = selectedContactIds.includes(contact.id);
-                    const displayName = contact.name || contact.phone;
-
-                    return (
-                      <button
-                        key={contact.id}
-                        type="button"
-                        onClick={() => toggleSelectedContact(contact.id)}
-                        className={cn(
-                          'flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors',
-                          selected
-                            ? 'bg-violet-500/15'
-                            : 'hover:bg-muted'
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            'flex h-5 w-5 shrink-0 items-center justify-center rounded border',
-                            selected
-                              ? 'border-violet-500 bg-violet-600 text-white'
-                              : 'border-slate-600 bg-card'
-                          )}
-                        >
-                          {selected && <Check className="h-3.5 w-3.5" />}
-                        </span>
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-card-foreground">
-                          {displayName.charAt(0).toUpperCase()}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-foreground">
-                            {displayName}
-                          </span>
-                          <span className="block truncate text-xs text-muted-foreground">
-                            {contact.phone}
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+/**
+ * Staged-attachment preview with caption + send/discard. Declared at
+ * module scope (not nested in MessageComposer) so React keeps it mounted
+ * across the parent's re-renders — a nested component would remount the
+ * caption input on every keystroke and drop focus.
+ */
+function MediaDraftPreview({
+  draft,
+  busy,
+  readOnly,
+  onCaptionChange,
+  onDiscard,
+  onSend,
+  t,
+}: {
+  draft: MediaDraft;
+  busy: boolean;
+  readOnly: boolean;
+  onCaptionChange: (caption: string) => void;
+  onDiscard: () => void;
+  onSend: () => void;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/40 p-3">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          {draft.kind === "image" && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={draft.mediaUrl}
+              alt={draft.filename}
+              className="max-h-40 rounded-lg object-cover"
+            />
+          )}
+          {draft.kind === "video" && (
+            <video src={draft.mediaUrl} controls className="max-h-40 rounded-lg" />
+          )}
+          {draft.kind === "audio" && (
+            <audio src={draft.mediaUrl} controls className="w-full" />
+          )}
+          {draft.kind === "document" && (
+            <div className="flex items-center gap-2 text-sm text-foreground">
+              <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <span className="truncate">{draft.filename}</span>
             </div>
-          </div>
-          <DialogFooter className="border-border bg-card">
-            <p className="mr-auto text-xs text-muted-foreground">
-              {selectedContacts.length} selected
-            </p>
-            <Button
-              className="bg-violet-600 hover:bg-violet-500"
-              onClick={() => void handleSendContact()}
-              disabled={sending || selectedContacts.length === 0}
-            >
-              {sending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              Send
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onDiscard}
+          aria-label={t("removeAttachment")}
+          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="mt-2 flex items-end gap-2">
+        {draft.kind !== "audio" && (
+          <input
+            value={draft.caption}
+            maxLength={MEDIA_CAPTION_MAX}
+            onChange={(e) => onCaptionChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                onSend();
+              }
+            }}
+            placeholder={t("addCaption")}
+            className="flex-1 rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50"
+          />
+        )}
+        <GatedButton
+          size="sm"
+          canAct={!readOnly}
+          gateReason="send messages"
+          disabled={busy}
+          onClick={onSend}
+          className={cn(
+            "h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40",
+            draft.kind === "audio" && "ml-auto",
+          )}
+        >
+          <Send className="h-4 w-4" />
+        </GatedButton>
+      </div>
     </div>
   );
 }

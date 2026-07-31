@@ -1,4 +1,18 @@
-export interface VendorPermissions {
+import type { AccountRole } from "@/lib/auth/roles";
+export type { AccountRole };
+import type { InteractiveMessagePayload } from "@/lib/whatsapp/interactive";
+
+export type {
+  InteractiveMessagePayload,
+  InteractiveButtonsPayload,
+  InteractiveListPayload,
+  InteractiveButton,
+  InteractiveListRow,
+  InteractiveListSection,
+} from "@/lib/whatsapp/interactive";
+
+export interface MemberPermissions {
+  [key: string]: boolean | undefined;
   inbox: boolean;
   dashboard: boolean;
   contacts: boolean;
@@ -6,19 +20,51 @@ export interface VendorPermissions {
   broadcasts: boolean;
   automations: boolean;
   settings: boolean;
+  settings_whatsapp?: boolean;
+  settings_templates?: boolean;
+  settings_quick_replies?: boolean;
+  settings_fields?: boolean;
+  settings_deals?: boolean;
+  settings_members?: boolean;
+  settings_api?: boolean;
 }
 
-export const DEFAULT_VENDOR_PERMISSIONS: VendorPermissions = {
+export const DEFAULT_MEMBER_PERMISSIONS: MemberPermissions = {
   inbox: true,
   dashboard: false,
   contacts: false,
   pipelines: false,
   broadcasts: false,
   automations: false,
-  settings: true,
+  settings: false,
+  settings_whatsapp: true,
+  settings_templates: true,
+  settings_quick_replies: true,
+  settings_fields: true,
+  settings_deals: true,
+  settings_members: false,
+  settings_api: false,
 };
 
-export type UserRole = 'admin' | 'vendor' | 'user';
+export const PERMISSION_ITEMS: { key: keyof MemberPermissions; label: string; desc: string }[] = [
+  { key: 'inbox', label: 'Inbox', desc: 'Access messaging conversations and reply to leads' },
+  { key: 'contacts', label: 'Contacts', desc: 'View, add, and manage customer profiles and tags' },
+  { key: 'pipelines', label: 'Pipelines', desc: 'Manage deal stages and move lead cards' },
+  { key: 'broadcasts', label: 'Broadcasts', desc: 'Create and send bulk template campaigns' },
+  { key: 'automations', label: 'Automations', desc: 'Configure chatbot workflows and auto-replies' },
+  { key: 'dashboard', label: 'Dashboard', desc: 'View analytics and workspace performance metrics' },
+  { key: 'settings', label: 'Settings', desc: 'Manage WhatsApp numbers, integrations, and templates' },
+];
+
+export const SETTINGS_SUB_ITEMS: { key: string; label: string; desc: string; defaultVal: boolean }[] = [
+  { key: 'settings_whatsapp', label: 'WhatsApp Configuration', desc: 'Manage WABA numbers, credentials, and connection status', defaultVal: true },
+  { key: 'settings_templates', label: 'Message Templates', desc: 'Create, edit, submit, and sync WhatsApp message templates', defaultVal: true },
+  { key: 'settings_quick_replies', label: 'Quick Replies', desc: 'Manage canned responses for inbox agents', defaultVal: true },
+  { key: 'settings_fields', label: 'Fields & Tags', desc: 'Configure custom contact attributes and conversation labels', defaultVal: true },
+  { key: 'settings_deals', label: 'Deals & Currency', desc: 'Configure CRM deal stages and default currency', defaultVal: true },
+  { key: 'settings_members', label: 'Team Members', desc: 'View team roster and member access', defaultVal: false },
+  { key: 'settings_api', label: 'API Keys & Webhooks', desc: 'Manage developer tokens and webhook endpoints', defaultVal: false },
+];
 
 export interface Profile {
   id: string;
@@ -26,23 +72,114 @@ export interface Profile {
   full_name: string;
   email: string;
   avatar_url?: string;
-  role: UserRole;
-  permissions?: VendorPermissions;
-  is_active?: boolean;
+  /**
+   * Legacy free-form role column from migration 001. Never read
+   * by the app since 017_account_sharing.sql introduced the typed
+   * `account_role` enum. Flagged for removal in a later cleanup
+   * migration — kept on the type so existing destructures don't
+   * break.
+   */
+  role: string;
+  /**
+   * Opted-in beta feature keys for this account. The column survives
+   * for future beta gates; no current feature reads it (Flows was
+   * the last user and went to soft-GA in PR #134). Defaults to `[]`
+   * for every profile; toggled per-account via a direct UPDATE on
+   * the `profiles` row.
+   */
+  beta_features?: string[];
+  /**
+   * Account this profile is a member of. Added by
+   * `017_account_sharing.sql`; NOT NULL in the DB post-backfill.
+   * Optional on the type only because older serialised payloads
+   * (cached client state, test fixtures) may not have it yet.
+   */
+  account_id?: string;
+  /**
+   * Caller's role within their account. Source of truth for every
+   * role-gated UI / API check — call `hasMinRole` from
+   * `@/lib/auth/roles` rather than comparing this string directly.
+   */
+  account_role?: AccountRole;
+  permissions?: MemberPermissions | null;
+  /** Platform-level super admin flag. When true, the user can
+   *  access `/super-admin` routes for CMS management and platform
+   *  analytics. Set directly in the database — not editable from
+   *  the app UI. */
+  is_super_admin?: boolean;
   created_at: string;
-  updated_at?: string;
+}
+
+// ============================================================
+// Account-sharing entities (017_account_sharing.sql)
+// ============================================================
+
+export interface Account {
+  id: string;
+  name: string;
+  /** auth.users.id of the immutable owner. */
+  owner_user_id: string;
+  /** When true, the account is suspended by a platform super admin. */
+  is_banned?: boolean;
+  banned_at?: string | null;
+  banned_reason?: string | null;
+  banned_by_user_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Hydrated member row for the Settings → Members tab. Combines
+ * the profile and its account_role for a single member of the
+ * caller's account. Only two roles exist: owner and member.
+ */
+export interface AccountMember {
+  user_id: string;
+  full_name: string;
+  email: string | null;
+  avatar_url: string | null;
+  role: AccountRole;
+  permissions?: MemberPermissions | null;
+  is_active: boolean;
+  joined_at: string;
+}
+
+/**
+ * Outstanding invite link row. `token_hash` is intentionally
+ * absent — it lives only in the DB and on the server. The
+ * plaintext token is returned once at creation time and surfaced
+ * via the invite URL; never re-emitted.
+ */
+export interface AccountInvitation {
+  id: string;
+  account_id: string;
+  /** Invites always create members — owner is never offered. */
+  role: "member";
+  created_by_user_id: string | null;
+  label: string | null;
+  created_at: string;
+  expires_at: string;
+  accepted_at: string | null;
+  accepted_by_user_id: string | null;
 }
 
 export interface Contact {
   id: string;
   user_id: string;
+  account_id: string;
   phone: string;
+  /** Digits-only form of `phone`, generated by the DB (migration 022)
+   *  and unique per account. Read-only. */
+  phone_normalized?: string;
   name?: string;
   email?: string;
   company?: string;
   avatar_url?: string;
   created_at: string;
   updated_at: string;
+  /** Hydrated by queries that embed `contact_tags(tags(*))` (e.g. the
+   *  Inbox conversation list, for tag filtering). Absent otherwise. */
+  tags?: Tag[];
 }
 
 export interface Tag {
@@ -51,7 +188,6 @@ export interface Tag {
   name: string;
   color: string;
   created_at: string;
-  contact_tags?: any[];
 }
 
 export interface ContactTag {
@@ -63,6 +199,8 @@ export interface ContactTag {
 export interface CustomField {
   id: string;
   user_id: string;
+  /** Tenancy key — NOT NULL since migration 017. */
+  account_id: string;
   field_name: string;
   field_type: string;
   field_options?: Record<string, unknown>;
@@ -91,13 +229,47 @@ export interface Conversation {
   user_id: string;
   contact_id: string;
   status: ConversationStatus;
-  assigned_agent_id?: string | null;
+  assigned_agent_id?: string;
   last_message_text?: string;
   last_message_at?: string;
   unread_count: number;
   created_at: string;
   updated_at: string;
   contact?: Contact;
+  /**
+   * AI auto-reply state for this thread (migration 029 + 033):
+   *  - `ai_autoreply_disabled` — the bot is paused here (a human took
+   *    over, or the model handed off). Sticky until re-enabled.
+   *  - `ai_reply_count` — how many times the bot has auto-replied,
+   *    checked against the account's per-conversation cap.
+   *  - `ai_handoff_summary` — short internal note the bot wrote when it
+   *    handed off, shown to whoever takes the thread over.
+   */
+  ai_autoreply_disabled?: boolean;
+  ai_reply_count?: number;
+  ai_handoff_summary?: string | null;
+}
+
+// ============================================================
+// Notifications (migration 027)
+// ============================================================
+
+export type NotificationType = 'conversation_assigned';
+
+export interface Notification {
+  id: string;
+  account_id: string;
+  /** Recipient — the agent this notification is for. */
+  user_id: string;
+  type: NotificationType;
+  conversation_id?: string;
+  contact_id?: string;
+  /** Who triggered it. Null when an automation/system assigned it. */
+  actor_user_id?: string;
+  title: string;
+  body?: string;
+  read_at?: string;
+  created_at: string;
 }
 
 export type SenderType = 'customer' | 'agent' | 'bot';
@@ -109,13 +281,9 @@ export type ContentType =
   | 'video'
   | 'location'
   | 'template'
-  | 'contact_card';
-export type MessageStatus =
-  | 'sending'
-  | 'sent'
-  | 'delivered'
-  | 'read'
-  | 'failed';
+  /** Customer tapped a reply button or list row on a message we sent. */
+  | 'interactive';
+export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 export interface Message {
   id: string;
@@ -129,13 +297,39 @@ export interface Message {
   message_id?: string;
   status: MessageStatus;
   created_at: string;
+  reply_to_message_id?: string;
+  /**
+   * Only set when `content_type === 'interactive'` — the stable id of
+   * the button or list row the customer tapped. The Flows engine uses
+   * this to route the next node; the inbox bubble uses it as a styling
+   * cue (renders with a "↩ button reply" affordance).
+   */
+  interactive_reply_id?: string;
+  /**
+   * Structured payload of an OUTBOUND interactive message (reply
+   * buttons or list) we sent. Lets the thread re-render the buttons /
+   * rows, not just the body text. Only set when `content_type ===
+   * 'interactive'` and `sender_type` is agent/bot. Migration 035.
+   */
+  interactive_payload?: InteractiveMessagePayload;
+  /**
+   * True when the AI auto-reply bot generated + sent this message (as
+   * opposed to a human agent or a deterministic Flow/automation send,
+   * which all share `sender_type='bot'`/`'agent'`). Drives the "AI"
+   * badge in the inbox. Migration 033.
+   */
+  ai_generated?: boolean;
 }
 
-export interface QuickReply {
+export type ReactionActor = 'customer' | 'agent';
+
+export interface MessageReaction {
   id: string;
-  user_id?: string;
-  shortcut: string;
-  text: string;
+  message_id: string;
+  conversation_id: string;
+  actor_type: ReactionActor;
+  actor_id?: string;
+  emoji: string;
   created_at: string;
 }
 
@@ -148,6 +342,41 @@ export interface WhatsAppConfig {
   verify_token?: string;
   status: 'connected' | 'disconnected';
   connected_at?: string;
+  /**
+   * Set when POST /{phone_number_id}/register last succeeded. NULL
+   * means the number was saved but never actually subscribed for
+   * webhooks on Meta's side — inbound events will be silently lost.
+   */
+  registered_at?: string;
+  /** Set when POST /{waba_id}/subscribed_apps last succeeded. */
+  subscribed_apps_at?: string;
+  /** Last error from /register; cleared on success. */
+  last_registration_error?: string;
+}
+
+// Raw Meta status enum. We persist this verbatim from Meta (sync + webhook)
+// rather than collapsing to a local TitleCase set — distinctions like
+// PAUSED vs DISABLED vs IN_APPEAL drive the edit/resubmit/delete flows.
+// DRAFT is the local-only state before the row is submitted to Meta.
+export type MessageTemplateStatus =
+  | 'DRAFT'
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'PAUSED'
+  | 'DISABLED'
+  | 'IN_APPEAL'
+  | 'PENDING_DELETION';
+
+export type TemplateButton =
+  | { type: 'QUICK_REPLY'; text: string }
+  | { type: 'URL'; text: string; url: string; example?: string }
+  | { type: 'PHONE_NUMBER'; text: string; phone_number: string }
+  | { type: 'COPY_CODE'; text: string; example: string };
+
+export interface TemplateSampleValues {
+  body?: string[];
+  header?: string[];
 }
 
 export interface MessageTemplate {
@@ -158,10 +387,18 @@ export interface MessageTemplate {
   language?: string;
   header_type?: 'text' | 'image' | 'video' | 'document';
   header_content?: string;
+  header_handle?: string;
+  header_media_url?: string;
   body_text: string;
   footer_text?: string;
-  buttons?: Record<string, unknown>[];
-  status?: 'Draft' | 'Pending' | 'Approved' | 'Rejected';
+  buttons?: TemplateButton[];
+  sample_values?: TemplateSampleValues;
+  status?: MessageTemplateStatus;
+  meta_template_id?: string;
+  rejection_reason?: string;
+  quality_score?: 'GREEN' | 'YELLOW' | 'RED';
+  submission_error?: string;
+  last_submitted_at?: string;
   created_at: string;
 }
 
@@ -208,19 +445,8 @@ export interface Deal {
   assignee?: Profile;
 }
 
-export type BroadcastStatus =
-  | 'draft'
-  | 'scheduled'
-  | 'sending'
-  | 'sent'
-  | 'failed';
-export type RecipientStatus =
-  | 'pending'
-  | 'sent'
-  | 'delivered'
-  | 'read'
-  | 'replied'
-  | 'failed';
+export type BroadcastStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'failed';
+export type RecipientStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'replied' | 'failed';
 
 export interface Broadcast {
   id: string;
@@ -277,10 +503,15 @@ export type AutomationTriggerType =
   | 'new_contact_created'
   | 'conversation_assigned'
   | 'tag_added'
-  | 'time_based';
+  | 'time_based'
+  /** Customer tapped a reply button / list row whose id matches; lets
+   *  multi-step menus be chained across automations. */
+  | 'interactive_reply';
 
 export type AutomationStepType =
   | 'send_message'
+  | 'send_buttons'
+  | 'send_list'
   | 'send_template'
   | 'add_tag'
   | 'remove_tag'
@@ -305,16 +536,14 @@ export interface TagTriggerConfig {
 }
 
 export interface TimeBasedTriggerConfig {
-  /** Preferred interval format for time-based automations. */
-  every_amount?: number;
-  every_unit?: 'seconds' | 'minutes' | 'hours';
-  /** Minute interval used by the cron endpoint. */
-  every_minutes?: number;
-  /** Legacy cron expression or simple HH:mm string. */
-  schedule?: string;
+  /** Cron expression or simple HH:mm string; engine can accept either. */
+  schedule: string;
   timezone?: string;
-  audience?: 'all' | 'selected';
-  contact_ids?: string[];
+}
+
+export interface InteractiveReplyTriggerConfig {
+  /** Button / list-row ids to match, exact. Any one matching fires. */
+  reply_ids: string[];
 }
 
 export type AutomationTriggerConfig =
@@ -322,11 +551,20 @@ export type AutomationTriggerConfig =
   | KeywordMatchTriggerConfig
   | TagTriggerConfig
   | TimeBasedTriggerConfig
+  | InteractiveReplyTriggerConfig
   | Record<string, unknown>;
 
 export interface SendMessageStepConfig {
   text: string;
 }
+
+/**
+ * `send_buttons` / `send_list` step configs carry the full interactive
+ * payload (same shape stored on messages + quick replies). `kind` is
+ * implied by the step_type but kept on the payload for a uniform shape.
+ */
+export type SendButtonsStepConfig = InteractiveMessagePayload;
+export type SendListStepConfig = InteractiveMessagePayload;
 
 export interface SendTemplateStepConfig {
   template_name: string;
@@ -344,7 +582,15 @@ export interface AssignConversationStepConfig {
 }
 
 export interface UpdateContactFieldStepConfig {
+  /**
+   * Either a built-in contact column (`name` | `email` | `company`) or a
+   * custom field encoded as `custom:<custom_field_id>`. The `custom:` prefix
+   * is how the engine distinguishes a `contact_custom_values` write from a
+   * direct `contacts` column update. Older configs store the bare column name,
+   * so this stays backward compatible.
+   */
   field: string;
+  /** Supports `{{ vars.* }}` / `{{ message.text }}` interpolation at runtime. */
   value: string;
 }
 
@@ -382,6 +628,8 @@ export interface SendWebhookStepConfig {
 
 export type AutomationStepConfig =
   | SendMessageStepConfig
+  | SendButtonsStepConfig
+  | SendListStepConfig
   | SendTemplateStepConfig
   | TagStepConfig
   | AssignConversationStepConfig
@@ -395,6 +643,12 @@ export type AutomationStepConfig =
 
 export interface Automation {
   id: string;
+  /** Account tenancy key — every automation belongs to one account
+   *  (migration 017 made the column NOT NULL). The engine looks up
+   *  active automations by this field on inbound webhook events. */
+  account_id: string;
+  /** Original author. Used for log audit + outbound message
+   *  sender-of-record, never for tenancy isolation. */
   user_id: string;
   name: string;
   description?: string;
@@ -436,4 +690,26 @@ export interface AutomationLog {
   error_message?: string | null;
   created_at: string;
   contact?: Contact;
+}
+
+// ============================================================
+// Quick replies — reusable snippets (migration 035)
+// ============================================================
+
+export type QuickReplyKind = 'text' | 'interactive';
+
+export interface QuickReply {
+  id: string;
+  /** Account tenancy key — shared across all members of the account. */
+  account_id: string;
+  /** Author / audit only. */
+  user_id: string;
+  title: string;
+  kind: QuickReplyKind;
+  /** Set when `kind === 'text'`. */
+  content_text?: string | null;
+  /** Set when `kind === 'interactive'`. */
+  interactive_payload?: InteractiveMessagePayload | null;
+  created_at: string;
+  updated_at: string;
 }

@@ -2,23 +2,56 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
+import { hasSectionAccess } from "@/lib/auth/roles";
 import { useTotalUnread } from "@/hooks/use-total-unread";
-import type { VendorPermissions } from "@/types";
+import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
 import {
-  LayoutDashboard,
-  MessageSquare,
-  Users,
+  Bell,
+  Bot,
+  Crown,
   GitBranch,
-  Radio,
-  Zap,
-  Settings,
+  LayoutDashboard,
   LogOut,
+  MessageSquare,
+  Radio,
+  Settings,
+  Shield,
   User,
+  UserCog,
+  Users,
+  UsersRound,
+  Workflow,
   X,
+  Zap,
 } from "lucide-react";
+import type { AccountRole } from "@/lib/auth/roles";
+
+// Per-role chip metadata used in the sidebar's account strip + the
+// Members tab roster. Keeping this near both consumers in a single
+// place avoids drift between the two surfaces — when a designer
+// wants to recolour "agent" rows, this is the one diff.
+const ROLE_CHIP: Record<
+  AccountRole,
+  { icon: typeof Crown; labelKey: string; className: string }
+> = {
+  owner: {
+    icon: Crown,
+    labelKey: "roleOwner",
+    // Amber: scarce, immutable, "the boss" — gets visual emphasis.
+    className:
+      "border-amber-500/40 bg-amber-500/10 text-amber-300",
+  },
+  member: {
+    icon: UserCog,
+    labelKey: "roleMember",
+    // Neutral slate: the operational default.
+    className:
+      "border-border bg-muted text-foreground",
+  },
+};
 import {
   Avatar,
   AvatarFallback,
@@ -31,19 +64,32 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Badge } from "@/components/ui/badge";
 
-const ALL_NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, permKey: "dashboard" as keyof VendorPermissions },
-  { href: "/inbox", label: "Inbox", icon: MessageSquare, permKey: "inbox" as keyof VendorPermissions },
-  { href: "/contacts", label: "Contacts", icon: Users, permKey: "contacts" as keyof VendorPermissions },
-  { href: "/pipelines", label: "Pipelines", icon: GitBranch, permKey: "pipelines" as keyof VendorPermissions },
-  { href: "/broadcasts", label: "Broadcasts", icon: Radio, permKey: "broadcasts" as keyof VendorPermissions },
-  { href: "/automations", label: "Automations", icon: Zap, permKey: "automations" as keyof VendorPermissions },
+interface NavItem {
+  href: string;
+  labelKey: string;
+  icon: typeof LayoutDashboard;
+  /**
+   * When true, the nav row renders a small "Beta" chip after the label.
+   * Purely informational — doesn't affect routing or access.
+   */
+  beta?: boolean;
+}
+
+const navItems: NavItem[] = [
+  { href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
+  { href: "/inbox", labelKey: "inbox", icon: MessageSquare },
+  { href: "/notifications", labelKey: "notifications", icon: Bell },
+  { href: "/contacts", labelKey: "contacts", icon: Users },
+  { href: "/pipelines", labelKey: "pipelines", icon: GitBranch },
+  { href: "/broadcasts", labelKey: "broadcasts", icon: Radio },
+  { href: "/automations", labelKey: "automations", icon: Zap },
+  { href: "/flows", labelKey: "flows", icon: Workflow, beta: true },
+  { href: "/agents", labelKey: "aiAgents", icon: Bot },
 ];
 
 const bottomNavItems = [
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings", labelKey: "settings", icon: Settings },
 ];
 
 interface SidebarProps {
@@ -52,23 +98,37 @@ interface SidebarProps {
   onClose?: () => void;
 }
 
+import { useTranslations } from "next-intl";
+
 export function Sidebar({ open = false, onClose }: SidebarProps) {
+  const t = useTranslations("Sidebar");
   const pathname = usePathname();
-  const { profile, isVendor, hasPermission, signOut } = useAuth();
+  const { profile, profileLoading, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
+  const unreadNotifications = useUnreadNotifications();
+  // Only surface the account-name strip when it actually carries
+  // information. A solo user's personal account is named after them
+  // (the 017 signup trigger seeds it from `full_name`), so showing it
+  // here would just duplicate the user name in the footer below. Once
+  // the account is renamed or the user joins a shared account, the
+  // name diverges and the strip becomes meaningful — that's the signal
+  // we gate on. Wait for the profile fetch to settle first, otherwise
+  // the strip flashes in once the row resolves (a layout jump).
+  const showAccountStrip =
+    !profileLoading &&
+    !!account?.name &&
+    account.name !== profile?.full_name;
 
-  // Filter nav items based on role and permissions
-  const navItems = useMemo(() => {
-    return ALL_NAV_ITEMS.filter((item) => hasPermission(item.permKey));
-  }, [hasPermission]);
-
-  // Close the drawer when route changes
+  // Close the drawer when route changes — users opened it to navigate,
+  // so once they pick a destination the drawer should get out of the way.
   useEffect(() => {
     onClose?.();
+    // Only pathname drives this — onClose identity doesn't need to re-run it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
-  // Lock body scroll and allow Escape to close while the drawer is open
+  // Lock body scroll and allow Escape to close while the drawer is open on
+  // mobile. No-ops on desktop because the sidebar isn't positioned there.
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -85,10 +145,12 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
   return (
     <>
-      {/* Backdrop */}
+      {/* Backdrop — only exists on mobile and only when open. Clicking
+          it closes the drawer. Hidden from lg+ since the sidebar is
+          part of the main flex row there. */}
       <button
         type="button"
-        aria-label="Close menu"
+        aria-label={t("closeMenu")}
         onClick={onClose}
         className={cn(
           "fixed inset-0 z-30 bg-background/70 backdrop-blur-sm transition-opacity lg:hidden",
@@ -100,56 +162,46 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex h-full w-64 flex-col border-r border-border bg-sidebar backdrop-blur-md",
+          // Mobile: fixed drawer that slides in from the left.
+          "fixed inset-y-0 left-0 z-40 flex h-full w-64 flex-col border-r border-border bg-card",
           "transition-transform duration-200 ease-out will-change-transform",
           open ? "translate-x-0" : "-translate-x-full",
+          // Desktop: static, always visible — reset all the mobile framing.
           "lg:static lg:z-0 lg:w-60 lg:translate-x-0 lg:transition-none",
         )}
         aria-label="Primary"
       >
-        {/* Logo row */}
-        <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4 bg-sidebar">
-          <Link href={isVendor ? "/inbox" : "/dashboard"} className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md border border-primary/30 bg-primary/5 text-primary shadow-[0_0_8px_rgba(45,212,191,0.1)]">
-              <svg
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                className="h-4.5 w-4.5"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path d="M19.077 4.928A9.886 9.886 0 0 0 12.04 2c-5.46 0-9.9 4.44-9.9 9.9 0 1.75.459 3.45 1.331 4.966L2 22l5.302-1.39A9.86 9.86 0 0 0 12.036 22c5.46 0 9.9-4.44 9.9-9.9a9.896 9.896 0 0 0-2.859-7.072zm-7.037 14.37h-.003c-1.55 0-3.07-.417-4.4-1.206l-.316-.188-3.272.858.874-3.19-.206-.328A8.22 8.22 0 0 1 3.52 11.9c0-4.54 3.7-8.24 8.245-8.24 2.2 0 4.269.858 5.825 2.417a8.18 8.18 0 0 1 2.41 5.833c-.001 4.54-3.7 8.24-8.239 8.24zm4.568-6.223c-.25-.125-1.478-.73-1.706-.813-.228-.083-.393-.125-.56.125-.166.25-.644.813-.79 1-.145.187-.29.208-.54.083-.25-.125-1.054-.388-2.008-1.24-.74-.66-1.24-1.475-1.385-1.725-.145-.25-.015-.385.11-.51.113-.11.25-.29.375-.436.125-.145.166-.25.25-.417.083-.166.042-.312-.02-.437-.063-.125-.56-1.354-.768-1.854-.203-.488-.41-.422-.56-.43-.146-.007-.312-.008-.479-.008-.166 0-.437.062-.666.312-.228.25-.873.854-.873 2.083 0 1.23.894 2.417.997 2.562.104.146 1.76 2.688 4.265 3.77.595.258 1.06.41 1.422.526.608.193 1.162.166 1.6.1.488-.073 1.478-.604 1.686-1.188.208-.583.208-1.083.146-1.187-.063-.105-.229-.167-.479-.292z" />
-              </svg>
-            </div>
-            <div className="flex flex-col">
-              <span className="font-heading text-sm font-extrabold tracking-wider text-sidebar-foreground uppercase">
-                WACRM
-              </span>
-            </div>
+        {/* Logo row. On mobile we put a close button here; on desktop the
+            close button is hidden since the sidebar is always-visible. */}
+        <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
+          <Link href="/dashboard" className="flex items-center gap-2">
+            <img src="/Replai-logo.png" alt="Replai" className="h-9 object-contain" />
           </Link>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close menu"
-            className="flex h-9 w-9 items-center justify-center rounded-md text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground lg:hidden"
+            aria-label={t("closeMenu")}
+            className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground lg:hidden"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* Role badge for vendors */}
-        {isVendor && (
-          <div className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-primary/10 bg-primary/5 px-3 py-1.5">
-            <User className="h-3.5 w-3.5 text-primary" />
-            <span className="text-xs font-semibold text-primary">
-              Vendor Mode
-            </span>
-          </div>
-        )}
-
         {/* Main navigation */}
         <nav className="flex-1 overflow-y-auto px-3 py-4">
           <ul className="flex flex-col gap-1">
-            {navItems.map((item) => {
+            {navItems
+              .filter((item) => {
+                const section = item.href.replace("/", "");
+                if (["dashboard", "inbox", "contacts", "pipelines", "broadcasts", "automations"].includes(section)) {
+                  return hasSectionAccess(accountRole, profile?.permissions, section);
+                }
+                if (section === "flows" || section === "agents") {
+                  return hasSectionAccess(accountRole, profile?.permissions, "automations");
+                }
+                return true;
+              })
+              .map((item) => {
               const isActive =
                 pathname === item.href ||
                 (item.href !== "/dashboard" && pathname.startsWith(item.href));
@@ -157,25 +209,50 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               const showUnreadDot =
                 item.href === "/inbox" && totalUnread > 0 && !isActive;
 
+              // Unlike the inbox dot, the notifications count stays visible
+              // even while the page is active — it reflects unread state
+              // (cleared by marking notifications read), not "currently
+              // viewing this section".
+              const showNotificationBadge =
+                item.href === "/notifications" && unreadNotifications > 0;
+
               return (
                 <li key={item.href}>
                   <Link
                     href={item.href}
                     className={cn(
-                      "flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-all lg:py-2",
+                      // Taller on mobile so fingers can hit the row reliably (≥44px).
+                      "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
                       isActive
-                        ? "bg-primary/5 text-primary border-l-2 border-primary rounded-l-none pl-2.5"
-                        : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground border-l-2 border-transparent pl-2.5",
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
                     )}
                   >
                     <item.icon className="h-4 w-4" />
-                    <span className="flex-1 font-heading font-medium tracking-wide">{item.label}</span>
+                    <span className="flex-1">{t(item.labelKey as string)}</span>
+                    {item.beta && (
+                      <span
+                        aria-label={t("beta")}
+                        className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-300"
+                      >
+                        {t("beta")}
+                      </span>
+                    )}
                     {showUnreadDot && (
                       <span
-                        aria-label={`${totalUnread} unread conversation${totalUnread === 1 ? "" : "s"}`}
-                        className="font-mono text-[10px] font-bold text-primary bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded shadow-[0_0_8px_rgba(45,212,191,0.05)]"
+                        aria-label={t("unreadConversations", { count: totalUnread })}
+                        className="relative flex h-2 w-2"
                       >
-                        {totalUnread}
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+                        <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+                      </span>
+                    )}
+                    {showNotificationBadge && (
+                      <span
+                        aria-label={t("unreadNotifications", { count: unreadNotifications })}
+                        className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground"
+                      >
+                        {unreadNotifications > 9 ? "9+" : unreadNotifications}
                       </span>
                     )}
                   </Link>
@@ -187,21 +264,28 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           <div className="my-4 border-t border-border" />
 
           <ul className="flex flex-col gap-1">
-            {bottomNavItems.map((item) => {
+            {bottomNavItems
+              .filter((item) => {
+                if (item.href === "/settings") {
+                  return hasSectionAccess(accountRole, profile?.permissions, "settings");
+                }
+                return true;
+              })
+              .map((item) => {
               const isActive = pathname.startsWith(item.href);
               return (
                 <li key={item.href}>
                   <Link
                     href={item.href}
                     className={cn(
-                      "flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-all lg:py-2",
+                      "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
                       isActive
-                        ? "bg-primary/5 text-primary border-l-2 border-primary rounded-l-none pl-2.5"
-                        : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground border-l-2 border-transparent pl-2.5",
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground",
                     )}
                   >
                     <item.icon className="h-4 w-4" />
-                    <span className="font-heading font-medium tracking-wide">{item.label}</span>
+                    {t(item.labelKey as string)}
                   </Link>
                 </li>
               );
@@ -211,13 +295,48 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
 
         {/* User section */}
         <div className="shrink-0 border-t border-border p-3">
+          {/* Account name display — surfaced only when the account
+              name differs from the user's own name (see
+              `showAccountStrip`). For a default solo account the two
+              match, so we hide it to avoid duplicating the user name
+              below; for renamed or shared accounts it tells the user
+              which account they're acting in. */}
+          {showAccountStrip && account?.name ? (
+            <div className="mb-2 flex items-center gap-2 px-3 text-xs text-muted-foreground">
+              <UsersRound className="size-3.5 shrink-0" />
+              {/* `title=` exposes the full name on hover when it
+                  gets truncated (long account names + narrow
+                  sidebars). Cheap a11y win. */}
+              <span className="truncate" title={account.name}>
+                {account.name}
+              </span>
+              {accountRole ? (
+                // Always render the chip — owners used to be
+                // invisible here, which made them indistinguishable
+                // from admins at a glance. Now everyone sees their
+                // role (with a colour cue) regardless of tier.
+                (() => {
+                  const meta = ROLE_CHIP[accountRole];
+                  const Icon = meta.icon;
+                  return (
+                    <span
+                      className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${meta.className}`}
+                    >
+                      <Icon className="size-3" />
+                      {t(meta.labelKey as string)}
+                    </span>
+                  );
+                })()
+              ) : null}
+            </div>
+          ) : null}
           <DropdownMenu>
-            <DropdownMenuTrigger className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-sidebar-accent focus:bg-sidebar-accent focus:outline-none data-popup-open:bg-sidebar-accent">
+            <DropdownMenuTrigger className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/60 focus:bg-muted/60 focus:outline-none data-popup-open:bg-muted/60">
               <Avatar className="size-8 shrink-0">
                 {profile?.avatar_url ? (
                   <AvatarImage
                     src={profile.avatar_url}
-                    alt={profile.full_name ?? "Avatar"}
+                    alt={profile.full_name ?? t("defaultAvatar")}
                   />
                 ) : null}
                 <AvatarFallback className="bg-primary/10 text-sm font-medium text-primary">
@@ -227,10 +346,10 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-sidebar-foreground">
-                  {profile?.full_name ?? "User"}
+                <p className="truncate text-sm font-medium text-foreground">
+                  {profile?.full_name ?? t("defaultUser")}
                 </p>
-                <p className="truncate text-xs text-sidebar-foreground/60 font-mono">
+                <p className="truncate text-xs text-muted-foreground">
                   {profile?.email ?? ""}
                 </p>
               </div>
@@ -239,41 +358,39 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               align="end"
               side="top"
               sideOffset={6}
-              className="min-w-56 bg-card border border-border text-card-foreground shadow-sm"
+              className="min-w-56 bg-popover text-popover-foreground ring-border"
             >
               <DropdownMenuItem
                 render={
                   <Link
                     href="/settings?tab=profile"
                     onClick={onClose}
-                    className="text-card-foreground/80 focus:bg-accent focus:text-accent-foreground"
+                    className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
                   />
                 }
               >
-                <User className="size-4 text-primary" />
-                Profile
+                <User className="size-4" />
+                {t("menuProfile")}
               </DropdownMenuItem>
-              {!isVendor && (
-                <DropdownMenuItem
-                  render={
-                    <Link
-                      href="/settings?tab=whatsapp"
-                      onClick={onClose}
-                      className="text-card-foreground/80 focus:bg-accent focus:text-accent-foreground"
-                    />
-                  }
-                >
-                  <Settings className="size-4 text-primary" />
-                  Settings
-                </DropdownMenuItem>
-              )}
+              <DropdownMenuItem
+                render={
+                  <Link
+                    href="/settings?tab=whatsapp"
+                    onClick={onClose}
+                    className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
+                  />
+                }
+              >
+                <Settings className="size-4" />
+                {t("menuSettings")}
+              </DropdownMenuItem>
               <DropdownMenuSeparator className="bg-border" />
               <DropdownMenuItem
                 onClick={signOut}
-                className="text-card-foreground/80 focus:bg-accent focus:text-accent-foreground cursor-pointer"
+                className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
               >
-                <LogOut className="size-4 text-red-500" />
-                Sign out
+                <LogOut className="size-4" />
+                {t("menuSignOut")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

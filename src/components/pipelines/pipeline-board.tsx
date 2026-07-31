@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useRef, useEffect } from "react";
+import { useMemo, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -18,6 +18,9 @@ import type { Deal, PipelineStage } from "@/types";
 import { DealCard } from "./deal-card";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
+import { formatCurrency } from "@/lib/currency";
+import { useTranslations } from "next-intl";
 
 interface PipelineBoardProps {
   stages: PipelineStage[];
@@ -27,15 +30,6 @@ interface PipelineBoardProps {
   onEditDeal: (deal: Deal) => void;
 }
 
-function formatCurrency(value: number) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value);
-}
-
 export function PipelineBoard({
   stages,
   deals,
@@ -43,24 +37,8 @@ export function PipelineBoard({
   onAddDeal,
   onEditDeal,
 }: PipelineBoardProps) {
+  const { defaultCurrency } = useAuth();
   const [activeDealId, setActiveDealId] = useState<string | null>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-
-    const handleWheel = (e: WheelEvent) => {
-      // If deltaX is 0, they are using a standard vertical mouse wheel
-      if (e.deltaY !== 0 && e.deltaX === 0) {
-        e.preventDefault();
-        el.scrollLeft += e.deltaY;
-      }
-    };
-
-    el.addEventListener("wheel", handleWheel, { passive: false });
-    return () => el.removeEventListener("wheel", handleWheel);
-  }, []);
 
   const sortedStages = useMemo(
     () => [...stages].sort((a, b) => a.position - b.position),
@@ -121,12 +99,11 @@ export function PipelineBoard({
     >
       {/* snap-x + snap-mandatory on mobile so swipes land the next
           stage cleanly at the viewport edge instead of mid-column.
-          Disabled on lg+ because the full board fits without scroll
-          there and snapping would interfere with the natural layout. */}
-      <div 
-        ref={scrollContainerRef}
-        className="pipeline-scroll flex snap-x snap-mandatory gap-3 overflow-x-auto pb-4 lg:snap-none"
-      >
+          Disabled on lg+ where snapping would interfere with the
+          natural layout. The board can still overflow horizontally on
+          lg+ once a pipeline has many stages (columns keep a 260px
+          min-width), so a thin scrollbar stays visible on desktop. */}
+      <div className="pipeline-scroll flex snap-x snap-mandatory gap-3 overflow-x-auto pb-4 lg:snap-none">
         {sortedStages.map((stage) => {
           const stageDeals = dealsByStage.get(stage.id) ?? [];
           const totalValue = stageDeals.reduce(
@@ -139,6 +116,7 @@ export function PipelineBoard({
               stage={stage}
               deals={stageDeals}
               totalValue={totalValue}
+              currency={defaultCurrency}
               onAddDeal={onAddDeal}
               onEditDeal={onEditDeal}
             />
@@ -170,13 +148,37 @@ export function PipelineBoard({
         .pipeline-scroll {
           scroll-behavior: smooth;
         }
-        @media (hover: hover) and (pointer: fine) {
+        /* On touch devices the peek/snap layout already signals there's
+           more to swipe, so the scrollbar is hidden for a clean look.
+           On desktop (mouse) the board can overflow with many stages
+           and there is no peek hint, so keep a thin, themed scrollbar
+           visible to make the overflow discoverable and usable. */
+        @media (hover: none), (pointer: coarse) {
           .pipeline-scroll::-webkit-scrollbar {
             height: 0;
             display: none;
           }
           .pipeline-scroll {
             scrollbar-width: none;
+          }
+        }
+        @media (hover: hover) and (pointer: fine) {
+          .pipeline-scroll {
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
+          }
+          .pipeline-scroll::-webkit-scrollbar {
+            height: 8px;
+          }
+          .pipeline-scroll::-webkit-scrollbar-track {
+            background: transparent;
+          }
+          .pipeline-scroll::-webkit-scrollbar-thumb {
+            background-color: var(--border);
+            border-radius: 9999px;
+          }
+          .pipeline-scroll::-webkit-scrollbar-thumb:hover {
+            background-color: var(--muted-foreground);
           }
         }
       `}</style>
@@ -188,15 +190,18 @@ function StageColumn({
   stage,
   deals,
   totalValue,
+  currency,
   onAddDeal,
   onEditDeal,
 }: {
   stage: PipelineStage;
   deals: Deal[];
   totalValue: number;
+  currency: string;
   onAddDeal: (stageId: string) => void;
   onEditDeal: (deal: Deal) => void;
 }) {
+  const t = useTranslations("Pipelines.board");
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
 
   return (
@@ -206,7 +211,7 @@ function StageColumn({
     // restore the flex-1 share-the-row behavior. The droppable ref is
     // on the inner messages region below — intentionally NOT here, so
     // a drag over the column header doesn't highlight the whole column.
-    <div className="flex w-[85vw] min-w-[260px] max-w-[320px] shrink-0 snap-start flex-col rounded-xl border border-border bg-muted p-4 lg:w-auto lg:max-w-none lg:flex-1 lg:basis-[260px] lg:shrink lg:snap-none">
+    <div className="flex w-[85vw] min-w-[260px] max-w-[320px] shrink-0 snap-start flex-col rounded-xl border border-border bg-card/60 p-4 lg:w-auto lg:max-w-none lg:flex-1 lg:basis-[260px] lg:shrink lg:snap-none">
       {/* 3px colored top border — sits above the column's padding */}
       <div
         className="-mx-4 -mt-4 h-[3px] rounded-t-xl"
@@ -220,19 +225,21 @@ function StageColumn({
           {deals.length}
         </span>
       </div>
-      <p className="text-xs text-muted-foreground">{formatCurrency(totalValue)}</p>
+      <p className="text-xs text-muted-foreground">
+        {formatCurrency(totalValue, currency)}
+      </p>
 
       <div
         ref={setNodeRef}
         className={`mt-3 flex flex-1 flex-col gap-2 rounded-lg transition-all ${
           isOver
-            ? "bg-violet-500/5 outline outline-2 outline-dashed outline-violet-400 outline-offset-2"
+            ? "bg-primary/5 outline outline-2 outline-dashed outline-primary outline-offset-2"
             : ""
         }`}
       >
         {deals.length === 0 ? (
           <div className="flex flex-1 items-center justify-center rounded-lg border-2 border-dashed border-border py-10 text-xs text-muted-foreground">
-            Drop a deal here
+            {t("dropDealHere")}
           </div>
         ) : (
           deals.map((deal) => (
@@ -250,10 +257,10 @@ function StageColumn({
         variant="ghost"
         size="sm"
         onClick={() => onAddDeal(stage.id)}
-        className="mt-3 w-full justify-start border border-dashed border-border bg-transparent text-muted-foreground hover:border-slate-600 hover:bg-muted hover:text-foreground"
+        className="mt-3 w-full justify-start border border-dashed border-border bg-transparent text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground"
       >
         <Plus className="mr-1 h-3 w-3" />
-        Add Deal
+        {t("addDeal")}
       </Button>
     </div>
   );

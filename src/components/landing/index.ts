@@ -1,0 +1,11 @@
+export { LandingNavbar } from "./LandingNavbar";
+export { HeroSection } from "./HeroSection";
+export { FeaturesSection } from "./FeaturesSection";
+export { HowItWorksSection } from "./HowItWorksSection";
+export { AIHighlightSection } from "./AIHighlightSection";
+export { PricingSection } from "./PricingSection";
+export { TestimonialsSection } from "./TestimonialsSection";
+export { IntegrationsSection } from "./IntegrationsSection";
+export { CTABanner } from "./CTABanner";
+export { FAQSection } from "./FAQSection";
+export { LandingFooter } from "./LandingFooter";

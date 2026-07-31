@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import { MessageTemplate } from '@/types';
 import { Step1ChooseTemplate } from '@/components/broadcasts/step1-choose-template';
@@ -11,30 +12,38 @@ import { Step3Personalize } from '@/components/broadcasts/step3-personalize';
 import { Step4ScheduleSend } from '@/components/broadcasts/step4-schedule-send';
 import { useBroadcastSending } from '@/hooks/use-broadcast-sending';
 import { Check } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 
 const steps = [
-  { label: 'Template', key: 'template' },
-  { label: 'Audience', key: 'audience' },
-  { label: 'Personalize', key: 'personalize' },
-  { label: 'Send', key: 'send' },
+  { label: 'template', key: 'template' },
+  { label: 'audience', key: 'audience' },
+  { label: 'personalize', key: 'personalize' },
+  { label: 'send', key: 'send' },
 ] as const;
 
 export default function NewBroadcastPage() {
   const router = useRouter();
+  const t = useTranslations('Broadcasts.new');
+  const { accountId } = useAuth();
   const { createAndSendBroadcast, isProcessing, progress } = useBroadcastSending();
 
   const [currentStep, setCurrentStep] = useState(0);
   const [template, setTemplate] = useState<MessageTemplate | null>(null);
   const [audience, setAudience] = useState<{
-    type: 'all' | 'tags' | 'specific_contacts' | 'csv';
+    type: 'all' | 'tags' | 'custom_field' | 'csv';
     tagIds?: string[];
-    contactIds?: string[];
+    customField?: {
+      fieldId: string;
+      operator: 'is' | 'is_not' | 'contains';
+      value: string;
+    };
     csvContacts?: { phone: string; name?: string }[];
     excludeTagIds?: string[];
   }>({ type: 'all' });
   const [variables, setVariables] = useState<
     Record<string, { type: 'static' | 'field' | 'custom_field'; value: string }>
   >({});
+  const [headerMediaUrl, setHeaderMediaUrl] = useState('');
   const [name, setName] = useState('');
 
   async function handleSend() {
@@ -47,11 +56,12 @@ export default function NewBroadcastPage() {
         audience: {
           type: audience.type,
           tagIds: audience.tagIds,
-          contactIds: audience.contactIds,
+          customField: audience.customField,
           csvContacts: audience.csvContacts,
           excludeTagIds: audience.excludeTagIds,
         },
         variables,
+        headerMediaUrl,
       });
       router.push(`/broadcasts/${broadcastId}`);
     } catch (err) {
@@ -74,7 +84,7 @@ export default function NewBroadcastPage() {
    */
   async function handleSaveDraft() {
     if (!template || !name.trim()) {
-      toast.error('Give the broadcast a name before saving a draft.');
+      toast.error(t('toastGiveName'));
       return;
     }
     const supabase = createClient();
@@ -83,12 +93,17 @@ export default function NewBroadcastPage() {
     } = await supabase.auth.getSession();
     const user = session?.user;
     if (!user) {
-      toast.error('Not signed in.');
+      toast.error(t('toastNotSignedIn'));
+      return;
+    }
+    if (!accountId) {
+      toast.error(t('toastNotLinked'));
       return;
     }
 
     const { error } = await supabase.from('broadcasts').insert({
       user_id: user.id,
+      account_id: accountId,
       name: name.trim(),
       template_name: template.name,
       template_language: template.language ?? 'en_US',
@@ -96,7 +111,6 @@ export default function NewBroadcastPage() {
       audience_filter: {
         type: audience.type,
         tagIds: audience.tagIds,
-        contactIds: audience.contactIds,
       },
       status: 'draft',
       total_recipients: 0,
@@ -108,10 +122,10 @@ export default function NewBroadcastPage() {
     });
 
     if (error) {
-      toast.error(`Failed to save draft: ${error.message}`);
+      toast.error(t('toastFailedDraft', { error: error.message }));
       return;
     }
-    toast.success('Draft saved');
+    toast.success(t('toastDraftSaved'));
     router.push('/broadcasts');
   }
 
@@ -119,9 +133,9 @@ export default function NewBroadcastPage() {
     <div className="mx-auto max-w-3xl space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">New Broadcast</h1>
+        <h1 className="text-2xl font-bold text-foreground">{t('title')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Create and send a broadcast message to your contacts.
+          {t('subtitle')}
         </p>
       </div>
 
@@ -137,9 +151,9 @@ export default function NewBroadcastPage() {
                 <div
                   className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium transition-all ${
                     isCompleted
-                      ? 'bg-violet-600 text-white'
+                      ? 'bg-primary text-primary-foreground'
                       : isActive
-                        ? 'border-2 border-violet-500 bg-violet-500/10 text-violet-600'
+                        ? 'border-2 border-primary bg-primary/10 text-primary'
                         : 'border border-border bg-muted text-muted-foreground'
                   }`}
                 >
@@ -147,16 +161,16 @@ export default function NewBroadcastPage() {
                 </div>
                 <span
                   className={`hidden text-sm font-medium sm:block ${
-                    isActive ? 'text-foreground' : isCompleted ? 'text-violet-600' : 'text-muted-foreground'
+                    isActive ? 'text-foreground' : isCompleted ? 'text-primary' : 'text-muted-foreground'
                   }`}
                 >
-                  {step.label}
+                  {t(`steps.${step.label}`)}
                 </span>
               </div>
               {index < steps.length - 1 && (
                 <div
                   className={`mx-3 h-px flex-1 ${
-                    index < currentStep ? 'bg-violet-500' : 'bg-muted'
+                    index < currentStep ? 'bg-primary' : 'bg-muted'
                   }`}
                 />
               )}
@@ -195,6 +209,8 @@ export default function NewBroadcastPage() {
               template={template}
               variables={variables}
               onUpdate={setVariables}
+              headerMediaUrl={headerMediaUrl}
+              onHeaderMediaUrlChange={setHeaderMediaUrl}
               onNext={() => setCurrentStep(3)}
               onBack={() => setCurrentStep(1)}
             />

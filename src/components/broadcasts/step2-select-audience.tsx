@@ -1,27 +1,34 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { Tag, Contact } from '@/types';
+import { CustomField, Tag } from '@/types';
 import { Button } from '@/components/ui/button';
 import {
   Users,
   Tags,
-  Search,
+  Filter,
   Upload,
   Loader2,
   ArrowRight,
   ArrowLeft,
   X,
-  Check,
 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 
-type AudienceType = 'all' | 'tags' | 'specific_contacts' | 'csv';
+type AudienceType = 'all' | 'tags' | 'custom_field' | 'csv';
+type CustomFieldOperator = 'is' | 'is_not' | 'contains';
+
+interface CustomFieldFilter {
+  fieldId: string;
+  operator: CustomFieldOperator;
+  value: string;
+}
 
 interface AudienceConfig {
   type: AudienceType;
   tagIds?: string[];
-  contactIds?: string[];
+  customField?: CustomFieldFilter;
   csvContacts?: { phone: string; name?: string }[];
   excludeTagIds?: string[];
 }
@@ -33,55 +40,57 @@ interface Step2Props {
   onBack: () => void;
 }
 
-const audienceOptions: {
-  type: AudienceType;
-  label: string;
-  description: string;
-  icon: typeof Users;
-}[] = [
-  {
-    type: 'all',
-    label: 'All Contacts',
-    description: 'Send to every contact in your database',
-    icon: Users,
-  },
-  {
-    type: 'tags',
-    label: 'Filter by Tags',
-    description: 'Target contacts with specific tags',
-    icon: Tags,
-  },
-  {
-    type: 'specific_contacts',
-    label: 'Specific Contacts',
-    description: 'Search and select individual contacts',
-    icon: Search,
-  },
-  {
-    type: 'csv',
-    label: 'Upload CSV',
-    description: 'Upload a list of phone numbers',
-    icon: Upload,
-  },
-];
-
-
 export function Step2SelectAudience({
   audience,
   onUpdate,
   onNext,
   onBack,
 }: Step2Props) {
+  const t = useTranslations('Broadcasts.wizard');
+
+  const OPERATOR_OPTIONS = useMemo<{ value: CustomFieldOperator; label: string }[]>(() => [
+    { value: 'is', label: t('selectAudience.operatorIs') },
+    { value: 'is_not', label: t('selectAudience.operatorIsNot') },
+    { value: 'contains', label: t('selectAudience.operatorContains') },
+  ], [t]);
+
+  const audienceOptions = useMemo<{
+    type: AudienceType;
+    label: string;
+    description: string;
+    icon: typeof Users;
+  }[]>(() => [
+    {
+      type: 'all',
+      label: t('selectAudience.method.all'),
+      description: t('selectAudience.allDescLoading'),
+      icon: Users,
+    },
+    {
+      type: 'tags',
+      label: t('selectAudience.method.tags'),
+      description: t('selectAudience.tagDesc'),
+      icon: Tags,
+    },
+    {
+      type: 'custom_field',
+      label: t('selectAudience.method.customField'),
+      description: t('selectAudience.customFieldDesc'),
+      icon: Filter,
+    },
+    {
+      type: 'csv',
+      label: t('selectAudience.method.csv'),
+      description: t('selectAudience.csvDesc'),
+      icon: Upload,
+    },
+  ], [t]);
   const [tags, setTags] = useState<Tag[]>([]);
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
+  const [loadingFields, setLoadingFields] = useState(false);
   const [estimatedCount, setEstimatedCount] = useState<number | null>(null);
   const [loadingCount, setLoadingCount] = useState(false);
-
-  const [contactSearchQuery, setContactSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<Contact[]>([]);
-  const [searchingContacts, setSearchingContacts] = useState(false);
-  const [selectedContactsMap, setSelectedContactsMap] = useState<Map<string, Contact>>(new Map());
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   // Tags are used both by the primary "Filter by Tags" audience type
   // AND by the exclude-list below — so always load once on mount.
@@ -99,48 +108,24 @@ export function Step2SelectAudience({
     fetchTags();
   }, []);
 
-  // Debounced search for specific contacts
+  // Lazy-load custom fields only when that audience type is active.
   useEffect(() => {
-    if (audience.type !== 'specific_contacts') return;
-    
-    const handler = setTimeout(async () => {
-      setSearchingContacts(true);
+    if (audience.type !== 'custom_field') return;
+    async function fetchFields() {
+      setLoadingFields(true);
       try {
         const supabase = createClient();
-        let query = supabase.from('contacts').select('*');
-        if (contactSearchQuery.trim()) {
-          query = query.or(`name.ilike.%${contactSearchQuery}%,phone.ilike.%${contactSearchQuery}%`);
-        }
-        const { data } = await query.limit(50);
-        setSearchResults(data ?? []);
+        const { data } = await supabase
+          .from('custom_fields')
+          .select('*')
+          .order('field_name');
+        setCustomFields(data ?? []);
       } finally {
-        setSearchingContacts(false);
-      }
-    }, 300);
-    
-    return () => clearTimeout(handler);
-  }, [contactSearchQuery, audience.type]);
-
-  // Load already selected contacts to display in chips
-  useEffect(() => {
-    if (audience.type === 'specific_contacts' && audience.contactIds && audience.contactIds.length > 0) {
-      const missingIds = audience.contactIds.filter(id => !selectedContactsMap.has(id));
-      if (missingIds.length > 0) {
-        const fetchMissing = async () => {
-          const supabase = createClient();
-          const { data } = await supabase.from('contacts').select('*').in('id', missingIds);
-          if (data) {
-            setSelectedContactsMap(prev => {
-              const newMap = new Map(prev);
-              data.forEach(c => newMap.set(c.id, c));
-              return newMap;
-            });
-          }
-        };
-        fetchMissing();
+        setLoadingFields(false);
       }
     }
-  }, [audience.type, audience.contactIds, selectedContactsMap]);
+    fetchFields();
+  }, [audience.type]);
 
   const fetchEstimatedCount = useCallback(async () => {
     setLoadingCount(true);
@@ -163,11 +148,20 @@ export function Step2SelectAudience({
           .in('tag_id', audience.tagIds);
         baseIds = new Set((data ?? []).map((r) => r.contact_id));
       } else if (
-        audience.type === 'specific_contacts' &&
-        audience.contactIds &&
-        audience.contactIds.length > 0
+        audience.type === 'custom_field' &&
+        audience.customField?.fieldId &&
+        audience.customField.value
       ) {
-        baseIds = new Set(audience.contactIds);
+        const { fieldId, operator, value } = audience.customField;
+        let q = supabase
+          .from('contact_custom_values')
+          .select('contact_id')
+          .eq('custom_field_id', fieldId);
+        if (operator === 'is') q = q.eq('value', value);
+        else if (operator === 'is_not') q = q.neq('value', value);
+        else q = q.ilike('value', `%${value}%`);
+        const { data } = await q;
+        baseIds = new Set((data ?? []).map((r) => r.contact_id));
       } else if (
         audience.type === 'csv' &&
         audience.csvContacts &&
@@ -210,7 +204,7 @@ export function Step2SelectAudience({
   }, [
     audience.type,
     audience.tagIds,
-    audience.contactIds,
+    audience.customField,
     audience.csvContacts,
     audience.excludeTagIds,
   ]);
@@ -235,27 +229,21 @@ export function Step2SelectAudience({
     onUpdate({ ...audience, excludeTagIds: updated });
   }
 
-  function toggleContact(contact: Contact) {
-    const current = audience.contactIds ?? [];
-    const updated = current.includes(contact.id)
-      ? current.filter((id) => id !== contact.id)
-      : [...current, contact.id];
-      
-    if (!current.includes(contact.id)) {
-      setSelectedContactsMap(prev => {
-        const newMap = new Map(prev);
-        newMap.set(contact.id, contact);
-        return newMap;
-      });
-    }
-      
-    onUpdate({ ...audience, contactIds: updated });
+  function updateCustomField(patch: Partial<CustomFieldFilter>) {
+    const prev = audience.customField ?? {
+      fieldId: '',
+      operator: 'is' as CustomFieldOperator,
+      value: '',
+    };
+    onUpdate({ ...audience, customField: { ...prev, ...patch } });
   }
 
   const isValid =
     audience.type === 'all' ||
     (audience.type === 'tags' && audience.tagIds && audience.tagIds.length > 0) ||
-    (audience.type === 'specific_contacts' && audience.contactIds && audience.contactIds.length > 0) ||
+    (audience.type === 'custom_field' &&
+      !!audience.customField?.fieldId &&
+      audience.customField.value.length > 0) ||
     (audience.type === 'csv' &&
       audience.csvContacts &&
       audience.csvContacts.length > 0);
@@ -263,14 +251,14 @@ export function Step2SelectAudience({
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-foreground">Select Audience</h2>
+        <h2 className="text-lg font-semibold text-foreground">{t('selectAudience.title')}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Choose who will receive this broadcast.
+          {t('selectAudience.subtitle')}
         </p>
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {audienceOptions.map((option) => {
+        {audienceOptions.map((option: { type: AudienceType; label: string; description: string; icon: typeof Users }) => {
           const isSelected = audience.type === option.type;
           const Icon = option.icon;
           return (
@@ -283,20 +271,24 @@ export function Step2SelectAudience({
                   // Wipe shape fields from other types to avoid stale
                   // config leaking across selections.
                   tagIds: option.type === 'tags' ? audience.tagIds : undefined,
-                  contactIds: option.type === 'specific_contacts' ? audience.contactIds : undefined,
-                  csvContacts: option.type === 'csv' ? audience.csvContacts : undefined,
+                  customField:
+                    option.type === 'custom_field'
+                      ? audience.customField
+                      : undefined,
+                  csvContacts:
+                    option.type === 'csv' ? audience.csvContacts : undefined,
                 })
               }
               className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-all ${
                 isSelected
-                  ? 'border-violet-500 bg-violet-500/5 ring-1 ring-violet-500/30'
+                  ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
                   : 'border-border bg-card/50 hover:border-border'
               }`}
             >
               <div
                 className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
                   isSelected
-                    ? 'bg-violet-500/10 text-violet-600'
+                    ? 'bg-primary/10 text-primary'
                     : 'bg-muted text-muted-foreground'
                 }`}
               >
@@ -315,12 +307,12 @@ export function Step2SelectAudience({
 
       {audience.type === 'tags' && (
         <div className="rounded-xl border border-border bg-card/50 p-4">
-          <p className="mb-3 text-sm font-medium text-foreground">Select Tags</p>
+          <p className="mb-3 text-sm font-medium text-foreground">{t('selectAudience.selectTags')}</p>
           {loadingTags ? (
-            <Loader2 className="h-5 w-5 animate-spin text-violet-500" />
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
           ) : tags.length === 0 ? (
             <p className="text-xs text-muted-foreground">
-              No tags found. Create tags in Settings.
+              {t('selectAudience.noTagsFound')}
             </p>
           ) : (
             <div className="flex flex-wrap gap-2">
@@ -332,8 +324,8 @@ export function Step2SelectAudience({
                     onClick={() => toggleTag(tag.id)}
                     className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-all ${
                       isSelected
-                        ? 'border-violet-200 bg-violet-500/10 text-violet-600'
-                        : 'border-border bg-muted text-muted-foreground hover:border-slate-600'
+                        ? 'border-primary/30 bg-primary/10 text-primary'
+                        : 'border-border bg-muted text-muted-foreground hover:border-border'
                     }`}
                   >
                     <span
@@ -349,93 +341,51 @@ export function Step2SelectAudience({
         </div>
       )}
 
-      {audience.type === 'specific_contacts' && (
-        <div className="space-y-4 rounded-xl border border-border bg-card/50 p-4">
-          <div className="flex flex-col gap-1.5">
-            <p className="text-sm font-medium text-foreground">Select Contacts</p>
-            <p className="text-xs text-muted-foreground">Search and select individual contacts for this broadcast.</p>
-          </div>
-          
-          <div className="relative">
-            <div className="relative flex items-center">
-              <Search className="absolute left-3 h-4 w-4 text-muted-foreground" />
+      {audience.type === 'custom_field' && (
+        <div className="space-y-3 rounded-xl border border-border bg-card/50 p-4">
+          <p className="text-sm font-medium text-foreground">{t('selectAudience.method.customField')}</p>
+          {loadingFields ? (
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+          ) : customFields.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t('selectAudience.errorLoadFields')}
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_140px_minmax(0,1fr)]">
+              <select
+                value={audience.customField?.fieldId ?? ''}
+                onChange={(e) => updateCustomField({ fieldId: e.target.value })}
+                className="h-9 rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+              >
+                <option value="">{t('selectAudience.selectField')}</option>
+                {customFields.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.field_name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={audience.customField?.operator ?? 'is'}
+                onChange={(e) =>
+                  updateCustomField({
+                    operator: e.target.value as CustomFieldOperator,
+                  })
+                }
+                className="h-9 rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+              >
+                {OPERATOR_OPTIONS.map((op: { value: CustomFieldOperator; label: string }) => (
+                  <option key={op.value} value={op.value}>
+                    {op.label}
+                  </option>
+                ))}
+              </select>
               <input
                 type="text"
-                placeholder="Search by name or phone..."
-                value={contactSearchQuery}
-                onChange={(e) => setContactSearchQuery(e.target.value)}
-                onFocus={() => setIsSearchFocused(true)}
-                onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
-                className="h-10 w-full rounded-lg border border-border bg-muted pl-9 pr-4 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
+                value={audience.customField?.value ?? ''}
+                onChange={(e) => updateCustomField({ value: e.target.value })}
+                placeholder={t('selectAudience.valuePlaceholder')}
+                className="h-9 rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary"
               />
-              {searchingContacts && (
-                <Loader2 className="absolute right-3 h-4 w-4 animate-spin text-muted-foreground" />
-              )}
-            </div>
-
-            {/* Dropdown for search results */}
-            {isSearchFocused && searchResults.length > 0 && (
-              <div
-                onMouseDown={(e) => e.preventDefault()}
-                className="absolute top-full z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-border bg-card shadow-lg"
-              >
-                {searchResults.map((contact) => {
-                  const isSelected = audience.contactIds?.includes(contact.id);
-                  return (
-                    <button
-                      key={contact.id}
-                      onClick={() => toggleContact(contact)}
-                      className="flex w-full items-center justify-between border-b border-border/50 px-4 py-2.5 text-left transition-colors hover:bg-muted last:border-0"
-                    >
-                      <div>
-                        <p className="text-sm font-medium text-foreground">
-                          {contact.name || 'Unknown Name'}
-                        </p>
-                        <p className="text-xs text-muted-foreground">{contact.phone}</p>
-                      </div>
-                      {isSelected && (
-                        <Check className="h-4 w-4 text-violet-600" />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            
-            {isSearchFocused && searchResults.length === 0 && !searchingContacts && (
-              <div
-                onMouseDown={(e) => e.preventDefault()}
-                className="absolute top-full z-10 mt-1 w-full rounded-lg border border-border bg-card p-4 text-center shadow-lg"
-              >
-                <p className="text-sm text-muted-foreground">No contacts found.</p>
-              </div>
-            )}
-          </div>
-
-          {/* Selected Contacts Chips */}
-          {(audience.contactIds?.length ?? 0) > 0 && (
-            <div className="flex flex-wrap gap-2 pt-2">
-              {audience.contactIds!.map((id) => {
-                const contact = selectedContactsMap.get(id);
-                if (!contact) return null;
-                return (
-                  <div
-                    key={contact.id}
-                    className="inline-flex items-start gap-2 rounded-lg border border-violet-200 bg-violet-50/50 pl-3 pr-2 py-1.5 text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-400"
-                  >
-                    <div className="flex flex-col max-w-[150px]">
-                      <span className="truncate text-xs font-medium">{contact.name || 'Unknown Name'}</span>
-                      <span className="truncate text-[10px] opacity-70">{contact.phone}</span>
-                    </div>
-                    <button
-                      onClick={() => toggleContact(contact)}
-                      className="rounded-full p-0.5 hover:bg-violet-200 dark:hover:bg-violet-500/20 transition-colors shrink-0 mt-0.5"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                );
-              })}
             </div>
           )}
         </div>
@@ -444,14 +394,13 @@ export function Step2SelectAudience({
       {/* Exclude list — applies regardless of audience type */}
       <div className="rounded-xl border border-border bg-card/50 p-4">
         <div className="mb-3 flex items-center gap-2">
-          <X className="h-4 w-4 text-red-600" />
+          <X className="h-4 w-4 text-red-400" />
           <p className="text-sm font-medium text-foreground">
-            Exclude contacts with these tags
+            {t('selectAudience.excludeTags')}
           </p>
-          <span className="text-xs text-muted-foreground">(optional)</span>
         </div>
         {tags.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No tags available.</p>
+          <p className="text-xs text-muted-foreground">{t('selectAudience.noTagsFound')}</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {tags.map((tag) => {
@@ -462,8 +411,8 @@ export function Step2SelectAudience({
                   onClick={() => toggleExcludeTag(tag.id)}
                   className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-all ${
                     isExcluded
-                      ? 'border-red-200 bg-red-500/10 text-red-700'
-                      : 'border-border bg-muted text-muted-foreground hover:border-slate-600'
+                      ? 'border-red-500/30 bg-red-500/10 text-red-300'
+                      : 'border-border bg-muted text-muted-foreground hover:border-border'
                   }`}
                 >
                   <span
@@ -483,12 +432,12 @@ export function Step2SelectAudience({
         <p className="mb-2 text-sm font-medium text-foreground">Audience Summary</p>
         {loadingCount ? (
           <div className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
             <span className="text-xs text-muted-foreground">Calculating…</span>
           </div>
         ) : estimatedCount !== null ? (
           <div className="flex items-center gap-2">
-            <Users className="h-4 w-4 text-violet-600" />
+            <Users className="h-4 w-4 text-primary" />
             <span className="text-sm text-foreground">
               {estimatedCount.toLocaleString()}
             </span>
@@ -508,14 +457,14 @@ export function Step2SelectAudience({
           className="border-border text-muted-foreground"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back
+          {t('back')}
         </Button>
         <Button
           onClick={onNext}
           disabled={!isValid}
-          className="bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+          className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
-          Next
+          {t('next')}
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>

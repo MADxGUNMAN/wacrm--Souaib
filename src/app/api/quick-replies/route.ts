@@ -1,114 +1,80 @@
-import { NextResponse, type NextRequest } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { NextResponse } from 'next/server'
+import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
+import { supabaseAdmin } from '@/lib/automations/admin-client'
+import { validateInteractivePayload } from '@/lib/whatsapp/interactive'
 
-function isMissingQuickRepliesTable(error: { message?: string; code?: string }) {
-  return (
-    error.code === '42P01' ||
-    error.code === 'PGRST205' ||
-    error.message?.includes("Could not find the table 'public.quick_replies'")
-  );
-}
-
-function missingTableResponse() {
-  return NextResponse.json(
-    {
-      error:
-        'Quick replies are not installed yet. Apply migration 009_quick_replies_and_contact_cards.sql in Supabase.',
-      code: 'QUICK_REPLIES_TABLE_MISSING',
-    },
-    { status: 503 }
-  );
-}
+// Quick replies — reusable snippets (plain text or a saved interactive
+// message) shared across the account. GET lists; POST creates. Mirrors
+// the automations route: RLS-scoped read via the user client, service-
+// role write after an explicit role check.
 
 export async function GET() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  if (authError || !user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  try {
+    const { supabase } = await getCurrentAccount()
+    // RLS (quick_replies_select) scopes to the caller's account.
+    const { data, error } = await supabase
+      .from('quick_replies')
+      .select('*')
+      .order('created_at', { ascending: false })
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ quick_replies: data ?? [] })
+  } catch (err) {
+    return toErrorResponse(err)
   }
-
-  const { data, error } = await supabase
-    .from('quick_replies')
-    .select('id, shortcut, text, created_at')
-    .eq('user_id', user.id)
-    .order('shortcut', { ascending: true });
-
-  if (error) {
-    if (isMissingQuickRepliesTable(error)) return missingTableResponse();
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json(data ?? []);
 }
 
-export async function POST(request: NextRequest) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  if (authError || !user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+export async function POST(request: Request) {
+  let ctx
+  try {
+    ctx = await requireRole('member')
+  } catch (err) {
+    return toErrorResponse(err)
   }
 
-  const body = await request.json();
-  const shortcut = String(body.shortcut || '')
-    .trim()
-    .replace(/^\/+/, '');
-  const text = String(body.text || '').trim();
+  const body = await request.json().catch(() => null)
+  if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
 
-  if (!shortcut || !text) {
-    return NextResponse.json(
-      { error: 'shortcut and text are required' },
-      { status: 400 }
-    );
+  const title = typeof body.title === 'string' ? body.title.trim() : ''
+  const kind = body.kind === 'interactive' ? 'interactive' : 'text'
+  if (!title) {
+    return NextResponse.json({ error: 'title is required' }, { status: 400 })
   }
 
-  const { data, error } = await supabase
+  let content_text: string | null = null
+  let interactive_payload: unknown = null
+
+  if (kind === 'interactive') {
+    const result = validateInteractivePayload(body.interactive_payload)
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 400 })
+    }
+    interactive_payload = body.interactive_payload
+  } else {
+    const text = typeof body.content_text === 'string' ? body.content_text : ''
+    if (!text.trim()) {
+      return NextResponse.json(
+        { error: 'content_text is required for text quick replies' },
+        { status: 400 },
+      )
+    }
+    content_text = text
+  }
+
+  const { data, error } = await supabaseAdmin()
     .from('quick_replies')
-    .insert({ user_id: user.id, shortcut, text })
-    .select('id, shortcut, text, created_at')
-    .single();
+    .insert({
+      account_id: ctx.accountId,
+      user_id: ctx.userId,
+      title,
+      kind,
+      content_text,
+      interactive_payload,
+    })
+    .select()
+    .single()
 
   if (error) {
-    if (isMissingQuickRepliesTable(error)) return missingTableResponse();
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: 500 })
   }
-
-  return NextResponse.json(data, { status: 201 });
-}
-
-export async function DELETE(request: NextRequest) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  if (authError || !user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const id = request.nextUrl.searchParams.get('id');
-  if (!id) {
-    return NextResponse.json({ error: 'id is required' }, { status: 400 });
-  }
-
-  const { error } = await supabase
-    .from('quick_replies')
-    .delete()
-    .eq('id', id)
-    .eq('user_id', user.id);
-
-  if (error) {
-    if (isMissingQuickRepliesTable(error)) return missingTableResponse();
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ quick_reply: data }, { status: 201 })
 }

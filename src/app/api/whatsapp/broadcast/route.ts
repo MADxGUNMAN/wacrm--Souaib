@@ -1,14 +1,14 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
+import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
 import {
   sanitizePhoneForMeta,
   isValidE164,
   phoneVariants,
   isRecipientNotAllowedError,
-  normalizePhone,
 } from '@/lib/whatsapp/phone-utils'
 import {
   checkRateLimit,
@@ -47,20 +47,15 @@ interface BroadcastResult {
  */
 interface NewRecipient {
   phone: string
+  /** Body variable values, one per {{N}}. Legacy field. */
   params?: string[]
-}
-
-// Lazy-initialized service-role client for DB writes that bypass RLS
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _adminDb: any = null
-function adminDb() {
-  if (!_adminDb) {
-    _adminDb = createAdminClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-  }
-  return _adminDb
+  /**
+   * Structured per-send values (header text variable, media URL
+   * override, URL/COPY_CODE button values). When set, takes
+   * precedence over `params` for the body too — see
+   * sendTemplateMessage for the merge rules.
+   */
+  messageParams?: SendTimeParams
 }
 
 export async function POST(request: Request) {
@@ -82,6 +77,23 @@ export async function POST(request: Request) {
     const limit = checkRateLimit(`broadcast:${user.id}`, RATE_LIMITS.broadcast)
     if (!limit.success) {
       return rateLimitResponse(limit)
+    }
+
+    // Resolve the caller's account_id. whatsapp_config + templates
+    // + broadcasts are all account-scoped post-multi-user, so the
+    // old `.eq('user_id', user.id)` filters miss every row created
+    // by a teammate.
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('account_id')
+      .eq('user_id', user.id)
+      .maybeSingle()
+    const accountId = profile?.account_id as string | undefined
+    if (!accountId) {
+      return NextResponse.json(
+        { error: 'Your profile is not linked to an account.' },
+        { status: 403 },
+      )
     }
 
     const body = await request.json()
@@ -125,7 +137,7 @@ export async function POST(request: Request) {
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('account_id', accountId)
       .single()
 
     if (configError || !config) {
@@ -139,6 +151,29 @@ export async function POST(request: Request) {
     }
 
     const accessToken = decrypt(config.access_token)
+
+    // Load the template row once so sendTemplateMessage can build
+    // header + button components on each iteration. Loading inside
+    // the loop would N+1 against Supabase for every recipient.
+    // Guard against a malformed local row crashing every send in
+    // the loop with the same opaque TypeError — fail loudly once.
+    const { data: rawTemplateRow } = await supabase
+      .from('message_templates')
+      .select('*')
+      .eq('account_id', accountId)
+      .eq('name', template_name)
+      .eq('language', template_language || 'en_US')
+      .maybeSingle()
+    if (rawTemplateRow && !isMessageTemplate(rawTemplateRow)) {
+      return NextResponse.json(
+        {
+          error:
+            'Template row is malformed locally — run "Sync from Meta" in Settings to repair it before broadcasting.',
+        },
+        { status: 500 },
+      )
+    }
+    const templateRow = rawTemplateRow ?? null
 
     const results: BroadcastResult[] = []
     let sentCount = 0
@@ -171,6 +206,8 @@ export async function POST(request: Request) {
             to: variant,
             templateName: template_name,
             language: template_language || 'en_US',
+            template: templateRow ?? undefined,
+            messageParams: recipient.messageParams,
             params: recipient.params ?? [],
           })
           sentMessageId = result.messageId
@@ -195,103 +232,6 @@ export async function POST(request: Request) {
           whatsapp_message_id: sentMessageId,
         })
         sentCount++
-
-        // ─── Save broadcast message to DB ─────────────────────────
-        // Find or create the contact + conversation so the message
-        // appears in the admin's / vendor's inbox thread.
-        try {
-          const normalized = normalizePhone(recipient.phone)
-
-          const cleanPhone = recipient.phone.replace(/[^+\d]/g, '')
-          const orQueries = [
-            `phone.eq.${normalized}`,
-            `phone.eq.+${normalized}`,
-            cleanPhone ? `phone.eq.${cleanPhone}` : null
-          ].filter(Boolean)
-
-          // Find existing contact by phone
-          const { data: existingContact } = await adminDb()
-            .from('contacts')
-            .select('id')
-            .eq('user_id', user.id)
-            .or(orQueries.join(','))
-            .limit(1)
-            .maybeSingle()
-
-          let contactId: string | null = existingContact?.id ?? null
-
-          // Create contact if it doesn't exist
-          if (!contactId) {
-            const { data: newContact } = await adminDb()
-              .from('contacts')
-              .insert({
-                user_id: user.id,
-                phone: normalized,
-                name: normalized,
-              })
-              .select('id')
-              .single()
-            contactId = newContact?.id ?? null
-          }
-
-          if (contactId) {
-            // Find or create conversation
-            const { data: existingConv } = await adminDb()
-              .from('conversations')
-              .select('id')
-              .eq('user_id', user.id)
-              .eq('contact_id', contactId)
-              .maybeSingle()
-
-            let conversationId: string | null = existingConv?.id ?? null
-
-            if (!conversationId) {
-              const { data: newConv } = await adminDb()
-                .from('conversations')
-                .insert({
-                  user_id: user.id,
-                  contact_id: contactId,
-                })
-                .select('id')
-                .single()
-              conversationId = newConv?.id ?? null
-            }
-
-            if (conversationId) {
-              const templateText = `[Template: ${template_name}]`
-
-              // Insert the message record
-              await adminDb()
-                .from('messages')
-                .insert({
-                  conversation_id: conversationId,
-                  sender_type: 'agent',
-                  content_type: 'template',
-                  content_text: templateText,
-                  template_name: template_name,
-                  message_id: sentMessageId,
-                  status: 'sent',
-                })
-
-              // Update conversation preview
-              await adminDb()
-                .from('conversations')
-                .update({
-                  last_message_text: templateText,
-                  last_message_at: new Date().toISOString(),
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', conversationId)
-            }
-          }
-        } catch (dbErr) {
-          // Don't fail the broadcast if DB save fails — the message
-          // was already sent via Meta successfully.
-          console.error(
-            `[broadcast] Failed to save message to DB for ${recipient.phone}:`,
-            dbErr
-          )
-        }
       } else {
         console.error(
           `Failed to send broadcast to ${recipient.phone}:`,
