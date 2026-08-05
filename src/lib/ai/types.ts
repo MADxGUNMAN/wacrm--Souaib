@@ -62,6 +62,8 @@ export interface GenerateResult {
   handoff: boolean
   /** Provider token usage for this call, or null when unavailable. */
   usage: AiUsage | null
+  /** Extracted variables if the AI was instructed to output them (JSON block). */
+  vars?: Record<string, string>
 }
 
 /**

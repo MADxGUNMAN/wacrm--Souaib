@@ -1,0 +1,42 @@
+# ============================================================
+# WhatsApp CRM — Production Docker Compose
+# ============================================================
+# Usage:
+#   1. Copy .env.docker.example → .env.docker and fill in values.
+#   2. Run: docker compose --env-file .env.docker -f docker-compose.prod.yml up -d --build
+# ============================================================
+
+services:
+  # ========================================
+  # Next.js WhatsApp CRM App
+  # ========================================
+  wacrm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* are baked into the JS bundle at build time.
+        # They are read from the .env.docker file automatically.
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_META_APP_ID: ${NEXT_PUBLIC_META_APP_ID}
+        NEXT_PUBLIC_META_ES_CONFIG_ID: ${NEXT_PUBLIC_META_ES_CONFIG_ID}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+        NEXT_PUBLIC_APP_LOCALE: ${NEXT_PUBLIC_APP_LOCALE:-en}
+    image: wacrm:latest
+    container_name: wacrm
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    env_file:
+      - .env.docker
+    environment:
+      - NODE_ENV=production
+      - HOSTNAME=0.0.0.0
+      - PORT=3000
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

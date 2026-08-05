@@ -10,10 +10,9 @@ import {
   RefreshCw,
   AlertCircle,
   Clock,
-  Radio,
+  Megaphone,
   Database,
   TrendingUp,
-  Megaphone,
   Bot,
   UserPlus,
 } from "lucide-react";

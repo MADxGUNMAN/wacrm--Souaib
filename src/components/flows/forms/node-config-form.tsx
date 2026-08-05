@@ -163,12 +163,86 @@ export function NodeConfigForm({
               .
             </p>
           </div>
+          {/* ── AI Extraction Prompt (n8n-style) ─────────────────── */}
+          <div>
+            <label className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="inline-flex h-4 w-4 items-center justify-center rounded bg-primary/10 text-[10px] font-bold text-primary">
+                AI
+              </span>
+              AI Extraction Prompt
+              <span className="text-[10px] text-muted-foreground/60">(optional)</span>
+            </label>
+            <textarea
+              value={
+                (cfg as { extraction_prompt?: string }).extraction_prompt ?? ""
+              }
+              onChange={(e) =>
+                onUpdateConfig({ extraction_prompt: e.target.value || undefined })
+              }
+              placeholder={`e.g. "Extract only the person's full name" or "Extract the company name"`}
+              rows={2}
+              className={cn(
+                "w-full rounded-md border border-border bg-muted px-3 py-2 text-xs",
+                "placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary",
+              )}
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              When set, AI will intelligently extract the clean value from the
+              customer{"'"}s message. e.g. {'"'}My name is John{'"'} {"→"} {'"'}John{'"'}.
+            </p>
+          </div>
           <NextNodeRow
             value={(cfg as { next_node_key?: string }).next_node_key ?? ""}
             allNodes={allNodes}
             currentKey={node.node_key}
             onChange={(v) => onUpdateConfig({ next_node_key: v })}
             label={t("advanceAfterCapture")}
+          />
+        </>
+      );
+
+    case "ai_agent":
+      return (
+        <>
+          <TextRow
+            label="Initial Prompt (Optional)"
+            value={(cfg as { prompt_text?: string }).prompt_text ?? ""}
+            onChange={(v) => onUpdateConfig({ prompt_text: v })}
+            rows={2}
+          />
+          <div>
+            <label className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="inline-flex h-4 w-4 items-center justify-center rounded bg-violet-400/10 text-[10px] font-bold text-violet-400">
+                AI
+              </span>
+              System Prompt
+            </label>
+            <textarea
+              value={
+                (cfg as { system_prompt?: string }).system_prompt ??
+                "You are a helpful assistant."
+              }
+              onChange={(e) =>
+                onUpdateConfig({ system_prompt: e.target.value })
+              }
+              placeholder="You are a helpful assistant..."
+              rows={6}
+              className={cn(
+                "w-full rounded-md border border-border bg-muted px-3 py-2 text-xs",
+                "placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary",
+              )}
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              The AI will handle the conversation using these instructions. It
+              will stay on this node until it decides to hand off.
+            </p>
+          </div>
+          <NextNodeRow
+            value={(cfg as { next_node_key?: string }).next_node_key ?? ""}
+            allNodes={allNodes}
+            currentKey={node.node_key}
+            onChange={(v) => onUpdateConfig({ next_node_key: v })}
+            label="Advance after handoff"
           />
         </>
       );

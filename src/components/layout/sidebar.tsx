@@ -10,22 +10,22 @@ import { useTotalUnread } from "@/hooks/use-total-unread";
 import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
 import {
   Bell,
-  Bot,
   Crown,
-  GitBranch,
   LayoutDashboard,
   LogOut,
-  MessageSquare,
-  Radio,
-  Settings,
   Shield,
   User,
   UserCog,
-  Users,
   UsersRound,
-  Workflow,
   X,
-  Zap,
+  Inbox,
+  KanbanSquare,
+  Megaphone,
+  Cpu,
+  Waypoints,
+  Sparkles,
+  Settings2,
+  Settings,
 } from "lucide-react";
 import type { AccountRole } from "@/lib/auth/roles";
 
@@ -78,18 +78,18 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
-  { href: "/inbox", labelKey: "inbox", icon: MessageSquare },
+  { href: "/inbox", labelKey: "inbox", icon: Inbox },
   { href: "/notifications", labelKey: "notifications", icon: Bell },
-  { href: "/contacts", labelKey: "contacts", icon: Users },
-  { href: "/pipelines", labelKey: "pipelines", icon: GitBranch },
-  { href: "/broadcasts", labelKey: "broadcasts", icon: Radio },
-  { href: "/automations", labelKey: "automations", icon: Zap },
-  { href: "/flows", labelKey: "flows", icon: Workflow, beta: true },
-  { href: "/agents", labelKey: "aiAgents", icon: Bot },
+  { href: "/contacts", labelKey: "contacts", icon: UsersRound },
+  { href: "/pipelines", labelKey: "pipelines", icon: KanbanSquare },
+  { href: "/broadcasts", labelKey: "broadcasts", icon: Megaphone },
+  { href: "/automations", labelKey: "automations", icon: Cpu },
+  { href: "/flows", labelKey: "flows", icon: Waypoints, beta: true },
+  { href: "/agents", labelKey: "aiAgents", icon: Sparkles },
 ];
 
 const bottomNavItems = [
-  { href: "/settings", labelKey: "settings", icon: Settings },
+  { href: "/settings", labelKey: "settings", icon: Settings2 },
 ];
 
 interface SidebarProps {

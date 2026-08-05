@@ -281,6 +281,7 @@ export function MessageBubble({
 
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
   const time = format(new Date(message.created_at), "HH:mm");
+  const isImage = message.content_type === "image";
 
   // Row alignment + width cap are owned by <MessageActions> so its hover
   // group matches the bubble's content area, not the full row.
@@ -293,17 +294,17 @@ export function MessageBubble({
     >
       <div
         className={cn(
-          "relative rounded-2xl px-3 py-2",
-          isAgent
-            ? "rounded-br-md bg-primary text-primary-foreground"
-            : "rounded-bl-md bg-muted text-foreground",
+          "relative",
+          isImage ? "" : "rounded-2xl px-3 py-2",
+          !isImage && isAgent ? "rounded-br-md bg-emerald-100 text-emerald-950 dark:bg-emerald-900 dark:text-emerald-50" : "",
+          !isImage && !isAgent ? "rounded-bl-md bg-muted text-foreground" : "",
         )}
       >
         {reply && (
           <ReplyQuote
             authorLabel={reply.authorLabel}
             preview={reply.preview}
-            onPrimary={isAgent}
+            onPrimary={false}
           />
         )}
         <MessageContent message={message} t={t} />
@@ -319,7 +320,10 @@ export function MessageBubble({
               glance. */}
           {message.ai_generated && (
             <span
-              className="inline-flex items-center gap-0.5 rounded-full bg-primary-foreground/20 px-1.5 py-px text-[9px] font-semibold uppercase leading-none tracking-wide text-primary-foreground"
+              className={cn(
+                "inline-flex items-center gap-0.5 rounded-full px-1.5 py-px text-[9px] font-semibold uppercase leading-none tracking-wide",
+                (isAgent && !isImage) ? "bg-emerald-200/60 text-emerald-900 dark:bg-emerald-800 dark:text-emerald-100" : "bg-primary/10 text-primary"
+              )}
               title={t("aiBadgeTitle")}
             >
               <Sparkles className="h-2.5 w-2.5" />
@@ -333,7 +337,7 @@ export function MessageBubble({
               // timestamp must read against that (not the neutral
               // foreground) — otherwise it goes low-contrast in light
               // mode. Inbound bubbles use the muted surface.
-              isAgent ? "text-primary-foreground/70" : "text-muted-foreground",
+              (isAgent && !isImage) ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground",
             )}
           >
             {time}

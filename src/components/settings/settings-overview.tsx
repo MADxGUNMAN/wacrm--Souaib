@@ -12,6 +12,7 @@ import { CURRENCIES } from '@/lib/currency';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import Link from 'next/link';
 
 import { SECTION_META, type SettingsSection } from './settings-sections';
 import { SettingsChip, StatusDot } from './settings-chip';
@@ -254,10 +255,11 @@ export function SettingsOverview({
           const meta = SECTION_META[section];
           const Icon = meta.icon;
           return (
-            <button
+            <Link
               key={section}
-              type="button"
-              onClick={() => onSelect(section)}
+              href={`/settings?tab=${section}`}
+              replace={true}
+              scroll={false}
               className={cn(
                 'group flex items-start gap-3.5 rounded-xl border border-border bg-card p-4 text-left transition-colors',
                 'hover:border-primary-soft-2 hover:bg-card-2',
@@ -281,7 +283,7 @@ export function SettingsOverview({
                 </span>
               </span>
               <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-            </button>
+            </Link>
           );
         })}
       </div>

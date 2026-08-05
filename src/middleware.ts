@@ -42,6 +42,25 @@ export async function middleware(request: NextRequest) {
     return response
   }
 
+  // Landing page — logged-in users should never see it.
+  // Super admins go to /super-admin, CRM users go to /dashboard.
+  if (user && request.nextUrl.pathname === '/') {
+    const url = request.nextUrl.clone()
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('is_super_admin')
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      url.pathname = profile?.is_super_admin ? '/super-admin' : '/dashboard'
+    } catch {
+      url.pathname = '/dashboard'
+    }
+    url.search = ''
+    return withRefreshedCookies(NextResponse.redirect(url))
+  }
+
   // Auth pages - redirect to dashboard if already logged in.
   // Exception: when an invite token is in the query string we
   // send the already-signed-in user to /join/<token> instead so

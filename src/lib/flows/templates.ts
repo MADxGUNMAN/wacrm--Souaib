@@ -254,6 +254,7 @@ const LEAD_CAPTURE: FlowTemplate = {
       config: {
         prompt_text: "What's your name?",
         var_key: "name",
+        extraction_prompt: "Extract only the person's full name from this message. Remove any filler words like 'my name is', 'I am', 'call me', etc. Output ONLY the name.",
         next_node_key: "ask_email",
       } as CollectInputNodeConfig,
     },
@@ -263,6 +264,7 @@ const LEAD_CAPTURE: FlowTemplate = {
       config: {
         prompt_text: "Thanks {{vars.name}}! What's your work email?",
         var_key: "email",
+        extraction_prompt: "Extract only the email address from this message. Output ONLY the email, nothing else.",
         next_node_key: "ask_company",
       } as CollectInputNodeConfig,
     },
@@ -272,8 +274,17 @@ const LEAD_CAPTURE: FlowTemplate = {
       config: {
         prompt_text: "Almost done — what's your company name?",
         var_key: "company",
-        next_node_key: "handoff",
+        extraction_prompt: "Extract only the company or organization name from this message. Remove filler words like 'my company is', 'I work at', etc. Output ONLY the company name.",
+        next_node_key: "farewell",
       } as CollectInputNodeConfig,
+    },
+    {
+      node_key: "farewell",
+      node_type: "send_message",
+      config: {
+        text: "Thank you {{vars.name}}! 🎉 We've got everything we need. A team member will be in touch shortly. Have a great day!",
+        next_node_key: "handoff",
+      } as SendMessageNodeConfig,
     },
     {
       node_key: "handoff",

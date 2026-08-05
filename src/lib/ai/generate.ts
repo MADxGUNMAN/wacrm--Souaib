@@ -87,6 +87,26 @@ export function parseGeneration(
   usage: AiUsage | null = null,
 ): GenerateResult {
   const handoff = raw.includes(HANDOFF_SENTINEL)
-  const text = raw.split(HANDOFF_SENTINEL).join('').trim()
-  return { text, handoff, usage }
+  let text = ''
+  let vars: Record<string, string> | undefined = undefined
+
+  if (handoff) {
+    const parts = raw.split(HANDOFF_SENTINEL)
+    text = parts[0].trim()
+    const remainder = parts.slice(1).join(HANDOFF_SENTINEL).trim()
+    if (remainder) {
+      try {
+        const jsonMatch = remainder.match(/\{[\s\S]*\}/)
+        if (jsonMatch) {
+          vars = JSON.parse(jsonMatch[0])
+        }
+      } catch (e) {
+        // Ignore parse errors if the AI output malformed JSON
+      }
+    }
+  } else {
+    text = raw.trim()
+  }
+
+  return { text, handoff, usage, vars }
 }

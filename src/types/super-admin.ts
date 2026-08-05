@@ -194,6 +194,7 @@ export interface SiteSettings {
   json_ld_schema: string | null;
   header_links: NavLink[];
   footer_links: FooterColumn[];
+  contact_notification_email: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -299,6 +300,35 @@ export interface LandingFaq {
   answer: string;
   position: number;
   is_visible: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContactPageSettings {
+  id: string;
+  heading: string;
+  subheading: string;
+  office_address: string | null;
+  phone_number: string | null;
+  email_address: string | null;
+  working_hours: string | null;
+  form_heading: string | null;
+  form_subheading: string | null;
+  map_embed_url: string | null;
+  extra_data: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContactSubmission {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  company: string | null;
+  subject: string | null;
+  message: string;
+  status: 'new' | 'read' | 'replied' | 'archived';
   created_at: string;
   updated_at: string;
 }

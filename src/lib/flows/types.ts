@@ -126,6 +126,17 @@ export interface CollectInputNodeConfig {
    */
   var_key: string;
   /**
+   * Optional AI extraction prompt. When set, the engine passes the
+   * customer's raw reply through AI with this instruction to extract
+   * the clean value. Like n8n's AI-powered data extraction node.
+   *
+   * Example: "Extract only the person's full name"
+   * Example: "Extract the company or organization name"
+   *
+   * When unset, the raw trimmed text is stored as-is.
+   */
+  extraction_prompt?: string;
+  /**
    * Reserved for v2. Accepted on the config but ignored by the v1.5
    * runner — captures any non-empty text.
    */
@@ -173,6 +184,18 @@ export interface SetTagNodeConfig {
   next_node_key: string;
 }
 
+export interface AiAgentNodeConfig {
+  /** Optional message to send when the customer enters this node. */
+  prompt_text?: string;
+  /** The system instructions defining how the AI should behave. */
+  system_prompt: string;
+  /**
+   * Node to advance to when the AI decides to hand off to a human,
+   * or signals the conversation is finished.
+   */
+  next_node_key: string;
+}
+
 // Terminal nodes carry no config — they just stop the run.
 export type EndNodeConfig = Record<string, never>;
 
@@ -194,6 +217,7 @@ export type FlowNodeConfig =
   | { node_type: "condition"; config: ConditionNodeConfig }
   | { node_type: "set_tag"; config: SetTagNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
+  | { node_type: "ai_agent"; config: AiAgentNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 
 export type FlowNodeType = FlowNodeConfig["node_type"];

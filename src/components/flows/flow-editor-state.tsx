@@ -185,6 +185,12 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
       return { mode: "add", tag_id: "", next_node_key: "" };
     case "handoff":
       return { note: "" };
+    case "ai_agent":
+      return {
+        prompt_text: "",
+        system_prompt: "You are a helpful assistant.",
+        next_node_key: "",
+      };
     case "end":
       return {};
   }

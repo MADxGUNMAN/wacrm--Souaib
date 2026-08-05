@@ -8,7 +8,6 @@ import {
   Loader2,
   AlertTriangle,
   RotateCcw,
-  Zap,
   Shield,
   CreditCard,
   Building2,
@@ -26,6 +25,23 @@ interface EmbeddedConfig {
   waba_id: string;
   connection_source: string;
   registered_at: string | null;
+}
+
+interface MetaAccountInfo {
+  phone: {
+    id: string;
+    display_phone_number: string | null;
+    verified_name: string | null;
+    quality_rating: string | null;
+    status: string | null;
+    name_status: string | null;
+  };
+  waba: {
+    id: string;
+    name: string | null;
+    account_review_status: string | null;
+    business_verification_status: string | null;
+  };
 }
 
 // WhatsApp icon SVG path
@@ -48,6 +64,8 @@ export function WhatsAppSetup() {
   const [config, setConfig] = useState<EmbeddedConfig | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [showConnectModal, setShowConnectModal] = useState(false);
+  const [metaInfo, setMetaInfo] = useState<MetaAccountInfo | null>(null);
+  const [metaInfoLoading, setMetaInfoLoading] = useState(false);
 
   // Track whether we already loaded for this account
   const loadedAccountIdRef = useRef<string | null>(null);
@@ -74,6 +92,22 @@ export function WhatsAppSetup() {
     [supabase],
   );
 
+  // Fetch live account info from Meta Graph API
+  const fetchMetaInfo = useCallback(async () => {
+    setMetaInfoLoading(true);
+    try {
+      const res = await fetch('/api/whatsapp/account-info');
+      if (res.ok) {
+        const data = await res.json();
+        setMetaInfo(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch Meta account info:', err);
+    } finally {
+      setMetaInfoLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (authLoading || profileLoading) return;
     if (!user || !accountId) {
@@ -85,6 +119,13 @@ export function WhatsAppSetup() {
     loadedAccountIdRef.current = accountId;
     fetchConfig(accountId);
   }, [authLoading, profileLoading, user?.id, accountId, fetchConfig]);
+
+  // Fetch Meta account info when config is available
+  useEffect(() => {
+    if (config?.phone_number_id) {
+      fetchMetaInfo();
+    }
+  }, [config?.phone_number_id, fetchMetaInfo]);
 
   // ── WA_EMBEDDED_SIGNUP event listener ──────────────────────
   // This captures the waba_id and phone_number_id directly from
@@ -254,6 +295,7 @@ export function WhatsAppSetup() {
     );
   }
 
+
   const isConnected = Boolean(config);
 
   return (
@@ -285,7 +327,7 @@ export function WhatsAppSetup() {
                 WhatsApp Business Account Information
               </h2>
             </div>
-            <div className="grid gap-px sm:grid-cols-5 rounded-xl border border-border overflow-hidden bg-border">
+            <div className="grid gap-px sm:grid-cols-4 rounded-xl border border-border overflow-hidden bg-border">
               {/* Business */}
               <div className="bg-card p-4 space-y-1">
                 <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -293,7 +335,9 @@ export function WhatsAppSetup() {
                 </span>
                 <div className="flex items-center gap-2 font-medium text-foreground">
                   <Building2 className="size-4 text-primary" />
-                  <span className="truncate">Connected</span>
+                  <span className="truncate">
+                    {metaInfoLoading ? '...' : (metaInfo?.phone?.verified_name ?? metaInfo?.waba?.name ?? 'Connected')}
+                  </span>
                 </div>
               </div>
               {/* WhatsApp Number */}
@@ -302,17 +346,7 @@ export function WhatsAppSetup() {
                   WhatsApp Number
                 </span>
                 <div className="font-medium text-primary">
-                  +{config.phone_number_id}
-                </div>
-              </div>
-              {/* Message Limit */}
-              <div className="bg-card p-4 space-y-1">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Message Limit (24h)
-                </span>
-                <div className="flex items-center gap-1.5 font-medium text-foreground">
-                  <Zap className="size-3.5 text-amber-500" />
-                  250
+                  {metaInfoLoading ? '...' : (metaInfo?.phone?.display_phone_number ?? `+${config.phone_number_id}`)}
                 </div>
               </div>
               {/* Account Status */}
@@ -320,20 +354,50 @@ export function WhatsAppSetup() {
                 <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                   Account Status
                 </span>
-                <div className="flex items-center gap-1.5 font-medium text-amber-500">
-                  <AlertTriangle className="size-3.5" />
-                  Limited
-                </div>
+                {(() => {
+                  const status = metaInfo?.phone?.status;
+                  const isGood = status === 'CONNECTED';
+                  const isBad = status === 'FLAGGED' || status === 'RESTRICTED' || status === 'RATE_LIMITED';
+                  return (
+                    <div className={`flex items-center gap-1.5 font-medium ${
+                      metaInfoLoading ? 'text-muted-foreground' :
+                      isGood ? 'text-emerald-500' :
+                      isBad ? 'text-red-500' : 'text-amber-500'
+                    }`}>
+                      {isGood ? <CheckCircle2 className="size-3.5" /> :
+                       isBad ? <AlertTriangle className="size-3.5" /> :
+                       <AlertTriangle className="size-3.5" />}
+                      {metaInfoLoading ? '...' : (status ?? 'Unknown')}
+                    </div>
+                  );
+                })()}
               </div>
               {/* Quality Rating */}
               <div className="bg-card p-4 space-y-1">
                 <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                   Quality Rating
                 </span>
-                <div className="flex items-center gap-1.5 font-medium text-foreground">
-                  <Shield className="size-3.5 text-primary" />
-                  Unknown
-                </div>
+                {(() => {
+                  const rating = metaInfo?.phone?.quality_rating;
+                  const isGreen = rating === 'GREEN';
+                  const isRed = rating === 'RED';
+                  const isYellow = rating === 'YELLOW';
+                  return (
+                    <div className={`flex items-center gap-1.5 font-medium ${
+                      metaInfoLoading ? 'text-muted-foreground' :
+                      isGreen ? 'text-emerald-500' :
+                      isRed ? 'text-red-500' :
+                      isYellow ? 'text-amber-500' : 'text-muted-foreground'
+                    }`}>
+                      <Shield className={`size-3.5 ${
+                        isGreen ? 'text-emerald-500' :
+                        isRed ? 'text-red-500' :
+                        isYellow ? 'text-amber-500' : 'text-primary'
+                      }`} />
+                      {metaInfoLoading ? '...' : (rating ?? 'Unknown')}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </CardContent>

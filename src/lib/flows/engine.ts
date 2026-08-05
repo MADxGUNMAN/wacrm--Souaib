@@ -58,12 +58,108 @@ import {
   type SetTagNodeConfig,
   type StartNodeConfig,
   type KeywordTriggerConfig,
+  type AiAgentNodeConfig,
 } from "./types";
 
 // ============================================================
 // Pure helpers — extracted so engine.test.ts can exercise them
 // without a Supabase / Meta mock.
 // ============================================================
+
+/**
+ * Quick regex fallback for email extraction — used when AI is
+ * unavailable or for the email field (where regex is reliable).
+ */
+function extractEmailByRegex(raw: string): string {
+  const match = raw.match(
+    /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/,
+  );
+  return match ? match[0] : raw.trim();
+}
+
+/**
+ * Use the account's configured AI to extract clean structured data
+ * from a customer's natural-language reply.
+ *
+ * Uses the node's `extraction_prompt` when configured (dynamic, n8n-style),
+ * or falls back to an auto-generated prompt based on var_key.
+ *
+ * Example:
+ *   extractionPrompt = "Extract only the person's full name"
+ *   raw = "My good name is Souaib Ansari did you understand?"
+ *   → AI returns: "Souaib Ansari"
+ *
+ * For emails, we skip the AI and use a reliable regex instead.
+ * Falls back to the raw trimmed text if AI is unavailable or errors.
+ */
+async function extractCleanValueWithAi(
+  accountId: string,
+  varKey: string,
+  raw: string,
+  extractionPrompt?: string,
+): Promise<string> {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+
+  // Emails are reliably extracted by regex — no need for AI.
+  if (varKey === 'email' && !extractionPrompt) return extractEmailByRegex(trimmed);
+
+  // If no extraction_prompt is configured AND no known field, store raw.
+  const fieldLabels: Record<string, string> = {
+    name: "person's full name",
+    company: 'company or organization name',
+    phone: 'phone number',
+    address: 'address',
+  };
+  const instruction = extractionPrompt
+    || (fieldLabels[varKey]
+      ? `Extract the ${fieldLabels[varKey]} from this message. Output ONLY the ${fieldLabels[varKey]}, nothing else.`
+      : null);
+
+  // No instruction and no known field → store raw text.
+  if (!instruction) return trimmed;
+
+  try {
+    const { loadAiConfig } = await import('@/lib/ai/config');
+    const db = supabaseAdmin();
+    const config = await loadAiConfig(db, accountId, { requireActive: false });
+    if (!config) return trimmed;
+
+    const { generateReply } = await import('@/lib/ai/generate');
+    const systemPrompt =
+      'You are a data extraction assistant. Your ONLY job is to extract a specific piece of information from a customer message. ' +
+      'Output ONLY the extracted value — no quotes, no explanation, no prefix, no extra words. ' +
+      'If you cannot find the value, output the original message as-is.';
+
+    const { text } = await generateReply({
+      config,
+      systemPrompt,
+      messages: [
+        {
+          role: 'user',
+          content: `${instruction}\n\nCustomer message: "${trimmed}"`,
+        },
+      ],
+    });
+
+    const extracted = text?.trim();
+    // Sanity: if AI returned empty or something weird, use raw.
+    return extracted && extracted.length > 0 && extracted.length <= trimmed.length * 2
+      ? extracted
+      : trimmed;
+  } catch (err) {
+    console.error('[flow engine] AI extraction failed, using raw value:', err);
+    return trimmed;
+  }
+}
+
+// Re-export for backward compatibility with existing code.
+export function extractCleanValue(varKey: string, raw: string): string {
+  // Sync fallback — only used by tests. The real path uses
+  // extractCleanValueWithAi (async) via the capture branch.
+  if (varKey === 'email') return extractEmailByRegex(raw);
+  return raw.trim();
+}
 
 /**
  * Given a node + the customer's reply_id, return the next_node_key
@@ -438,22 +534,50 @@ async function executeHandoff(
   node: FlowNodeRow,
 ): Promise<void> {
   const cfg = node.config as { assign_to?: string; note?: string };
+
+  // ── Auto-fill contact fields from captured flow vars ────────────
+  // If the flow collected name / email / company via collect_input,
+  // write them directly into the contacts row so the Contacts page
+  // shows the data immediately — no manual entry needed.
+  if (run.contact_id && Object.keys(run.vars).length > 0) {
+    const FIELD_MAP: Record<string, string> = {
+      name: 'name',
+      email: 'email',
+      company: 'company',
+    };
+    const contactUpdate: Record<string, string> = {};
+    for (const [varKey, contactCol] of Object.entries(FIELD_MAP)) {
+      const val = run.vars[varKey];
+      if (typeof val === 'string' && val.trim()) {
+        contactUpdate[contactCol] = val.trim();
+      }
+    }
+    if (Object.keys(contactUpdate).length > 0) {
+      contactUpdate.updated_at = new Date().toISOString();
+      await db
+        .from('contacts')
+        .update(contactUpdate)
+        .eq('id', run.contact_id);
+    }
+  }
+
+  // ── Hand off conversation ──────────────────────────────────────
   const convUpdate: Record<string, unknown> = {
-    status: "pending",
+    status: 'pending',
     updated_at: new Date().toISOString(),
   };
   if (cfg.assign_to) convUpdate.assigned_agent_id = cfg.assign_to;
   if (run.conversation_id) {
     await db
-      .from("conversations")
+      .from('conversations')
       .update(convUpdate)
-      .eq("id", run.conversation_id);
+      .eq('id', run.conversation_id);
   }
-  await logEvent(db, run.id, "handoff", node.node_key, {
+  await logEvent(db, run.id, 'handoff', node.node_key, {
     note: cfg.note ?? null,
     assigned_to: cfg.assign_to ?? null,
   });
-  await endRun(db, run.id, "handed_off", "handoff_node");
+  await endRun(db, run.id, 'handed_off', 'handoff_node');
 }
 
 /**
@@ -670,6 +794,60 @@ async function advanceFromNodeKey(
         await endRun(db, run.id, "failed", "collect_input_prompt_failed");
         return { outcome: "completed" };
       }
+      const advanced = await advanceCurrentNodeKey(
+        db,
+        run.id,
+        run.current_node_key,
+        node.node_key,
+      );
+      if (!advanced) {
+        await logEvent(db, run.id, "error", node.node_key, {
+          reason: "lost_race_during_advance",
+        });
+      }
+      return { outcome: "advanced" };
+    }
+    if (node.node_type === "ai_agent") {
+      const cfg = node.config as unknown as AiAgentNodeConfig;
+      
+      // If there's an initial prompt, send it to the customer.
+      // E.g. "Hi, I'm an AI assistant. How can I help you today?"
+      if (cfg.prompt_text && cfg.prompt_text.trim()) {
+        try {
+          const { whatsapp_message_id } = await engineSendText({
+            accountId: run.account_id,
+            userId: run.user_id,
+            conversationId: run.conversation_id!,
+            contactId: run.contact_id!,
+            text: interpolateVars(cfg.prompt_text, run.vars),
+          });
+          await logEvent(db, run.id, "message_sent", node.node_key, {
+            node_type: "ai_agent",
+            whatsapp_message_id,
+          });
+          const { data: msg } = await db
+            .from("messages")
+            .select("id")
+            .eq("message_id", whatsapp_message_id)
+            .maybeSingle();
+          await db
+            .from("flow_runs")
+            .update({
+              last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
+            })
+            .eq("id", run.id);
+        } catch (err) {
+          await logEvent(db, run.id, "error", node.node_key, {
+            reason: "ai_agent_prompt_failed",
+            detail: err instanceof Error ? err.message : String(err),
+          });
+          await endRun(db, run.id, "failed", "ai_agent_prompt_failed");
+          return { outcome: "completed" };
+        }
+      }
+      
+      // Suspend the flow here. The next customer text reply wakes up the
+      // capture branch, which will use `generateReply` with the system_prompt.
       const advanced = await advanceCurrentNodeKey(
         db,
         run.id,
@@ -941,7 +1119,13 @@ async function handleReplyForActiveRun(
     currentNode.node_type === "collect_input"
   ) {
     const cfg = currentNode.config as unknown as CollectInputNodeConfig;
-    const captured = message.text.trim();
+    const rawText = message.text.trim();
+    // AI-powered extraction: uses the node's extraction_prompt (if set)
+    // or auto-generates one from var_key. Configurable from the flow
+    // editor — no code changes needed.
+    const captured = cfg.var_key
+      ? await extractCleanValueWithAi(run.account_id, cfg.var_key, rawText, cfg.extraction_prompt)
+      : rawText;
     if (captured.length > 0 && cfg.var_key) {
       // Persist captured value + reset reprompt count atomically.
       const newVars = { ...run.vars, [cfg.var_key]: captured };
@@ -963,6 +1147,58 @@ async function handleReplyForActiveRun(
           captured_length: captured.length,
         });
         matched = cfg.next_node_key;
+      }
+    }
+  } else if (
+    message.kind === "text" &&
+    currentNode.node_type === "ai_agent"
+  ) {
+    const cfg = currentNode.config as unknown as AiAgentNodeConfig;
+    const { loadAiConfig } = await import('@/lib/ai/config');
+    const { buildConversationContext } = await import('@/lib/ai/context');
+    const { generateReply } = await import('@/lib/ai/generate');
+    
+    const config = await loadAiConfig(db, run.account_id, { requireActive: false });
+    if (config && run.conversation_id) {
+      const messages = await buildConversationContext(db, run.conversation_id);
+      const extractionPrompt = `\n\nWhen you have collected all the required information, output the [[HANDOFF]] marker followed immediately by a JSON block containing the collected info. Example: [[HANDOFF]]{\"name\": \"John\", \"email\": \"john@example.com\", \"company\": \"Acme\"}`;
+      
+      const { text, handoff, vars } = await generateReply({
+        config,
+        systemPrompt: (cfg.system_prompt || "") + extractionPrompt,
+        messages,
+      });
+
+      if (text) {
+        await engineSendText({
+          accountId: run.account_id,
+          userId: run.user_id,
+          conversationId: run.conversation_id,
+          contactId: run.contact_id!,
+          text,
+        });
+      }
+
+      if (handoff) {
+        if (vars && Object.keys(vars).length > 0) {
+          const newVars = { ...run.vars, ...vars };
+          const { error: capErr } = await db
+            .from("flow_runs")
+            .update({ vars: newVars })
+            .eq("id", run.id);
+          if (!capErr) {
+            run.vars = newVars;
+          }
+        }
+        matched = cfg.next_node_key;
+      } else {
+        // AI responded but didn't hand off. Stay on this node and await next user message.
+        // We reset reprompt_count so fallback isn't accidentally triggered by normal back-and-forth.
+        if (run.reprompt_count !== 0) {
+          const { error } = await db.from("flow_runs").update({ reprompt_count: 0 }).eq("id", run.id);
+          if (!error) run.reprompt_count = 0;
+        }
+        return { consumed: true, flow_run_id: run.id, outcome: "advanced" };
       }
     }
   }

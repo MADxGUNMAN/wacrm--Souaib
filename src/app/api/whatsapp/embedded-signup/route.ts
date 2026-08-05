@@ -262,11 +262,14 @@ export async function POST(request: Request) {
     const { error: upsertError } = await supabase
       .from('whatsapp_config')
       .upsert({
+        user_id: user.id,
         account_id: accountId,
         phone_number_id: phoneNumberId,
         waba_id: wabaId,
         access_token: encryptedAccessToken,
         connection_source: 'embedded_signup',
+        status: 'connected',
+        connected_at: new Date().toISOString(),
       }, { onConflict: 'account_id' });
 
     if (upsertError) {

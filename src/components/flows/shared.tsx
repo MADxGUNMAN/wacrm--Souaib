@@ -17,6 +17,7 @@
  */
 
 import {
+  Bot,
   Flag,
   GitFork,
   Inbox,
@@ -50,6 +51,7 @@ export type NodeType =
   | 'condition'
   | 'set_tag'
   | 'handoff'
+  | 'ai_agent'
   | 'end';
 
 export interface BuilderNode {
@@ -159,6 +161,13 @@ export const NODE_META: Record<
     blurb: 'Hands the conversation to a human',
     category: 'flow',
   },
+  ai_agent: {
+    label: 'AI Agent',
+    icon: Bot,
+    color: 'text-violet-400',
+    blurb: 'AI assistant that handles the chat',
+    category: 'logic',
+  },
   end: {
     label: 'End',
     icon: Flag,
@@ -206,6 +215,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   condition: { l: 0.72, c: 0.15, h: 65 }, // amber — a fork in the road
   set_tag: { l: 0.65, c: 0.15, h: 350 }, // pink
   handoff: { l: 0.65, c: 0.17, h: 16 }, // rose — hands off
+  ai_agent: { l: 0.62, c: 0.16, h: 290 }, // violet — AI agent
   end: { l: 0.55, c: 0.01, h: 260 }, // neutral grey — terminal
 };
 
@@ -423,6 +433,12 @@ export function summarizeNode(
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';
       return note.length > 0 ? truncate(note) : null;
+    }
+    case 'ai_agent': {
+      const promptText = typeof cfg.prompt_text === 'string' ? cfg.prompt_text : '';
+      if (promptText.length > 0) return truncate(promptText);
+      const systemPrompt = typeof cfg.system_prompt === 'string' ? cfg.system_prompt : '';
+      return systemPrompt.length > 0 ? truncate(systemPrompt) : null;
     }
   }
 }

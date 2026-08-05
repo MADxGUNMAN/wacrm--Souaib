@@ -231,12 +231,33 @@ html[data-theme="rose"] {
 }
 
 /* Custom Scrollbar */
+@layer utilities {
+  .scrollbar-sleek {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+  .scrollbar-sleek::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  .scrollbar-sleek::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-sleek::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 10px;
+  }
+  .scrollbar-sleek::-webkit-scrollbar-thumb:hover {
+    background: #25D366;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #f8fafc;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: #cbd5e1;

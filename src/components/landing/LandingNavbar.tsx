@@ -49,7 +49,7 @@ export function LandingNavbar({ siteName = "Replai", logoUrl, links }: LandingNa
           {navLinks.map((link) => (
             <a
               key={link.href}
-              href={link.href}
+              href={link.href.startsWith("#") ? `/${link.href}` : link.href}
               target={link.isExternal ? "_blank" : undefined}
               rel={link.isExternal ? "noopener noreferrer" : undefined}
               className="text-slate-600 hover:text-[#25D366] transition-colors duration-300"
@@ -90,7 +90,7 @@ export function LandingNavbar({ siteName = "Replai", logoUrl, links }: LandingNa
           {navLinks.map((link) => (
             <a
               key={link.href}
-              href={link.href}
+              href={link.href.startsWith("#") ? `/${link.href}` : link.href}
               className="block text-slate-700 hover:text-[#25D366] font-medium py-2 transition-colors"
               onClick={() => setMobileOpen(false)}
             >

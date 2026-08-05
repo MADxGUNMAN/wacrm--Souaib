@@ -41,6 +41,15 @@ const cmsModules = [
     borderColor: "border-pink-400/20"
   },
   {
+    title: "Contact Page",
+    description: "Edit contact info, address, working hours, and headings.",
+    icon: LayoutTemplate,
+    href: "/super-admin/cms/contact",
+    color: "text-emerald-400",
+    bgColor: "bg-emerald-400/10",
+    borderColor: "border-emerald-400/20"
+  },
+  {
     title: "Legal Pages",
     description: "Markdown editor for Privacy Policy, Terms of Service, etc.",
     icon: Scale,

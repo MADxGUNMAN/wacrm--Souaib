@@ -65,6 +65,16 @@ const SECURITY_HEADERS = [
 
 const nextConfig: NextConfig = {
   /**
+   * Standalone output mode.
+   *
+   * Produces a self-contained `.next/standalone/server.js` that bundles
+   * only the node_modules actually imported — no need to ship the full
+   * `node_modules/` tree into the Docker image. The Dockerfile copies
+   * `standalone/`, `.next/static/`, and `public/` into the final layer.
+   */
+  output: "standalone",
+
+  /**
    * Cross-origin dev access (Next.js 16).
    *
    * Next 16 blocks requests to dev-only resources (`/_next/*` internals,

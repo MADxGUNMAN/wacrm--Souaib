@@ -17,6 +17,7 @@ import type {
   LegalPage,
   LandingImage,
   LandingFaq,
+  ContactPageSettings,
 } from '@/types/super-admin';
 
 /**
@@ -251,4 +252,23 @@ export async function getLandingFaqs(): Promise<LandingFaq[]> {
   }
 
   return (data ?? []) as LandingFaq[];
+}
+
+/**
+ * Fetch the singleton contact page settings row.
+ */
+export async function getContactPageSettings(): Promise<ContactPageSettings | null> {
+  const admin = supabaseAdmin();
+  const { data, error } = await admin
+    .from('contact_page_settings')
+    .select('*')
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[cms] getContactPageSettings error:', error);
+    return null;
+  }
+
+  return data as ContactPageSettings | null;
 }

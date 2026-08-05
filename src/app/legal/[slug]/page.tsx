@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getLegalPage, getSiteSettings } from "@/lib/cms/queries";
 import Link from "next/link";
+import { TableOfContents } from "@/components/legal/TableOfContents";
 
 export const dynamic = "force-dynamic";
 
@@ -86,38 +87,9 @@ export default async function LegalPageRoute({ params }: LegalPageProps) {
       </div>
 
       {/* Two-column layout: TOC left, Content right */}
-      <div className="flex gap-10">
-        {/* Left — Sticky TOC */}
-        {headings.length > 0 && (
-          <aside className="hidden lg:block w-64 shrink-0">
-            <nav className="sticky top-28 rounded-xl border border-slate-200 bg-slate-50/80 p-5 max-h-[calc(100vh-8rem)] overflow-y-auto">
-              <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-4 flex items-center gap-2">
-                <svg className="h-3.5 w-3.5 text-[#25D366]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h10M4 18h14" />
-                </svg>
-                On this page
-              </h2>
-              <ol className="space-y-0.5 list-none">
-                {headings.map((heading, index) => (
-                  <li key={index}>
-                    <a
-                      href={`#${heading.id}`}
-                      className={`
-                        block transition-colors duration-150 hover:text-[#25D366]
-                        ${heading.level === 2
-                          ? "text-[13px] text-slate-700 font-medium py-1.5 border-l-2 border-transparent hover:border-[#25D366] pl-3"
-                          : "text-[12px] text-slate-400 pl-6 py-1 border-l-2 border-transparent hover:border-[#25D366]/50"
-                        }
-                      `}
-                    >
-                      {heading.text}
-                    </a>
-                  </li>
-                ))}
-              </ol>
-            </nav>
-          </aside>
-        )}
+      <div className="flex gap-10 items-start">
+        {/* Left — Sticky TOC via Client Component */}
+        <TableOfContents headings={headings} />
 
         {/* Right — Content */}
         <article className="legal-prose flex-1 min-w-0">

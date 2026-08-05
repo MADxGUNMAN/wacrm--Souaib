@@ -1186,6 +1186,10 @@
           "label": "Handoff to agent",
           "blurb": "Hands the conversation to a human"
         },
+        "ai_agent": {
+          "label": "AI Agent",
+          "blurb": "AI assistant that handles the chat"
+        },
         "end": {
           "label": "End",
           "blurb": "Ends the flow"

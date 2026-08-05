@@ -12,7 +12,8 @@ import {
   X,
   MessageSquare,
   Activity,
-  FileText
+  FileText,
+  Mail,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -25,6 +26,7 @@ const navItems = [
   { href: "/super-admin", label: "Dashboard", icon: LayoutDashboard },
   { href: "/super-admin/accounts", label: "Accounts", icon: Users },
   { href: "/super-admin/cms", label: "CMS & Landing", icon: FileText },
+  { href: "/super-admin/contact-submissions", label: "Contact", icon: Mail },
   { href: "/super-admin/health", label: "Health", icon: Activity },
   { href: "/super-admin/settings", label: "Settings", icon: Settings },
 ];
