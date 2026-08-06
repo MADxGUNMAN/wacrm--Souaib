@@ -6,7 +6,80 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+// ------------------------------------------------------------
+// Label resolution for the trigger.
+//
+// Base UI's `Select.Value` renders the label of the selected item by
+// looking its value up in the `items` map passed to `Select.Root`. Given
+// no map it falls back to `String(value)`, so a bare `<SelectValue />`
+// prints the raw stored value — "grant", "7", "all" — instead of the
+// option's text. That is not what the shadcn/Radix-shaped API this file
+// mimics leads you to expect, and it silently affected a dozen call
+// sites here.
+//
+// Rather than make every call site hand-maintain a parallel label map
+// that can drift from the list it describes, `Select` derives `items` by
+// walking its own children for `SelectItem` elements and pairing each
+// `value` with its children. An explicit `items` prop still wins, so
+// anything wanting grouped items, a null-item label, or a trigger label
+// that deliberately differs from the list text can opt out.
+//
+// This is safe to infer because `items` is display-only metadata: within
+// Base UI it is read solely by `Select.Value` and the null-item
+// placeholder check. Selection, typeahead and keyboard navigation never
+// consult it.
+// ------------------------------------------------------------
+
+type DerivedSelectItem = { label: React.ReactNode; value: unknown }
+
+function collectSelectItems(
+  node: React.ReactNode,
+  out: DerivedSelectItem[]
+): void {
+  React.Children.forEach(node, (child) => {
+    if (!React.isValidElement(child)) return
+
+    if (child.type === SelectItem) {
+      const { value, children } = child.props as SelectPrimitive.Item.Props
+      // An item with no value can't be looked up, and one with no
+      // children would resolve to an empty trigger. Skip both so the
+      // String(value) fallback still applies to them.
+      if (value !== undefined && children != null) {
+        out.push({ value, label: children })
+      }
+      return
+    }
+
+    // Walks the element tree AS WRITTEN rather than the rendered output,
+    // so it sees through SelectContent and SelectGroup without either
+    // needing to be mounted — which matters because the popup is
+    // portalled and only exists while open.
+    const { children } = (child.props ?? {}) as { children?: React.ReactNode }
+    if (children != null) collectSelectItems(children, out)
+  })
+}
+
+function Select<Value, Multiple extends boolean | undefined = false>({
+  items,
+  children,
+  ...props
+}: SelectPrimitive.Root.Props<Value, Multiple>) {
+  const resolvedItems = React.useMemo(() => {
+    if (items !== undefined) return items
+    const derived: DerivedSelectItem[] = []
+    collectSelectItems(children, derived)
+    // Undefined rather than an empty array: an empty `items` would make
+    // `Select.Value` resolve every value to nothing instead of falling
+    // back to String(value).
+    return derived.length > 0 ? derived : undefined
+  }, [items, children])
+
+  return (
+    <SelectPrimitive.Root items={resolvedItems} {...props}>
+      {children}
+    </SelectPrimitive.Root>
+  )
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (

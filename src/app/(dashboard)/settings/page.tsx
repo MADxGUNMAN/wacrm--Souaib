@@ -12,6 +12,7 @@ import { SettingsOverview } from '@/components/settings/settings-overview';
 import { ProfileForm } from '@/components/settings/profile-form';
 import { SecurityPanel } from '@/components/settings/security-panel';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
+import { BillingSettings } from '@/components/settings/billing-settings';
 import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
 import { WhatsAppSetup } from '@/components/settings/whatsapp-setup';
 import { MetaSDKProvider } from '@/components/providers/meta-sdk-provider';
@@ -99,6 +100,7 @@ function SettingsPageInner() {
     profile: <ProfileForm />,
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
+    billing: <BillingSettings />,
     'whatsapp-setup': (
       <MetaSDKProvider appId={process.env.NEXT_PUBLIC_META_APP_ID || '3141459766059334'}>
         <WhatsAppSetup />

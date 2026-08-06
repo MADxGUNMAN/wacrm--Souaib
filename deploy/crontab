@@ -1,0 +1,25 @@
+# ============================================================
+# wacrm scheduled tasks — crontab for the `ubuntu` user on the app server.
+#
+# Install / update with:
+#   scp deploy/cron-ping.sh ubuntu@<host>:/opt/wacrm/cron-ping.sh
+#   ssh ubuntu@<host> 'chmod +x /opt/wacrm/cron-ping.sh'
+#   scp deploy/crontab ubuntu@<host>:/tmp/wacrm.cron
+#   ssh ubuntu@<host> 'crontab /tmp/wacrm.cron && rm /tmp/wacrm.cron && crontab -l'
+#
+# Verify it is actually working (not just running):
+#   ssh ubuntu@<host> 'tail /opt/wacrm/cron.log'
+# Every line must read http=200. http=401 means the secret is not
+# reaching the app; http=503 means AUTOMATION_CRON_SECRET is missing from
+# /opt/wacrm/.env.
+#
+# ─── Do NOT inline the curl command here ───
+# A previous version did, with the secret lookup in single quotes:
+#   curl -sf -H 'x-cron-secret: $(cat /opt/wacrm/.env | grep ...)' ...
+# Single quotes prevent `$(...)` expansion, so the literal text was sent
+# as the secret and every call returned 401 from the day it was
+# installed — invisibly, because -sf and >/dev/null hid the failure.
+# cron additionally treats `%` as special, so inline commands are doubly
+# fragile here. Keep the logic in cron-ping.sh.
+# ============================================================
+*/5 * * * * /opt/wacrm/cron-ping.sh

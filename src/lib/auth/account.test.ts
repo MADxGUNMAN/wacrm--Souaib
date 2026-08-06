@@ -132,7 +132,11 @@ describe("getCurrentAccount", () => {
       user: { id: "user-1" },
       byTable: {
         profiles: {
-          data: { account_id: "acct-1", account_role: "admin" },
+          // Must be a role `isAccountRole` accepts. Migration 038
+          // collapsed admin/agent/viewer into `member`, so the old
+          // fixture value made this test fail on role validation before
+          // it ever reached the accounts lookup it means to exercise.
+          data: { account_id: "acct-1", account_role: "owner" },
           error: null,
         },
         accounts: { data: null, error: { code: "PGRST200" } },
@@ -162,7 +166,8 @@ describe("getCurrentAccount", () => {
       user: { id: "user-1" },
       byTable: {
         profiles: {
-          data: { account_id: "acct-1", account_role: "viewer" },
+          // `member` post-038; `viewer` no longer passes isAccountRole.
+          data: { account_id: "acct-1", account_role: "member" },
           error: null,
         },
         accounts: { data: null, error: null },

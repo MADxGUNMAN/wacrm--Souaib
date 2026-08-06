@@ -10,10 +10,11 @@ import {
   Settings,
   LogOut,
   X,
-  MessageSquare,
   Activity,
   FileText,
   Mail,
+  CreditCard,
+  Tag,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -25,6 +26,10 @@ interface SuperAdminSidebarProps {
 const navItems = [
   { href: "/super-admin", label: "Dashboard", icon: LayoutDashboard },
   { href: "/super-admin/accounts", label: "Accounts", icon: Users },
+  // Payments sits above the catalogue: reviewing money is the daily job,
+  // editing prices is occasional.
+  { href: "/super-admin/payments", label: "Payments", icon: CreditCard },
+  { href: "/super-admin/plans", label: "Plans & Pricing", icon: Tag },
   { href: "/super-admin/cms", label: "CMS & Landing", icon: FileText },
   { href: "/super-admin/contact-submissions", label: "Contact", icon: Mail },
   { href: "/super-admin/health", label: "Health", icon: Activity },

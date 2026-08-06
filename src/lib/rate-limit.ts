@@ -159,6 +159,18 @@ export const RATE_LIMITS = {
    *  key past the provider's own rate limit. 60/min ≈ three busy agents
    *  drafting flat-out. */
   aiDraftAccount: { limit: 60, windowMs: 60_000 },
+  /** Manual UPI payment submission, per account. Deliberately tight:
+   *  a legitimate user submits once and waits for manual verification,
+   *  and the DB already permits only one pending request per account.
+   *  5/min absorbs a double-click or a validation-error retry loop
+   *  while stopping a script from stuffing the review queue that a
+   *  human has to work through. */
+  paymentSubmit: { limit: 5, windowMs: 60_000 },
+  /** UPI QR generation, per account. Each call is a DB price lookup
+   *  plus a QR encode, and users legitimately flip between plans and
+   *  cycles to compare — so this is roomy enough for browsing while
+   *  bounding a hold-down on the toggle. */
+  paymentQuote: { limit: 60, windowMs: 60_000 },
   /** AI auto-reply generation, per account. The per-conversation cap
    *  (`auto_reply_max_per_conversation`) bounds one thread; this bounds
    *  the whole account across threads, so a burst of inbound from many

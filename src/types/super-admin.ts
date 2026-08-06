@@ -320,6 +320,108 @@ export interface ContactPageSettings {
   updated_at: string;
 }
 
+// ============================================================
+// Billing / subscriptions (migrations 050-052)
+// ============================================================
+
+/**
+ * A payment request as the review queue sees it: the stored row plus
+ * fields the API derives or joins in.
+ *
+ * `amount_matches` / `amount_difference` are computed server-side so
+ * every client agrees on the comparison — and so nobody re-derives it
+ * from the PostgREST string form of NUMERIC and gets it wrong.
+ */
+export interface AdminPaymentRequest {
+  id: string;
+  account_id: string;
+  user_id: string | null;
+
+  plan_id: string | null;
+  cycle_id: string | null;
+  plan_name_snapshot: string;
+  cycle_label_snapshot: string;
+  cycle_months: number | null;
+  cycle_duration_days: number | null;
+
+  /** Price in force when the customer submitted. Server-derived. */
+  expected_amount: number;
+  /** What the payer says they transferred. */
+  paid_amount: number;
+  currency: string;
+  /** True when expected and paid agree to within a paisa. */
+  amount_matches: boolean;
+  /** paid - expected. Negative means underpaid. */
+  amount_difference: number;
+
+  transaction_ref: string;
+  payer_name: string;
+  payer_mobile: string;
+  payer_upi_id: string | null;
+  payer_bank: string | null;
+  paid_at: string | null;
+  payment_method: string;
+  reference_note: string | null;
+  payer_note: string | null;
+  screenshot_url: string | null;
+
+  status: 'pending' | 'approved' | 'rejected';
+  reviewed_by_user_id: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  activated_from: string | null;
+  activated_until: string | null;
+
+  created_at: string;
+  updated_at: string;
+
+  // ---- joined context ----
+  account_name: string | null;
+  account_subscription_status: string | null;
+  account_subscription_ends_at: string | null;
+  submitted_by_name: string | null;
+  submitted_by_email: string | null;
+}
+
+/**
+ * One row of the subscriber list.
+ *
+ * `storedStatus` vs `liveStatus` is the important distinction: nothing
+ * flips the stored column when a date passes, so `liveStatus` (derived
+ * from the timestamps) is what the UI must display.
+ */
+export interface SubscriberRow {
+  accountId: string;
+  accountName: string;
+  isBanned: boolean;
+  createdAt: string;
+  ownerName: string | null;
+  ownerEmail: string | null;
+
+  storedStatus: string;
+  liveStatus: 'trialing' | 'active' | 'expired' | 'none';
+  isBlocked: boolean;
+  inGracePeriod: boolean;
+  daysLeft: number | null;
+  endsAt: string | null;
+
+  planName: string | null;
+  cycleLabel: string | null;
+  trialEndsAt: string | null;
+  subscriptionStartedAt: string | null;
+  subscriptionEndsAt: string | null;
+  note: string | null;
+}
+
+export interface SubscriberCounts {
+  total: number;
+  trialing: number;
+  active: number;
+  expired: number;
+  none: number;
+  blocked: number;
+}
+
 export interface ContactSubmission {
   id: string;
   name: string;
