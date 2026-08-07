@@ -12,6 +12,7 @@ import { INTERACTIVE_LIMITS } from "@/lib/whatsapp/meta-api";
 import {
   validateInteractivePayload,
   type InteractiveButtonsPayload,
+  type InteractiveCtaUrlPayload,
   type InteractiveListPayload,
   type InteractiveMessagePayload,
 } from "@/lib/whatsapp/interactive";
@@ -52,6 +53,10 @@ export function blankListPayload(): InteractiveListPayload {
   };
 }
 
+export function blankCtaUrlPayload(): InteractiveCtaUrlPayload {
+  return { kind: "cta_url", body: "", button_label: "", url: "" };
+}
+
 interface InteractiveBuilderProps {
   value: InteractiveMessagePayload;
   onChange: (payload: InteractiveMessagePayload) => void;
@@ -77,13 +82,15 @@ export function InteractiveBuilder({
   const setField = (patch: Partial<InteractiveMessagePayload>) =>
     onChange({ ...value, ...patch } as InteractiveMessagePayload);
 
-  const switchKind = (kind: "buttons" | "list") => {
+  const switchKind = (kind: InteractiveMessagePayload["kind"]) => {
     if (kind === value.kind) return;
     const shared = { body: value.body, header: value.header, footer: value.footer };
     onChange(
       kind === "buttons"
         ? { ...blankButtonsPayload(), ...shared }
-        : { ...blankListPayload(), ...shared },
+        : kind === "cta_url"
+          ? { ...blankCtaUrlPayload(), ...shared }
+          : { ...blankListPayload(), ...shared },
     );
   };
 
@@ -101,6 +108,11 @@ export function InteractiveBuilder({
             active={value.kind === "list"}
             label="List"
             onClick={() => switchKind("list")}
+          />
+          <KindButton
+            active={value.kind === "cta_url"}
+            label="Link button"
+            onClick={() => switchKind("cta_url")}
           />
         </div>
 
@@ -141,19 +153,26 @@ export function InteractiveBuilder({
 
         {value.kind === "buttons" ? (
           <ButtonsEditor value={value} onChange={onChange} advanced={advanced} />
+        ) : value.kind === "cta_url" ? (
+          <CtaUrlEditor value={value} onChange={onChange} />
         ) : (
           <ListEditor value={value} onChange={onChange} advanced={advanced} />
         )}
 
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={advanced}
-            onChange={(e) => setAdvanced(e.target.checked)}
-            className="h-3.5 w-3.5 accent-primary"
-          />
-          Show reply IDs (advanced)
-        </label>
+        {/* Reply IDs only exist for taps that come back to us. A link
+            button opens the browser and reports nothing, so the toggle
+            would control nothing. */}
+        {value.kind !== "cta_url" && (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={advanced}
+              onChange={(e) => setAdvanced(e.target.checked)}
+              className="h-3.5 w-3.5 accent-primary"
+            />
+            Show reply IDs (advanced)
+          </label>
+        )}
 
         {!validation.ok && (
           <p className="text-xs text-red-400">{validation.error}</p>
@@ -252,6 +271,56 @@ function ButtonsEditor({
           Add button
         </Button>
       )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Link button editor
+// ------------------------------------------------------------
+
+function CtaUrlEditor({
+  value,
+  onChange,
+}: {
+  value: InteractiveCtaUrlPayload;
+  onChange: (p: InteractiveMessagePayload) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <Field
+        label="Button label"
+        counter={`${value.button_label.length}/${INTERACTIVE_LIMITS.buttonTitleMaxLength}`}
+      >
+        <Input
+          value={value.button_label}
+          maxLength={INTERACTIVE_LIMITS.buttonTitleMaxLength}
+          onChange={(e) => onChange({ ...value, button_label: e.target.value })}
+          placeholder="e.g. Book a slot"
+          className="bg-muted text-foreground"
+        />
+      </Field>
+
+      <Field label="Link">
+        <Input
+          value={value.url}
+          onChange={(e) => onChange({ ...value, url: e.target.value })}
+          placeholder="https://example.com/book"
+          inputMode="url"
+          className="bg-muted text-foreground"
+        />
+      </Field>
+
+      {/* The behavioural difference from reply buttons, said once and
+          plainly. Someone reaching for a link button on an automation or
+          flow step needs to know the tap is invisible to them, or they
+          will build a branch that never fires. */}
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Opens in the customer&apos;s browser. WhatsApp allows one link
+        button per message, and it cannot be combined with reply buttons.
+        You will not be notified when it is tapped, so this cannot be used
+        to branch an automation.
+      </p>
     </div>
   );
 }

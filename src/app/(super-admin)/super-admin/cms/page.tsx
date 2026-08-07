@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { 
+  BookOpen,
   FileText, 
   Settings, 
   LayoutTemplate, 
@@ -57,6 +58,15 @@ const cmsModules = [
     color: "text-rose-400",
     bgColor: "bg-rose-400/10",
     borderColor: "border-rose-400/20"
+  },
+  {
+    title: "Docs & Resources",
+    description: "Build the /docs page: grouped guides, feature links and badges.",
+    icon: BookOpen,
+    href: "/super-admin/cms/docs",
+    color: "text-amber-400",
+    bgColor: "bg-amber-400/10",
+    borderColor: "border-amber-400/20"
   }
 ];
 

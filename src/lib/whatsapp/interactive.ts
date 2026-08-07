@@ -68,9 +68,39 @@ export interface InteractiveListPayload {
   sections: InteractiveListSection[]
 }
 
+/**
+ * A single button that opens a URL — Meta's `cta_url` interactive type.
+ *
+ * WHY THIS IS A SEPARATE KIND rather than a `url` field on
+ * {@link InteractiveButton}: reply buttons and link buttons are different
+ * message types to WhatsApp and cannot be mixed. A reply button sends the
+ * tap back to you as a webhook; a CTA button opens the customer's browser
+ * and you never hear about it. Meta allows exactly ONE link button per
+ * message, and none of the three reply-button slots can hold a URL.
+ *
+ * So "add a link to this button" is impossible by design — this is the
+ * message type to use instead.
+ *
+ * https://developers.facebook.com/docs/whatsapp/cloud-api/messages/interactive-cta-url-messages/
+ */
+export interface InteractiveCtaUrlPayload {
+  kind: 'cta_url'
+  /** Body text shown above the button (≤ 1024 chars). */
+  body: string
+  /** Optional plain-text header (≤ 60 chars). */
+  header?: string
+  /** Optional grey footer line (≤ 60 chars). */
+  footer?: string
+  /** Visible button label (≤ 20 chars). */
+  button_label: string
+  /** Destination opened in the customer's browser. http(s) only. */
+  url: string
+}
+
 export type InteractiveMessagePayload =
   | InteractiveButtonsPayload
   | InteractiveListPayload
+  | InteractiveCtaUrlPayload
 
 export type InteractiveValidation =
   | { ok: true }
@@ -223,7 +253,57 @@ export function validateInteractivePayload(
     return ok()
   }
 
-  return fail('Interactive message must be reply buttons or a list.')
+  if (p.kind === 'cta_url') {
+    const cta = p as InteractiveCtaUrlPayload
+    if (
+      typeof cta.button_label !== 'string' ||
+      cta.button_label.trim() === ''
+    ) {
+      return fail('The link button needs a label.')
+    }
+    if (cta.button_label.length > INTERACTIVE_LIMITS.buttonTitleMaxLength) {
+      return fail(
+        `Button label exceeds the ${INTERACTIVE_LIMITS.buttonTitleMaxLength}-character limit.`,
+      )
+    }
+    return validateCtaUrl(cta.url)
+  }
+
+  return fail('Interactive message must be reply buttons, a list, or a link button.')
+}
+
+/**
+ * Validate a CTA button's destination.
+ *
+ * Restricted to http and https deliberately. WhatsApp will not open
+ * anything else, but more importantly the label hides the destination
+ * from the customer — they tap words, not a visible link — so an
+ * unchecked scheme here would let a `javascript:` or `data:` URL reach a
+ * recipient with nothing on screen to warn them. The allowlist keeps this
+ * a link button rather than an arbitrary payload delivery mechanism.
+ */
+export function validateCtaUrl(raw: unknown): InteractiveValidation {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return fail('Add the link the button should open.')
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(raw.trim())
+  } catch {
+    return fail(
+      'That link is not a valid URL. Include the full address, starting with https://',
+    )
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return fail('Links must start with http:// or https://')
+  }
+  if (!parsed.hostname) {
+    return fail('That link is missing a domain name.')
+  }
+
+  return ok()
 }
 
 /**
@@ -235,5 +315,7 @@ export function interactivePayloadPreviewText(
 ): string {
   const body = payload.body?.trim()
   if (body) return body
-  return payload.kind === 'buttons' ? '[buttons]' : '[list]'
+  if (payload.kind === 'buttons') return '[buttons]'
+  if (payload.kind === 'cta_url') return '[link button]'
+  return '[list]'
 }

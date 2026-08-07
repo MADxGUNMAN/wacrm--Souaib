@@ -11,12 +11,25 @@ import {
   Shield,
   CreditCard,
   Building2,
+  Gauge,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { useMetaSDK } from '@/components/providers/meta-sdk-provider';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import {
+  deriveVerificationState,
+  resolveHealthIssueLink,
+  type HealthSummary,
+} from '@/lib/whatsapp/health';
+import type {
+  MessagingLimit,
+  NameReview,
+  Throughput,
+  UsageTotals,
+} from '@/lib/whatsapp/limits';
+import { usagePercent, type InitiatedUsage } from '@/lib/whatsapp/usage';
 import { SettingsPanelHead } from './settings-panel-head';
 import { WhatsAppConnectModal } from './whatsapp-connect-modal';
 
@@ -42,6 +55,14 @@ interface MetaAccountInfo {
     account_review_status: string | null;
     business_verification_status: string | null;
   };
+  health?: HealthSummary | null;
+  limits?: {
+    messaging: MessagingLimit | null;
+    throughput: Throughput | null;
+    nameReview: NameReview | null;
+    usage: UsageTotals | null;
+    initiated: InitiatedUsage | null;
+  } | null;
 }
 
 // WhatsApp icon SVG path
@@ -298,6 +319,49 @@ export function WhatsAppSetup() {
 
   const isConnected = Boolean(config);
 
+  // ── Derived checklist state ────────────────────────────────
+  // Both of these used to be hardcoded: step 2 always claimed "Action
+  // Required" once connected, and step 3 always said "Optional" no matter
+  // what Meta reported. They now follow the live account.
+  const health = metaInfo?.health ?? null;
+  const readiness = health?.readiness ?? 'unknown';
+  const verification = deriveVerificationState(
+    metaInfo?.waba?.business_verification_status,
+  );
+
+  // Only claim there is something to fix when Meta says sending is
+  // blocked. `unknown` renders as neutral guidance, never as an alarm —
+  // an unreadable health field is our problem, not the customer's.
+  const sendingBlocked = readiness === 'blocked';
+  const sendingLimited = readiness === 'limited';
+  const sendingReady = readiness === 'available';
+
+  // Limits panel. Rendered only when Meta returned at least one figure,
+  // so an account on an API version that exposes none of these sees no
+  // card rather than a grid of "Not reported".
+  const limits = metaInfo?.limits ?? null;
+  const hasLimitData = Boolean(
+    limits &&
+      (limits.messaging ||
+        limits.usage ||
+        limits.throughput ||
+        (limits.nameReview && limits.nameReview.state !== 'unknown')),
+  );
+
+  // Usage against the rolling allowance. `initiated` is OUR count of
+  // unique customers we opened a conversation with — the same unit as the
+  // limit, which is what makes the comparison valid.
+  const initiated = limits?.initiated ?? null;
+  const usedPercent = initiated
+    ? usagePercent(initiated.businessInitiated, limits?.messaging?.perDay)
+    : null;
+  const remainingLabel =
+    initiated && limits?.messaging?.perDay
+      ? new Intl.NumberFormat().format(
+          Math.max(0, limits.messaging.perDay - initiated.businessInitiated),
+        )
+      : null;
+
   return (
     <section className="animate-in fade-in-50 duration-200">
       {/* Page Header */}
@@ -404,6 +468,208 @@ export function WhatsAppSetup() {
         </Card>
       )}
 
+      {/* ─── Limits & usage ───
+          Answers the question "Limited" raises but never resolves: limited
+          to WHAT. Only rendered when Meta actually gave us at least one of
+          these figures — an empty card of dashes would be worse than no
+          card. */}
+      {isConnected && limits && hasLimitData ? (
+        <Card className="mb-8 shadow-sm">
+          <CardContent className="py-5">
+            <div className="mb-4 flex items-center gap-2">
+              <Gauge className="size-4 text-primary" />
+              <h2 className="text-sm font-semibold text-foreground">
+                Sending limits &amp; usage
+              </h2>
+              {metaInfoLoading ? (
+                <Loader2 className="size-3 animate-spin text-muted-foreground" />
+              ) : null}
+            </div>
+
+            <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+              {/* Messaging limit. Labelled in CUSTOMERS, not messages —
+                  Meta counts unique people you start a conversation with,
+                  and calling it "messages per day" would be wrong. */}
+              <div className="space-y-1 bg-card p-4">
+                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                  Daily limit
+                </span>
+                {limits.messaging ? (
+                  <>
+                    {/* Used-of-limit, not just the limit. Both sides are
+                        unique customers started in a rolling 24h, so this
+                        comparison is unit-correct — unlike the 30-day
+                        message count, which must never be divided by it. */}
+                    <p className="text-xl font-bold text-foreground">
+                      {initiated ? (
+                        <>
+                          {new Intl.NumberFormat().format(initiated.businessInitiated)}
+                          <span className="text-sm font-medium text-muted-foreground">
+                            {' '}
+                            / {limits.messaging.label}
+                          </span>
+                        </>
+                      ) : (
+                        limits.messaging.label
+                      )}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      new customers per 24 hours
+                    </p>
+                    {usedPercent !== null ? (
+                      <div className="pt-1.5">
+                        <div
+                          className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+                          role="progressbar"
+                          aria-valuenow={usedPercent}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-label="Share of the 24-hour messaging limit used"
+                        >
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              usedPercent >= 90
+                                ? 'bg-red-500'
+                                : usedPercent >= 70
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-500'
+                            }`}
+                            style={{ width: `${Math.max(usedPercent, 2)}%` }}
+                          />
+                        </div>
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          {usedPercent}% used · {remainingLabel} left
+                        </p>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="pt-1 text-sm text-muted-foreground">
+                    Not reported
+                  </p>
+                )}
+              </div>
+
+              {/* Volume. Deliberately NOT shown as a fraction of the limit
+                  above: that counts messages, the limit counts unique
+                  customers, so a progress bar would be false arithmetic. */}
+              <div className="space-y-1 bg-card p-4">
+                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                  Sent · last {limits.usage?.days ?? 30} days
+                </span>
+                {limits.usage ? (
+                  <>
+                    <p className="text-xl font-bold text-foreground">
+                      {new Intl.NumberFormat().format(limits.usage.sent)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Intl.NumberFormat().format(limits.usage.delivered)}{' '}
+                      delivered
+                      {limits.usage.deliveryRate !== null
+                        ? ` · ${limits.usage.deliveryRate}%`
+                        : ''}
+                    </p>
+                  </>
+                ) : (
+                  <p className="pt-1 text-sm text-muted-foreground">
+                    Not reported
+                  </p>
+                )}
+              </div>
+
+              {/* Display name — the usual reason a healthy account is
+                  stuck on the lowest limit. */}
+              <div className="space-y-1 bg-card p-4">
+                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                  Display name
+                </span>
+                {limits.nameReview && limits.nameReview.state !== 'unknown' ? (
+                  <>
+                    <p
+                      className={`text-sm font-semibold ${
+                        limits.nameReview.state === 'approved'
+                          ? 'text-emerald-500'
+                          : limits.nameReview.state === 'pending'
+                            ? 'text-blue-500'
+                            : 'text-amber-500'
+                      }`}
+                    >
+                      {limits.nameReview.label}
+                    </p>
+                    {limits.nameReview.detail ? (
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {limits.nameReview.detail}
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="pt-1 text-sm text-muted-foreground">
+                    Not reported
+                  </p>
+                )}
+              </div>
+
+              {/* Throughput — speed, as distinct from daily volume. */}
+              <div className="space-y-1 bg-card p-4">
+                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                  Send speed
+                </span>
+                {limits.throughput ? (
+                  <>
+                    <p className="text-sm font-semibold text-foreground capitalize">
+                      {limits.throughput.level.toLowerCase().replace(/_/g, ' ')}
+                    </p>
+                    {limits.throughput.description ? (
+                      <p className="text-xs text-muted-foreground">
+                        {limits.throughput.description}
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="pt-1 text-sm text-muted-foreground">
+                    Not reported
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* The two facts most people get wrong about this limit, said
+                once, plainly, instead of in a tooltip nobody opens. */}
+            <div className="mt-3 space-y-1.5 text-xs leading-relaxed text-muted-foreground">
+              <p>
+                The daily limit counts unique customers you start a
+                conversation with, not total messages — replies inside an open
+                24-hour conversation do not count towards it. The limit itself
+                comes from Meta and applies to your whole business portfolio,
+                shared across every number in it.
+              </p>
+              {/* Says plainly whose number this is. Meta publishes the
+                  limit but no consumption figure, so the used count is
+                  ours and can read low if messages were sent from another
+                  number on the same portfolio or outside this CRM. */}
+              {initiated ? (
+                <p>
+                  The used figure is counted by Replai from your sends in the
+                  last {initiated.windowHours} hours — Meta does not publish a
+                  running total. If another number shares your portfolio, or
+                  messages were sent outside this CRM, Meta&apos;s figure will
+                  be higher than this.
+                  {initiated.withinServiceWindow > 0 ? (
+                    <>
+                      {' '}
+                      A further {initiated.withinServiceWindow} contact
+                      {initiated.withinServiceWindow === 1 ? ' was' : 's were'}{' '}
+                      messaged inside an open conversation, which is free and
+                      not counted here.
+                    </>
+                  ) : null}
+                </p>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* ─── Steps ─── */}
       <div className="space-y-6">
         {/* ── Step 1: Get Your WhatsApp Business API ── */}
@@ -492,17 +758,34 @@ export function WhatsAppSetup() {
           </div>
         </div>
 
-        {/* ── Step 2: Add Payment Method ── */}
+        {/* ── Step 2: Billing & sending readiness ──
+            Driven by Meta's `health_status`. Note what is NOT claimed: a
+            green state says "Meta will let you send", not "a payment
+            method exists" — there is no Graph field for the latter, and
+            asserting it would be the same invention as the old permanent
+            warning, only flipped. */}
         <div className="rounded-xl border border-border bg-card p-6">
           <div className="flex items-start gap-4">
             <div
               className={`flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
-                isConnected
-                  ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
-                  : 'bg-muted text-muted-foreground'
+                !isConnected
+                  ? 'bg-muted text-muted-foreground'
+                  : sendingReady
+                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400'
+                    : sendingLimited
+                      ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400'
+                      : sendingBlocked
+                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
+                        : 'bg-muted text-muted-foreground'
               }`}
             >
-              {isConnected ? (
+              {!isConnected ? (
+                '2'
+              ) : sendingReady || sendingLimited ? (
+                // Limited still means messages go out, so it earns a tick
+                // rather than a warning triangle.
+                <CheckCircle2 className="size-4" />
+              ) : sendingBlocked ? (
                 <AlertTriangle className="size-4" />
               ) : (
                 '2'
@@ -510,103 +793,280 @@ export function WhatsAppSetup() {
             </div>
             <div className={`flex-1 space-y-3 ${!isConnected ? 'opacity-50' : ''}`}>
               <div className="flex items-center gap-3 flex-wrap">
-                <h3 className="text-base font-semibold text-foreground">Add Payment Method</h3>
-                {isConnected && (
+                <h3 className="text-base font-semibold text-foreground">
+                  Payment method &amp; sending
+                </h3>
+                {isConnected && metaInfoLoading ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                    <Loader2 className="size-3 animate-spin" />
+                    Checking with Meta
+                  </span>
+                ) : null}
+                {isConnected && !metaInfoLoading && sendingReady ? (
+                  <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400">
+                    Ready to send
+                  </span>
+                ) : null}
+                {isConnected && !metaInfoLoading && sendingBlocked ? (
                   <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
                     Action Required
                   </span>
-                )}
+                ) : null}
+                {isConnected && !metaInfoLoading && sendingLimited ? (
+                  <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-900/50 dark:text-blue-400">
+                    Can send · limited
+                  </span>
+                ) : null}
               </div>
+
               <p className="text-sm text-muted-foreground">
-                Add a payment method in Facebook Business Manager to send template messages and
-                enable bulk messaging.
+                {sendingReady
+                  ? 'Meta reports your account can send messages. Nothing to do here.'
+                  : sendingLimited
+                    ? 'Meta reports you can send messages, but with a restriction. Your broadcasts will still go out.'
+                    : 'A payment method in Facebook Business Manager is required to send template messages and run broadcasts.'}
               </p>
 
-              {isConnected && (
+              {isConnected && !metaInfoLoading ? (
                 <>
-                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
-                    <div className="flex items-center gap-2 mb-3">
-                      <AlertTriangle className="size-4 text-amber-500" />
-                      <span className="text-sm font-medium text-amber-600 dark:text-amber-400">
-                        Follow these steps to complete your payment setup:
-                      </span>
+                  {/* Meta's own wording for each problem, plus its suggested
+                      fix. Rendering their text rather than our guess means
+                      this stays correct as Meta changes requirements. */}
+                  {sendingBlocked && health && health.blockers.length > 0 ? (
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+                      <div className="mb-3 flex items-center gap-2">
+                        <AlertTriangle className="size-4 text-amber-500" />
+                        <span className="text-sm font-medium text-amber-600 dark:text-amber-400">
+                          Meta is blocking sending for this reason:
+                        </span>
+                      </div>
+                      <ul className="space-y-4 text-sm">
+                        {health.blockers.map((blocker, index) => {
+                          const link = resolveHealthIssueLink(
+                            blocker.description,
+                            config?.waba_id,
+                          );
+                          return (
+                            <li key={blocker.code ?? index}>
+                              <p className="text-foreground">{blocker.description}</p>
+                              {blocker.solution ? (
+                                <p className="mt-1 text-muted-foreground">
+                                  {blocker.solution}
+                                </p>
+                              ) : null}
+                              <a
+                                href={link.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
+                              >
+                                {link.label}
+                                <ExternalLink className="size-3" />
+                              </a>
+                            </li>
+                          );
+                        })}
+                      </ul>
                     </div>
-                    <ol className="space-y-2 text-sm text-muted-foreground list-decimal list-inside">
-                      <li>
-                        Click <strong className="text-foreground">Add Payment Method</strong> and add
-                        your card in Facebook Business Manager.
-                      </li>
-                      <li>Set the payment method as default from the three-dot menu.</li>
-                      <li>Complete business billing info. For India, add your GST number.</li>
-                    </ol>
-                  </div>
-                  <div className="pt-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        window.open(
-                          'https://business.facebook.com/settings/payment-methods',
-                          '_blank',
-                          'noopener,noreferrer',
-                        )
-                      }
-                    >
-                      <CreditCard className="mr-2 size-3.5" />
-                      Add Payment Method
-                      <ExternalLink className="ml-2 size-3" />
-                    </Button>
-                  </div>
+                  ) : null}
+
+                  {sendingLimited && health && health.limitations.length > 0 ? (
+                    <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-4">
+                      <div className="mb-2 flex items-center gap-2">
+                        <AlertTriangle className="size-4 text-blue-500" />
+                        <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
+                          Why your sending is limited:
+                        </span>
+                      </div>
+                      <ul className="space-y-3 text-sm text-muted-foreground">
+                        {health.limitations.map((note) => {
+                          const link = resolveHealthIssueLink(note, config?.waba_id);
+                          return (
+                            <li key={note}>
+                              <p>{note}</p>
+                              {/* Meta gives no URL with these notes, so this
+                                  is our mapping from the wording to the page
+                                  that resolves it. */}
+                              <a
+                                href={link.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
+                              >
+                                {link.label}
+                                <ExternalLink className="size-3" />
+                              </a>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ) : null}
+
+                  {/* Neutral fallback. Reached when Meta did not return a
+                      health status at all — an older API version, or a
+                      token without the permission. Guidance, not an alarm:
+                      we genuinely do not know, so we must not imply the
+                      customer has forgotten something. */}
+                  {readiness === 'unknown' ? (
+                    <div className="rounded-lg border border-border bg-muted/40 p-4">
+                      <p className="mb-2 text-sm text-muted-foreground">
+                        We could not read your billing status from Meta, so
+                        check it directly if broadcasts are not sending:
+                      </p>
+                      <ol className="list-inside list-decimal space-y-2 text-sm text-muted-foreground">
+                        <li>
+                          Add a card in Facebook Business Manager, then set it as
+                          default from the three-dot menu.
+                        </li>
+                        <li>
+                          Complete your business billing info. In India, add your
+                          GST number.
+                        </li>
+                      </ol>
+                    </div>
+                  ) : null}
+
+                  {!sendingReady ? (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {/* Payment settings are only the right destination
+                          when Meta is actually blocking us, or when we
+                          could not read the status. Sending someone there
+                          to fix an unapproved display name is a wild
+                          goose chase. */}
+                      {!sendingLimited ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            window.open(
+                              'https://business.facebook.com/settings/payment-methods',
+                              '_blank',
+                              'noopener,noreferrer',
+                            )
+                          }
+                        >
+                          <CreditCard className="mr-2 size-3.5" />
+                          Open payment settings
+                          <ExternalLink className="ml-2 size-3" />
+                        </Button>
+                      ) : null}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void fetchMetaInfo()}
+                      >
+                        <RotateCcw className="mr-2 size-3.5" />
+                        Re-check
+                      </Button>
+                    </div>
+                  ) : null}
                 </>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
 
-        {/* ── Step 3: Facebook Business Verification ── */}
+        {/* ── Step 3: Facebook Business Verification ──
+            `business_verification_status` was already being fetched from
+            the WABA and thrown away, so this step said "Optional" to a
+            business that had finished verifying. It now follows Meta. */}
         <div className="rounded-xl border border-border bg-card p-6">
           <div className="flex items-start gap-4">
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-bold text-muted-foreground">
-              3
+            <div
+              className={`flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
+                isConnected && verification === 'verified'
+                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400'
+                  : isConnected && verification === 'rejected'
+                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
+                    : 'bg-muted text-muted-foreground'
+              }`}
+            >
+              {isConnected && verification === 'verified' ? (
+                <CheckCircle2 className="size-4" />
+              ) : isConnected && verification === 'rejected' ? (
+                <AlertTriangle className="size-4" />
+              ) : (
+                '3'
+              )}
             </div>
             <div className={`flex-1 space-y-3 ${!isConnected ? 'opacity-50' : ''}`}>
               <div className="flex items-center gap-3 flex-wrap">
                 <h3 className="text-base font-semibold text-foreground">
                   Facebook Business Verification
                 </h3>
-                <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
-                  Optional
-                </span>
+                {isConnected && metaInfoLoading ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                    <Loader2 className="size-3 animate-spin" />
+                    Checking with Meta
+                  </span>
+                ) : verification === 'verified' ? (
+                  <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400">
+                    Verified
+                  </span>
+                ) : verification === 'pending' ? (
+                  <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-900/50 dark:text-blue-400">
+                    In review
+                  </span>
+                ) : verification === 'rejected' ? (
+                  <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
+                    Needs attention
+                  </span>
+                ) : (
+                  // Covers both `not_started` and `unknown` — in neither
+                  // case do we have grounds to nag.
+                  <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                    Optional
+                  </span>
+                )}
               </div>
+
               <p className="text-sm text-muted-foreground">
-                Verify your Facebook business to display your brand name instead of your phone number
-                and increase your messaging limits.
+                {verification === 'verified'
+                  ? 'Your business is verified with Meta. Your brand name can show in place of your phone number, and your messaging limits are raised.'
+                  : verification === 'pending'
+                    ? 'Meta is reviewing your business verification. Nothing to do until they respond — this usually takes a few days.'
+                    : 'Verify your Facebook business to display your brand name instead of your phone number and increase your messaging limits.'}
               </p>
 
-              <div className="text-sm text-muted-foreground">
-                <p className="font-medium text-foreground mb-1.5">Requirements:</p>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>Legal business document with business name</li>
-                  <li>Working website</li>
-                </ul>
-              </div>
+              {/* Requirements are only useful to someone who still has to
+                  do this. Showing them to a verified business is noise. */}
+              {verification !== 'verified' && verification !== 'pending' ? (
+                <div className="text-sm text-muted-foreground">
+                  <p className="mb-1.5 font-medium text-foreground">Requirements:</p>
+                  <ul className="list-inside list-disc space-y-1">
+                    <li>Legal business document with business name</li>
+                    <li>Working website</li>
+                  </ul>
+                </div>
+              ) : null}
 
-              <div className="pt-1">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    window.open(
-                      'https://business.facebook.com/settings/security',
-                      '_blank',
-                      'noopener,noreferrer',
-                    )
-                  }
-                >
-                  Verify Business
-                  <ExternalLink className="ml-2 size-3" />
-                </Button>
-              </div>
+              {verification !== 'verified' ? (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      window.open(
+                        'https://business.facebook.com/settings/security',
+                        '_blank',
+                        'noopener,noreferrer',
+                      )
+                    }
+                  >
+                    {verification === 'pending' ? 'View status' : 'Verify Business'}
+                    <ExternalLink className="ml-2 size-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void fetchMetaInfo()}
+                  >
+                    <RotateCcw className="mr-2 size-3.5" />
+                    Re-check
+                  </Button>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>

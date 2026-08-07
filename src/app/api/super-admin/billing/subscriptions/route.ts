@@ -13,6 +13,10 @@
 // stale by design. Filtering on it in SQL would show lapsed accounts as
 // trialing. `resolveSubscriptionState` derives the truth from the
 // timestamps, so filtering happens in memory after that.
+//
+// The list is CUSTOMERS, not accounts. Workspaces owned by a super admin
+// are excluded from both the rows and the counts — see the filter in GET
+// for why that is a correctness requirement rather than cosmetics.
 // ============================================================
 
 import { NextResponse } from 'next/server';
@@ -64,19 +68,46 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: accountsRes.error.message }, { status: 500 });
     }
 
-    const rows = accountsRes.data ?? [];
+    const allRows = accountsRes.data ?? [];
 
-    const ownerIds = [...new Set(rows.map((r) => r.owner_user_id).filter(Boolean))];
+    const ownerIds = [
+      ...new Set(allRows.map((r) => r.owner_user_id).filter(Boolean)),
+    ];
     const { data: owners } = ownerIds.length
       ? await admin
           .from('profiles')
-          .select('user_id, full_name, email')
+          .select('user_id, full_name, email, is_super_admin')
           .in('user_id', ownerIds)
       : { data: [] };
 
     const ownersById = new Map(
       (owners ?? []).map((o: Record<string, unknown>) => [o.user_id, o]),
     );
+
+    // ---- Drop the platform's own workspaces ----
+    //
+    // Every signup gets an `accounts` row and a trial, including the
+    // super admin who installed the product. But `proxy.ts` redirects
+    // super admins away from every CRM path and skips the subscription
+    // gate entirely for them, so those workspaces can never be blocked,
+    // never pay, and never churn.
+    //
+    // Leaving them in was not merely untidy, it corrupted the numbers an
+    // operator reads: the platform's own workspace inflated Total and
+    // Trialing, and once its unused trial date passed it would have
+    // appeared under Expired — reporting a lapsed customer where none
+    // existed. Filtered here, before BOTH the row mapping and the
+    // tallies, so the list and the counters cannot disagree.
+    //
+    // Only an explicit `true` excludes a row: an account whose owner has
+    // no profile, or no owner at all, is a real workspace with a data
+    // problem and must stay visible rather than being silently hidden.
+    const rows = allRows.filter((row) => {
+      const owner = ownersById.get(row.owner_user_id) as
+        | Record<string, unknown>
+        | undefined;
+      return owner?.is_super_admin !== true;
+    });
 
     const now = new Date();
     let subscribers = rows.map((row) => {

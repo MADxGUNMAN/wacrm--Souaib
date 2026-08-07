@@ -18,6 +18,10 @@ import type {
   LandingImage,
   LandingFaq,
   ContactPageSettings,
+  DocsPageSettings,
+  DocsCategory,
+  DocsCategoryWithResources,
+  DocsResource,
 } from '@/types/super-admin';
 
 /**
@@ -271,4 +275,82 @@ export async function getContactPageSettings(): Promise<ContactPageSettings | nu
   }
 
   return data as ContactPageSettings | null;
+}
+
+// ============================================================
+// Docs / resource centre (migration 054)
+// ============================================================
+
+/**
+ * Fetch the singleton docs page settings row.
+ *
+ * Returns null when the row is missing, which the page treats as "use
+ * built-in defaults" rather than as an error — the page must still
+ * render if an operator deletes the row.
+ */
+export async function getDocsPageSettings(): Promise<DocsPageSettings | null> {
+  const admin = supabaseAdmin();
+  const { data, error } = await admin
+    .from('docs_page_settings')
+    .select('*')
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[cms] getDocsPageSettings error:', error);
+    return null;
+  }
+
+  return data as DocsPageSettings | null;
+}
+
+/**
+ * Fetch visible docs categories with their visible resources attached.
+ *
+ * Two queries joined in memory rather than a PostgREST embed. Embeds
+ * resolve through the schema cache, which this project has been bitten
+ * by before (issue #294) — and here a silent embed failure would render
+ * every category as empty rather than raising, which is the worst
+ * outcome for a page whose whole job is showing links.
+ *
+ * Categories with no visible resources are dropped: an empty card is
+ * worse than no card.
+ */
+export async function getDocsCategories(): Promise<DocsCategoryWithResources[]> {
+  const admin = supabaseAdmin();
+
+  const [categoriesRes, resourcesRes] = await Promise.all([
+    admin
+      .from('docs_categories')
+      .select('*')
+      .eq('is_visible', true)
+      .order('position', { ascending: true }),
+    admin
+      .from('docs_resources')
+      .select('*')
+      .eq('is_visible', true)
+      .order('position', { ascending: true }),
+  ]);
+
+  if (categoriesRes.error) {
+    console.error('[cms] getDocsCategories error:', categoriesRes.error);
+    return [];
+  }
+  if (resourcesRes.error) {
+    console.error('[cms] getDocsResources error:', resourcesRes.error);
+  }
+
+  const byCategory = new Map<string, DocsResource[]>();
+  for (const row of (resourcesRes.data ?? []) as DocsResource[]) {
+    const list = byCategory.get(row.category_id);
+    if (list) list.push(row);
+    else byCategory.set(row.category_id, [row]);
+  }
+
+  return ((categoriesRes.data ?? []) as DocsCategory[])
+    .map((category) => ({
+      ...category,
+      resources: byCategory.get(category.id) ?? [],
+    }))
+    .filter((category) => category.resources.length > 0);
 }

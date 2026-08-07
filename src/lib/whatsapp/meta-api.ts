@@ -833,6 +833,103 @@ export async function sendInteractiveButtons(
   return { messageId: data.messages[0].id }
 }
 
+export interface SendInteractiveCtaUrlArgs {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  /** Body text — what the customer reads above the button. */
+  bodyText: string
+  /** Visible button label (≤ 20 chars). */
+  buttonLabel: string
+  /** Destination opened in the customer's browser. */
+  url: string
+  /** Optional plain-text header (≤ 60 chars). */
+  headerText?: string
+  /** Optional grey footer line (≤ 60 chars). */
+  footerText?: string
+  /** Meta's message_id of the message being replied to (quote preview). */
+  contextMessageId?: string
+}
+
+/**
+ * Send a single button that opens a URL — Meta's `cta_url` type.
+ *
+ * Distinct from {@link sendInteractiveButtons} in a way that matters:
+ * a reply button returns a webhook when tapped, whereas this opens the
+ * customer's browser and produces no webhook at all. There is exactly one
+ * button, and it cannot be combined with reply buttons in the same
+ * message — Meta treats them as different message types.
+ *
+ * The point of it is that the customer sees a label instead of a long,
+ * opaque link, which they are far more likely to tap.
+ *
+ * https://developers.facebook.com/docs/whatsapp/cloud-api/messages/interactive-cta-url-messages/
+ */
+export async function sendInteractiveCtaUrl(
+  args: SendInteractiveCtaUrlArgs
+): Promise<MetaSendResult> {
+  const {
+    phoneNumberId, accessToken, to,
+    bodyText, buttonLabel, url: targetUrl, headerText, footerText, contextMessageId,
+  } = args
+  validateInteractiveBody(bodyText)
+  validateInteractiveHeaderFooter(headerText, footerText)
+  if (!buttonLabel) throw new Error('Interactive CTA URL requires a buttonLabel.')
+  if (buttonLabel.length > INTERACTIVE_LIMITS.buttonTitleMaxLength) {
+    throw new Error(
+      `Interactive CTA URL buttonLabel "${buttonLabel}" exceeds ${INTERACTIVE_LIMITS.buttonTitleMaxLength} chars.`
+    )
+  }
+  if (!targetUrl) throw new Error('Interactive CTA URL requires a url.')
+  // Scheme allowlist, mirroring the pre-flight validator in
+  // interactive.ts. The label hides the destination from the customer,
+  // so a non-http scheme must never reach a handset.
+  let parsedTarget: URL
+  try {
+    parsedTarget = new URL(targetUrl)
+  } catch {
+    throw new Error(`Interactive CTA URL "${targetUrl}" is not a valid URL.`)
+  }
+  if (parsedTarget.protocol !== 'http:' && parsedTarget.protocol !== 'https:') {
+    throw new Error('Interactive CTA URL must use http or https.')
+  }
+
+  const interactive: Record<string, unknown> = {
+    type: 'cta_url',
+    body: { text: bodyText },
+    action: {
+      name: 'cta_url',
+      parameters: { display_text: buttonLabel, url: targetUrl },
+    },
+  }
+  if (headerText) interactive.header = { type: 'text', text: headerText }
+  if (footerText) interactive.footer = { text: footerText }
+
+  const body: Record<string, unknown> = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'interactive',
+    interactive,
+  }
+  if (contextMessageId) body.context = { message_id: contextMessageId }
+
+  const endpoint = `${META_API_BASE}/${phoneNumberId}/messages`
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  return { messageId: data.messages[0].id }
+}
+
 export interface InteractiveListRow {
   /** Stable id sent back in the webhook when tapped (≤ 200 chars). */
   id: string

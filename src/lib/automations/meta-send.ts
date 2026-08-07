@@ -2,6 +2,7 @@ import { sendTextMessage, sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive'
 import {
   engineSendInteractiveButtons,
+  engineSendInteractiveCtaUrl,
   engineSendInteractiveList,
 } from '@/lib/flows/meta-send'
 import { decrypt } from '@/lib/whatsapp/encryption'
@@ -89,6 +90,16 @@ export async function engineSendInteractive(
       headerText: payload.header,
       footerText: payload.footer,
       buttons: payload.buttons,
+    })
+  }
+  if (payload.kind === 'cta_url') {
+    return engineSendInteractiveCtaUrl({
+      ...common,
+      bodyText: payload.body,
+      headerText: payload.header,
+      footerText: payload.footer,
+      buttonLabel: payload.button_label,
+      url: payload.url,
     })
   }
   return engineSendInteractiveList({

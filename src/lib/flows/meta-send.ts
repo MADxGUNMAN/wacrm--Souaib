@@ -1,5 +1,6 @@
 import {
   sendInteractiveButtons,
+  sendInteractiveCtaUrl,
   sendInteractiveList,
   sendMediaMessage,
   sendTextMessage,
@@ -290,6 +291,18 @@ interface SendInteractiveListEngineArgs {
   footerText?: string
 }
 
+interface SendInteractiveCtaUrlEngineArgs {
+  accountId: string
+  userId: string
+  conversationId: string
+  contactId: string
+  bodyText: string
+  buttonLabel: string
+  url: string
+  headerText?: string
+  footerText?: string
+}
+
 /**
  * Send an interactive-button WhatsApp message from the Flows engine.
  *
@@ -317,9 +330,24 @@ export async function engineSendInteractiveList(
   return sendInteractiveViaMeta({ ...args, kind: 'list' })
 }
 
+/**
+ * Send a single link button from the engine.
+ *
+ * Note for flow authors: unlike buttons and lists, a CTA URL tap produces
+ * NO webhook — the customer's browser opens and WhatsApp tells us nothing.
+ * So this can present a link, but it can never be used as a branch point
+ * in a flow. `last_prompt_message_id` is still returned for consistency.
+ */
+export async function engineSendInteractiveCtaUrl(
+  args: SendInteractiveCtaUrlEngineArgs,
+): Promise<{ whatsapp_message_id: string }> {
+  return sendInteractiveViaMeta({ ...args, kind: 'cta_url' })
+}
+
 type SendInput =
   | (SendInteractiveButtonsEngineArgs & { kind: 'buttons' })
   | (SendInteractiveListEngineArgs & { kind: 'list' })
+  | (SendInteractiveCtaUrlEngineArgs & { kind: 'cta_url' })
 
 async function sendInteractiveViaMeta(
   input: SendInput,
@@ -363,6 +391,19 @@ async function sendInteractiveViaMeta(
         to: phone,
         bodyText: input.bodyText,
         buttons: input.buttons,
+        headerText: input.headerText,
+        footerText: input.footerText,
+      })
+      return r.messageId
+    }
+    if (input.kind === 'cta_url') {
+      const r = await sendInteractiveCtaUrl({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        to: phone,
+        bodyText: input.bodyText,
+        buttonLabel: input.buttonLabel,
+        url: input.url,
         headerText: input.headerText,
         footerText: input.footerText,
       })
@@ -426,7 +467,16 @@ async function sendInteractiveViaMeta(
           footer: input.footerText,
           buttons: input.buttons,
         }
-      : {
+      : input.kind === 'cta_url'
+        ? {
+            kind: 'cta_url',
+            body: input.bodyText,
+            header: input.headerText,
+            footer: input.footerText,
+            button_label: input.buttonLabel,
+            url: input.url,
+          }
+        : {
           kind: 'list',
           body: input.bodyText,
           header: input.headerText,

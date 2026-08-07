@@ -321,6 +321,69 @@ export interface ContactPageSettings {
 }
 
 // ============================================================
+// Docs / resource centre (migration 054)
+// ============================================================
+
+/** Singleton copy for the public /docs page. */
+export interface DocsPageSettings {
+  id: string;
+  eyebrow: string | null;
+  heading: string;
+  subheading: string | null;
+
+  show_search: boolean;
+  search_placeholder: string | null;
+
+  /** Legal docs are read live from `legal_pages`, never copied here. */
+  show_legal_section: boolean;
+  legal_heading: string | null;
+  legal_subheading: string | null;
+
+  show_support_section: boolean;
+  support_heading: string | null;
+  support_body: string | null;
+  support_cta_text: string | null;
+  support_cta_link: string | null;
+
+  extra_data: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DocsCategory {
+  id: string;
+  title: string;
+  description: string | null;
+  /** Lucide icon name, resolved through an allowlist in the component. */
+  icon_name: string;
+  position: number;
+  is_visible: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DocsResource {
+  id: string;
+  category_id: string;
+  title: string;
+  description: string | null;
+  href: string;
+  icon_name: string | null;
+  /** Small pill, e.g. "New", "Beta", "Owner only". */
+  badge_label: string | null;
+  is_external: boolean;
+  position: number;
+  is_visible: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A category with its resources attached, as the public page renders it. */
+export interface DocsCategoryWithResources extends DocsCategory {
+  resources: DocsResource[];
+}
+
+// ============================================================
 // Billing / subscriptions (migrations 050-052)
 // ============================================================
 
