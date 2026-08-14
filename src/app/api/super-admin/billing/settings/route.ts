@@ -19,6 +19,7 @@ import { NextResponse } from 'next/server';
 
 import { supabaseAdmin } from '@/lib/auth/admin-client';
 import { requireSuperAdmin } from '@/lib/super-admin/guard';
+import { normalisePlanFeatures, serialisePlanFeatures } from '@/lib/subscription/plans';
 import { isValidUpiId } from '@/lib/subscription/upi';
 import { ValidationError } from '@/lib/subscription/validation';
 
@@ -49,6 +50,17 @@ const TEXT_FIELDS = [
   'member_blocked_body',
   'member_blocked_note',
   'member_blocked_contact_label',
+  // ---- Day-based pricing display (migration 055) ----
+  'per_day_label',
+  'price_equals_template',
+  'features_heading',
+  'features_subheading',
+  // ---- Custom / enquiry card (migration 055) ----
+  'custom_plan_label',
+  'custom_plan_price_text',
+  'custom_plan_body',
+  'custom_plan_cta_text',
+  'custom_plan_cta_link',
 ] as const;
 
 /** Columns with a NOT NULL constraint — reject an attempt to clear them. */
@@ -70,7 +82,11 @@ const REQUIRED_TEXT_FIELDS = new Set<string>([
   'member_blocked_contact_label',
 ]);
 
-const BOOLEAN_FIELDS = ['is_enabled', 'member_blocked_show_owner_contact'] as const;
+const BOOLEAN_FIELDS = [
+  'is_enabled',
+  'member_blocked_show_owner_contact',
+  'show_custom_plan',
+] as const;
 const INTEGER_FIELDS = ['trial_days', 'grace_days'] as const;
 
 function buildPatch(body: Record<string, unknown>): Record<string, unknown> {
@@ -125,6 +141,22 @@ function buildPatch(body: Record<string, unknown>): Record<string, unknown> {
       );
     }
     patch[field] = n;
+  }
+
+  // The Custom card's bullet list is JSONB, not text, so it can't ride
+  // along in TEXT_FIELDS. It deliberately reuses the exact shape of
+  // subscription_plans.features so one normaliser/serialiser pair
+  // serves both — a second format would mean a second parser to keep
+  // in step for no gain.
+  if ('custom_plan_features' in body) {
+    const features = serialisePlanFeatures(normalisePlanFeatures(body.custom_plan_features));
+    if (features.length > 40) {
+      throw new ValidationError(
+        'The custom card can list at most 40 features',
+        'custom_plan_features',
+      );
+    }
+    patch.custom_plan_features = features;
   }
 
   return patch;

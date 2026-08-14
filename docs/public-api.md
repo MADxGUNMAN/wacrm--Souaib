@@ -294,6 +294,29 @@ things happen in your account. **Migration required:** apply
 | `message.received`       | An inbound message arrives from a contact         |
 | `message.status_updated` | A message you sent changed delivery status        |
 | `conversation.created`   | A new conversation is opened for a contact        |
+| `message.sent`           | An outbound message was sent **outside** this CRM |
+| `message.edited`         | A stored message was edited by its sender         |
+| `message.deleted`        | A stored message was deleted for everyone         |
+| `whatsapp.disconnected`  | Meta disconnected your WhatsApp number            |
+
+The last four exist for **WhatsApp Coexistence** — running one number on
+the WhatsApp Business App and the Cloud API at the same time.
+
+- `message.sent` fires when the business sends a message that did not go
+  through this API. Today that means one typed in the WhatsApp Business
+  App on a phone, which Meta mirrors to us. Check `sender_type` in the
+  payload rather than assuming: the event is named generically so that if
+  API sends ever emit it too, you do not have to learn a second name.
+- `message.edited` / `message.deleted` matter because editing and
+  deleting are everyday actions on a phone. If you mirror threads, you
+  need both, or your copy keeps text the sender has already corrected or
+  retracted. A delete is a **soft** delete on our side — the message
+  still exists, it just must not be displayed.
+- `whatsapp.disconnected` is worth subscribing to even if you ignore the
+  rest. A coexistence pairing breaks for several reasons (the Business
+  App not being opened for ~13 days is the most common), and without this
+  event your sends simply start failing with nothing to poll for. The
+  `reason` field carries Meta's code verbatim so you can act on it.
 
 ### Managing endpoints
 
@@ -337,6 +360,14 @@ delivery uuid you can dedupe on, and `data` varies by `event`:
 { "conversation_id": "…", "contact_id": "…" }
 // message.status_updated
 { "whatsapp_message_id": "wamid.…", "conversation_id": "…", "status": "delivered" }
+// message.sent — sender_type is currently always "business_app" (typed on a phone)
+{ "conversation_id": "…", "contact_id": "…", "whatsapp_message_id": "wamid.…", "content_type": "text", "text": "On my way", "sender_type": "business_app" }
+// message.edited — `text` is the NEW text; the original is not kept
+{ "whatsapp_message_id": "wamid.…", "text": "Corrected text" }
+// message.deleted
+{ "whatsapp_message_id": "wamid.…" }
+// whatsapp.disconnected — `reason` is Meta's code verbatim, and may be null
+{ "event": "PARTNER_REMOVED", "reason": "PRIMARY_INACTIVITY", "initiated_by": "SYSTEM", "waba_id": "…" }
 ```
 
 Headers: `X-Wacrm-Event`, `X-Wacrm-Webhook-Id`, and `X-Wacrm-Signature`.

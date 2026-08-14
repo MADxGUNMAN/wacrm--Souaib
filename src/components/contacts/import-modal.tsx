@@ -36,7 +36,9 @@ import {
   XCircle,
   AlertTriangle,
   Tag,
+  Download,
 } from 'lucide-react';
+import { downloadSampleCsv } from '@/lib/contacts/sample-csv';
 import { useTranslations } from 'next-intl';
 
 const DEFAULT_TAG_COLOR = '#3b82f6';
@@ -455,6 +457,18 @@ export function ImportModal({
               </>
             )}
           </div>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              downloadSampleCsv();
+            }}
+            className="flex items-center gap-1.5 self-center rounded-md px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 hover:text-primary"
+          >
+            <Download className="size-3.5" />
+            {t('downloadSample')}
+          </button>
 
           <input
             ref={fileInputRef}

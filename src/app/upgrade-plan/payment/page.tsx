@@ -16,7 +16,6 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  ArrowLeft,
   Check,
   CheckCircle2,
   Clock,
@@ -315,7 +314,9 @@ function PaymentPageInner() {
   if (verdict === 'rejected') {
     return (
       <div className="flex min-h-screen flex-col">
-        <UpgradeHeader showBackToDashboard={!subscription?.state.isBlocked} />
+        <UpgradeHeader 
+          backButton={{ href: '/upgrade-plan', label: 'Back to plans' }} 
+        />
         <main className="flex-1 px-4 py-10 sm:px-6">
           <div className="mx-auto max-w-lg">
             <div className="rounded-2xl border border-destructive/25 bg-card p-6 sm:p-8">
@@ -374,7 +375,9 @@ function PaymentPageInner() {
   if (pending || submitted) {
     return (
       <div className="flex min-h-screen flex-col">
-        <UpgradeHeader showBackToDashboard={!subscription?.state.isBlocked} />
+        <UpgradeHeader 
+          backButton={{ href: '/upgrade-plan', label: 'Back to plans' }} 
+        />
         <main className="flex-1 px-4 py-10 sm:px-6">
           <div className="mx-auto max-w-lg">
             <div className="rounded-2xl border border-amber-500/25 bg-card p-6 sm:p-8">
@@ -457,7 +460,9 @@ function PaymentPageInner() {
   if (error || !quote) {
     return (
       <div className="flex min-h-screen flex-col">
-        <UpgradeHeader showBackToDashboard={!subscription?.state.isBlocked} />
+        <UpgradeHeader 
+          backButton={{ href: '/upgrade-plan', label: 'Back to plans' }} 
+        />
         <main className="flex-1 px-4 py-10 sm:px-6">
           <div className="mx-auto max-w-lg text-center">
             <TriangleAlert className="mx-auto size-8 text-destructive" />
@@ -467,14 +472,6 @@ function PaymentPageInner() {
             <p className="mt-2 text-sm text-muted-foreground">
               {error ?? 'Could not prepare your payment.'}
             </p>
-            <button
-              type="button"
-              onClick={() => router.push('/upgrade-plan')}
-              className="mt-6 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-            >
-              <ArrowLeft className="size-4" />
-              Back to plans
-            </button>
           </div>
         </main>
       </div>
@@ -485,20 +482,14 @@ function PaymentPageInner() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <UpgradeHeader showBackToDashboard={!subscription?.state.isBlocked} />
+      <UpgradeHeader 
+        backButton={{ href: '/upgrade-plan', label: 'Back to plans' }} 
+      />
 
       <main className="flex-1 px-4 pb-16 sm:px-6">
         <div className="mx-auto max-w-2xl">
-          <button
-            type="button"
-            onClick={() => router.push('/upgrade-plan')}
-            className="mt-2 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ArrowLeft className="size-4" />
-            Back to plans
-          </button>
 
-          <div className="pt-6 pb-8 text-center">
+          <div className="pt-4 pb-6 text-center">
             <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
               {quote.paymentHeading}
             </h1>
@@ -511,98 +502,96 @@ function PaymentPageInner() {
           </div>
 
           {/* ---- Amount + QR ---- */}
-          <div className="rounded-2xl border border-border bg-card p-6 sm:p-8">
-            <div className="text-center">
-              <p className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
-                Amount to pay
-              </p>
-              <p className="mt-1 text-4xl font-bold tracking-tight text-foreground">
-                {formatCurrency(q.amount, q.currency)}
-              </p>
-            </div>
-
-            {quote.instructions ? (
-              <p className="mx-auto mt-5 max-w-md text-center text-sm leading-relaxed text-muted-foreground">
-                {quote.instructions}
-              </p>
-            ) : null}
-
-            {/* QR. The SVG is generated server-side by the `qrcode`
-                library from our own UPI URI — never from user input — so
-                injecting it as markup is safe. A white plate is forced
-                behind it because QR scanners need light-on-dark contrast
-                and the card is dark in dark mode. */}
-            <div className="mt-6 flex justify-center">
-              <div className="rounded-2xl border border-border bg-white p-4">
-                <div
-                  className="size-48 sm:size-56 [&>svg]:size-full"
-                  role="img"
-                  aria-label={`UPI QR code for ${formatCurrency(q.amount, q.currency)}`}
-                  dangerouslySetInnerHTML={{ __html: q.qrSvg }}
-                />
+          <div className="rounded-3xl border border-border bg-card p-6 sm:p-8 shadow-sm">
+            {/* Header / Amount */}
+            <div className="flex flex-col items-center justify-center gap-4 text-center sm:flex-row sm:justify-between sm:text-left sm:border-b sm:border-border sm:pb-6">
+              <div>
+                <p className="text-[11px] font-bold tracking-[0.08em] text-muted-foreground uppercase">
+                  Amount to pay
+                </p>
+                <p className="mt-1 text-4xl font-black tracking-tight text-foreground">
+                  {formatCurrency(q.amount, q.currency)}
+                </p>
               </div>
+              {quote.instructions ? (
+                <p className="max-w-[280px] text-[13px] leading-relaxed text-muted-foreground sm:text-right">
+                  {quote.instructions}
+                </p>
+              ) : null}
             </div>
 
-            <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
-              <QrCode className="size-3.5" />
-              Scan with any UPI app — GPay, PhonePe, Paytm, BHIM
-            </p>
+            {/* Content Grid */}
+            <div className="mt-6 sm:mt-8 grid gap-8 sm:grid-cols-2 sm:items-center">
+              {/* Left: QR Code */}
+              <div className="flex flex-col items-center">
+                <div className="rounded-2xl border border-border bg-white p-3 sm:p-4 shadow-sm transition-transform hover:scale-[1.02]">
+                  <div
+                    className="size-48 sm:size-52 [&>svg]:size-full"
+                    role="img"
+                    aria-label={`UPI QR code for ${formatCurrency(q.amount, q.currency)}`}
+                    dangerouslySetInnerHTML={{ __html: q.qrSvg }}
+                  />
+                </div>
+                <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-[13px] font-medium text-muted-foreground">
+                  <QrCode className="size-4 text-primary" />
+                  Scan with any UPI app
+                </p>
+              </div>
 
-            {/* ---- UPI id ---- */}
-            <div className="mt-6 rounded-xl bg-muted/40 p-4">
-              <p className="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground uppercase">
-                Or pay this UPI ID
-              </p>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <code className="min-w-0 truncate font-mono text-sm text-foreground select-all">
-                  {q.upiId}
-                </code>
-                <button
-                  type="button"
-                  onClick={() => void handleCopy(q.upiId)}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              {/* Right: Manual Details & CTA */}
+              <div className="flex flex-col gap-4">
+                <div className="rounded-2xl bg-muted/30 p-5 border border-border/50">
+                  <p className="text-[11px] font-bold tracking-[0.08em] text-muted-foreground uppercase">
+                    Or pay this UPI ID
+                  </p>
+                  <div className="mt-2.5 flex items-center justify-between gap-3">
+                    <code className="min-w-0 truncate font-mono text-sm font-semibold text-foreground select-all">
+                      {q.upiId}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopy(q.upiId)}
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-muted-foreground shadow-sm transition-colors hover:text-foreground hover:border-primary/40"
+                    >
+                      {copied ? (
+                        <>
+                          <Check className="size-3.5 text-primary" />
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="size-3.5" />
+                          Copy
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <div className="mt-3 text-[12px] leading-relaxed text-muted-foreground">
+                    Paying to <span className="font-semibold text-foreground">{q.payeeName}</span>.<br />
+                    Ref:{' '}
+                    <span className="font-mono bg-muted px-1 py-0.5 rounded text-[11px] font-medium text-foreground">{q.referenceNote}</span>
+                  </div>
+                </div>
+
+                <a
+                  href={q.upiUri}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-muted sm:hidden"
                 >
-                  {copied ? (
-                    <>
-                      <Check className="size-3.5 text-emerald-500" />
-                      Copied
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="size-3.5" />
-                      Copy
-                    </>
-                  )}
-                </button>
+                  <Smartphone className="size-4" />
+                  Open in a UPI app
+                </a>
+
+                {!showForm ? (
+                  <button
+                    type="button"
+                    onClick={handleOpenForm}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3.5 text-sm font-bold text-primary-foreground shadow-md transition-all hover:bg-primary/90 hover:shadow-lg hover:-translate-y-0.5"
+                  >
+                    {quote.submitButtonLabel}
+                  </button>
+                ) : null}
               </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Paying to <span className="font-medium text-foreground">{q.payeeName}</span>.
-                Reference{' '}
-                <span className="font-mono text-[11px]">{q.referenceNote}</span>
-              </p>
             </div>
-
-            {/* Deep link — only useful on the device that has a UPI app
-                installed, so it's framed as a phone action rather than a
-                primary button. */}
-            <a
-              href={q.upiUri}
-              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted sm:hidden"
-            >
-              <Smartphone className="size-4" />
-              Open in a UPI app
-            </a>
-
-            {/* ---- Submit CTA ---- */}
-            {!showForm ? (
-              <button
-                type="button"
-                onClick={handleOpenForm}
-                className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-              >
-                {quote.submitButtonLabel}
-              </button>
-            ) : null}
           </div>
 
           {/* ---- Submission form ---- */}

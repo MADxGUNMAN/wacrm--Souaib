@@ -5,7 +5,10 @@
 // ============================================================
 
 import { NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/super-admin/guard';
+import {
+  requireSuperAdmin,
+  superAdminErrorResponse,
+} from '@/lib/super-admin/guard';
 import { getHealthDashboardData } from '@/lib/super-admin/queries';
 
 export async function GET(request: Request) {
@@ -14,10 +17,16 @@ export async function GET(request: Request) {
     const data = await getHealthDashboardData();
     return NextResponse.json({ data });
   } catch (err) {
-    if (err instanceof NextResponse) return err;
+    const known = superAdminErrorResponse(err);
+    if (known) return known;
+
     console.error('[super-admin/health] error:', err);
     return NextResponse.json(
-      { error: 'Failed to fetch health data' },
+      {
+        error: `Failed to fetch health data: ${
+          err instanceof Error ? err.message : 'unknown error'
+        }`,
+      },
       { status: 500 }
     );
   }

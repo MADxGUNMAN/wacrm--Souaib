@@ -65,6 +65,37 @@ export interface SubscriptionSettings {
   continue_label: string;
   equals_label: string;
 
+  // ---- Day-based pricing display (migration 055) ----
+  /** Suffix after the big per-day figure, e.g. '/ day'. */
+  per_day_label: string | null;
+  /**
+   * The line under the headline. Supports `{total}` and `{days}`, e.g.
+   * '= {total} for {days} days' -> '= ₹900 for 30 days'.
+   */
+  price_equals_template: string | null;
+  /** Heading above the ONE shared feature list below the cards. */
+  features_heading: string | null;
+  features_subheading: string | null;
+
+  // ---- Custom / enquiry card (migration 055) ----
+  // Not a billing cycle: it has no price or duration and cannot be
+  // bought, so modelling it as a sellable cycle would force a special
+  // case through every pricing and activation path.
+  show_custom_plan: boolean;
+  custom_plan_label: string | null;
+  /** Shown where a price would be, e.g. "Let's talk". */
+  custom_plan_price_text: string | null;
+  custom_plan_body: string | null;
+  custom_plan_cta_text: string | null;
+  custom_plan_cta_link: string | null;
+  /**
+   * Bullet points for the Custom card. Raw JSONB in the SAME shape as
+   * `SubscriptionPlan.features`, so it goes through
+   * `normalisePlanFeatures` before rendering rather than needing a
+   * second parser.
+   */
+  custom_plan_features: unknown;
+
   payment_heading: string;
   payment_instructions: string | null;
   submit_button_label: string;
@@ -113,6 +144,14 @@ export interface BillingCycle {
   /** Pill shown beside the label on the toggle, e.g. '10%'. */
   discount_label: string | null;
   is_default: boolean;
+  /**
+   * Marks the cycle we steer customers towards. Kept separate from
+   * `discount_label` so an operator never has to choose between showing
+   * a saving and showing a recommendation — a cycle can carry both.
+   */
+  is_recommended: boolean;
+  /** Badge text when recommended, e.g. 'Recommended'. */
+  recommended_label: string | null;
   is_visible: boolean;
   position: number;
   created_at: string;
@@ -157,6 +196,13 @@ export interface SubscriptionPlanPrice {
   /** NUMERIC(12,2) — PostgREST returns it as a string. Coerce on read. */
   amount: number;
   compare_at_amount: number | null;
+  /**
+   * Display override for the per-day headline. NULL means derive it from
+   * `amount / cycle.duration_days`, which is the norm — the override
+   * exists only so an awkward division (950 / 30 = 31.67) can be shown
+   * as a round number without changing what is actually charged.
+   */
+  per_day_amount: number | null;
   is_visible: boolean;
   created_at: string;
   updated_at: string;

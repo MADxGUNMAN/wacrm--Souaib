@@ -13,8 +13,7 @@ import {
   type InitiatedUsage,
 } from '@/lib/whatsapp/usage';
 
-const META_API_VERSION = 'v21.0';
-const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`;
+import { META_API_BASE } from '@/lib/whatsapp/graph-version';
 
 /**
  * GET /api/whatsapp/account-info
@@ -181,11 +180,27 @@ export async function GET() {
     // A 48-hour inbound window is needed to spot a service window that was
     // already open when the oldest send in the 24-hour window happened.
     let usage: InitiatedUsage | null = null;
+    let sevenDayUnique = 0;
     try {
       const now = Date.now();
       const outboundSince = new Date(now - 24 * 60 * 60 * 1000).toISOString();
       const inboundSince = new Date(now - 48 * 60 * 60 * 1000).toISOString();
+      const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
 
+      // ─── Do NOT add 'business_app' to the outbound filters below ───
+      //
+      // This measures Meta's BUSINESS-INITIATED CONVERSATION allowance,
+      // which only paid Cloud API sends consume. Messages typed in the
+      // WhatsApp Business App on a phone (Coexistence, sender_type
+      // 'business_app') are free: they open no billing conversation and
+      // count against no allowance.
+      //
+      // Including them would overstate usage and could show an account as
+      // near its limit when it has barely touched it. The dashboard's
+      // "Messages Sent Today" DOES count them, because that answers a
+      // different question — how much the business sent, not how much it
+      // was billed for. The inconsistency is deliberate.
+      //
       // RLS scopes both reads to this user's account, so no explicit
       // account filter is needed here — and cannot be forgotten.
       const { data: conversations } = await supabase
@@ -199,7 +214,7 @@ export async function GET() {
       );
 
       if (contactByConversation.size > 0) {
-        const [outboundRes, inboundRes] = await Promise.all([
+        const [outboundRes, inboundRes, sevenDayRes] = await Promise.all([
           supabase
             .from('messages')
             .select('conversation_id, created_at')
@@ -211,6 +226,12 @@ export async function GET() {
             .select('conversation_id, created_at')
             .eq('sender_type', 'customer')
             .gte('created_at', inboundSince)
+            .limit(20000),
+          supabase
+            .from('messages')
+            .select('conversation_id')
+            .in('sender_type', ['agent', 'bot'])
+            .gte('created_at', sevenDaysAgo)
             .limit(20000),
         ]);
 
@@ -229,6 +250,15 @@ export async function GET() {
           24,
           new Date(now),
         );
+
+        if (sevenDayRes.data) {
+          const uniqueContacts = new Set<string>();
+          for (const msg of sevenDayRes.data) {
+            const cid = contactByConversation.get(msg.conversation_id as string);
+            if (cid) uniqueContacts.add(cid);
+          }
+          sevenDayUnique = uniqueContacts.size;
+        }
       } else {
         // No conversations at all — a genuine zero, not a failed read.
         usage = computeInitiatedUsage([], [], 24, new Date(now));
@@ -255,37 +285,38 @@ export async function GET() {
     }
 
     return NextResponse.json({
-      phone: {
-        id: phoneData.id ?? config.phone_number_id,
-        display_phone_number: phoneData.display_phone_number ?? null,
-        verified_name: phoneData.verified_name ?? null,
-        quality_rating: phoneData.quality_rating ?? null,
-        status: phoneData.status ?? null,
-        name_status: phoneData.name_status ?? null,
-      },
-      waba: {
-        id: wabaData.id ?? config.waba_id,
-        name: wabaData.name ?? null,
-        account_review_status: wabaData.account_review_status ?? null,
-        business_verification_status: wabaData.business_verification_status ?? null,
-      },
-      // Normalised here rather than in the component so the setup
-      // checklist renders Meta's verdict without re-deriving it.
-      health: summarizeHealthStatus(healthRaw),
+        phone: {
+          id: phoneData.id ?? config.phone_number_id,
+          display_phone_number: phoneData.display_phone_number ?? null,
+          verified_name: phoneData.verified_name ?? null,
+          quality_rating: phoneData.quality_rating ?? null,
+          status: phoneData.status ?? null,
+          name_status: phoneData.name_status ?? null,
+        },
+        waba: {
+          id: wabaData.id ?? config.waba_id,
+          name: wabaData.name ?? null,
+          account_review_status: wabaData.account_review_status ?? null,
+          business_verification_status: wabaData.business_verification_status ?? null,
+        },
+        // Normalised here rather than in the component so the setup
+        // checklist renders Meta's verdict without re-deriving it.
+        health: summarizeHealthStatus(healthRaw),
 
-      // Limits and usage. Each is independently nullable, because each
-      // comes from a request that can fail on its own.
-      limits: {
-        messaging: parseMessagingLimit(limitRaw),
-        throughput: parseThroughput(throughputRaw),
-        nameReview: parseNameStatus(phoneData.name_status),
-        usage: summarizeUsage(usageRaw, USAGE_DAYS),
-        // Our own count against the rolling 24h allowance. Named
-        // `initiated` rather than `used` to keep it distinct from Meta's
-        // figures above, which it is not.
-        initiated: usage,
-      },
-    });
+        // Limits and usage. Each is independently nullable, because each
+        // comes from a request that can fail on its own.
+        limits: {
+          messaging: parseMessagingLimit(limitRaw),
+          throughput: parseThroughput(throughputRaw),
+          nameReview: parseNameStatus(phoneData.name_status),
+          usage: summarizeUsage(usageRaw, USAGE_DAYS),
+          // Our own count against the rolling 24h allowance. Named
+          // `initiated` rather than `used` to keep it distinct from Meta's
+          // figures above, which it is not.
+          initiated: usage,
+          sevenDayUnique,
+        },
+      });
   } catch (error) {
     console.error('[account-info] Internal error:', error);
     return NextResponse.json(

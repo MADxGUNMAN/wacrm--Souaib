@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import Script from "next/script";
 import {
   getSiteSettings,
   getLandingSections,
@@ -9,6 +10,7 @@ import {
   getLegalPagesList,
   getLandingFaqs,
 } from "@/lib/cms/queries";
+import { getPlansBundle } from "@/lib/subscription/queries";
 
 import { LandingNavbar } from "@/components/landing/LandingNavbar";
 import { HeroSection } from "@/components/landing/HeroSection";
@@ -21,6 +23,8 @@ import { IntegrationsSection } from "@/components/landing/IntegrationsSection";
 import { CTABanner } from "@/components/landing/CTABanner";
 import { FAQSection } from "@/components/landing/FAQSection";
 import { LandingFooter } from "@/components/landing/LandingFooter";
+import { NewsletterToast } from "@/components/landing/NewsletterToast";
+import { Suspense } from "react";
 
 export async function generateMetadata(): Promise<Metadata> {
   const settings = await getSiteSettings();
@@ -54,7 +58,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export const dynamic = "force-dynamic";
 
 export default async function LandingPage() {
-  const [settings, sections, features, pricing, testimonials, integrations, legalPages, faqs] =
+  const [settings, sections, features, pricing, testimonials, integrations, legalPages, faqs, bundle] =
     await Promise.all([
       getSiteSettings(),
       getLandingSections(),
@@ -64,15 +68,20 @@ export default async function LandingPage() {
       getLandingIntegrations(),
       getLegalPagesList(),
       getLandingFaqs(),
+      getPlansBundle(),
     ]);
 
   // Map sections by key for easy lookup
   const sectionMap = new Map(sections.map((s) => [s.section_key, s]));
 
   return (
-    <div className="min-h-screen bg-white text-slate-900 antialiased overflow-x-hidden">
+    <div className="min-h-screen bg-white text-slate-900 antialiased overflow-x-clip">
+      <Suspense fallback={null}>
+        <NewsletterToast />
+      </Suspense>
       {settings?.json_ld_schema && (
-        <script
+        <Script
+          id="json-ld-schema"
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: settings.json_ld_schema }}
         />
@@ -204,7 +213,7 @@ export default async function LandingPage() {
         {/* Pricing */}
         <PricingSection
           section={sectionMap.get("pricing") || null}
-          tiers={pricing}
+          bundle={bundle}
         />
 
         {/* Testimonials */}

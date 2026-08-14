@@ -95,6 +95,34 @@ export async function PUT(request: Request) {
       }
     }
 
+    // Display-only override for the per-day headline on /upgrade-plan.
+    // Blank is the normal case: the page then derives the rate from
+    // `amount / cycle.duration_days`, which cannot disagree with what is
+    // actually charged. The override exists purely to round an awkward
+    // division (950 / 30 = 31.666…) for display.
+    let perDay: number | null = null;
+    if (
+      body.per_day_amount !== undefined &&
+      body.per_day_amount !== null &&
+      body.per_day_amount !== ''
+    ) {
+      perDay = parseAmount(body.per_day_amount, 'per_day_amount', 'Per-day price');
+      if (perDay <= 0) {
+        throw new ValidationError(
+          'The per-day price must be greater than zero, or leave it blank to calculate it automatically.',
+          'per_day_amount',
+        );
+      }
+      if (perDay > amount) {
+        // A daily rate above the whole term's price is always a typo, and
+        // it would advertise a number higher than the customer pays.
+        throw new ValidationError(
+          'The per-day price cannot exceed the total price for the term.',
+          'per_day_amount',
+        );
+      }
+    }
+
     const isVisible = body.is_visible === undefined ? true : Boolean(body.is_visible);
 
     const { data, error } = await admin
@@ -105,6 +133,7 @@ export async function PUT(request: Request) {
           cycle_id: cycleId,
           amount,
           compare_at_amount: compareAt,
+          per_day_amount: perDay,
           is_visible: isVisible,
           updated_at: new Date().toISOString(),
         },

@@ -153,6 +153,29 @@ export interface HealthDashboardData {
 }
 
 // ============================================================
+// Newsletter Subscribers
+// ============================================================
+
+export type NewsletterStatus = 'pending' | 'confirmed' | 'bounced' | 'unsubscribed';
+
+export interface NewsletterSubscriber {
+  id: string;
+  email: string;
+  status: NewsletterStatus;
+  confirm_token: string | null;
+  email_sent: boolean;
+  email_sent_at: string | null;
+  confirmed_at: string | null;
+  bounced_at: string | null;
+  bounce_reason: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ============================================================
 // CMS Content Types
 // ============================================================
 
@@ -173,7 +196,10 @@ export interface SiteSettings {
   tagline: string;
   site_description: string | null;
   logo_url: string | null;
+  logo_dark_url?: string | null;
   favicon_url: string | null;
+  full_logo_url?: string | null;
+  meta_partner_badge_url?: string | null;
   meta_title: string | null;
   meta_description: string | null;
   og_image_url: string | null;

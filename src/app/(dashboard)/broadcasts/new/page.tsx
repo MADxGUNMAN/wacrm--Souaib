@@ -9,6 +9,10 @@ import { MessageTemplate } from '@/types';
 import { Step1ChooseTemplate } from '@/components/broadcasts/step1-choose-template';
 import { Step2SelectAudience } from '@/components/broadcasts/step2-select-audience';
 import { Step3Personalize } from '@/components/broadcasts/step3-personalize';
+import {
+  EMPTY_SEND_EXTRAS,
+  type BroadcastSendExtras,
+} from '@/lib/whatsapp/template-send-inputs';
 import { Step4ScheduleSend } from '@/components/broadcasts/step4-schedule-send';
 import { useBroadcastSending } from '@/hooks/use-broadcast-sending';
 import { Check } from 'lucide-react';
@@ -44,6 +48,9 @@ export default function NewBroadcastPage() {
     Record<string, { type: 'static' | 'field' | 'custom_field'; value: string }>
   >({});
   const [headerMediaUrl, setHeaderMediaUrl] = useState('');
+  /** Offer expiry and per-card carousel values — one set for the whole send. */
+  const [sendExtras, setSendExtras] =
+    useState<BroadcastSendExtras>(EMPTY_SEND_EXTRAS);
   const [name, setName] = useState('');
 
   async function handleSend() {
@@ -62,6 +69,7 @@ export default function NewBroadcastPage() {
         },
         variables,
         headerMediaUrl,
+        sendExtras,
       });
       router.push(`/broadcasts/${broadcastId}`);
     } catch (err) {
@@ -211,6 +219,8 @@ export default function NewBroadcastPage() {
               onUpdate={setVariables}
               headerMediaUrl={headerMediaUrl}
               onHeaderMediaUrlChange={setHeaderMediaUrl}
+              sendExtras={sendExtras}
+              onSendExtrasChange={setSendExtras}
               onNext={() => setCurrentStep(3)}
               onBack={() => setCurrentStep(1)}
             />

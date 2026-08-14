@@ -24,10 +24,19 @@ import {
   Wallet,
 } from 'lucide-react';
 
+import { FeatureRows } from '@/components/super-admin/billing/feature-rows';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import {
+  CUSTOM_CARD_SETTING_KEYS,
+  normalisePlanFeatures,
+} from '@/lib/subscription/plans';
 import { isValidUpiId } from '@/lib/subscription/upi';
-import type { SubscriptionSettings } from '@/lib/subscription/types';
+import type {
+  PlanFeature,
+  PlansBundle,
+  SubscriptionSettings,
+} from '@/lib/subscription/types';
 import { cn } from '@/lib/utils';
 
 /** Copy fields, grouped for the form. `multiline` picks a textarea. */
@@ -40,21 +49,51 @@ const COPY_GROUPS: {
     hint?: string;
     multiline?: boolean;
   }[];
+  /** Appends the shared feature-line editor under this group's fields. */
+  withFeatureList?: boolean;
 }[] = [
   {
     title: 'Upgrade page',
-    description: 'The plan chooser customers see at /upgrade-plan.',
+    description:
+      'The plan chooser customers see at /upgrade-plan. Each card is a billing term; the daily rate is the headline. The Custom card is edited under Plans & Pricing.',
     fields: [
       { key: 'page_heading', label: 'Heading' },
       { key: 'page_subheading', label: 'Sub-heading', multiline: true },
-      { key: 'cycle_hint', label: 'Hint under the cycle toggle' },
-      { key: 'selected_plan_label', label: '“Selected Plan” label' },
+      {
+        key: 'per_day_label',
+        label: 'Per-day suffix',
+        hint: 'Sits beside the big daily figure, e.g. “/ day”.',
+      },
+      {
+        key: 'price_equals_template',
+        label: 'Total line under the price',
+        hint: 'Use {total} and {days}, e.g. “= {total} for {days} days”.',
+      },
+      { key: 'selected_plan_label', label: '“Selected plan” label' },
       { key: 'total_label', label: '“Total” label' },
       { key: 'save_label', label: '“Save” label' },
-      { key: 'equals_label', label: '“Equals” label' },
       { key: 'continue_label', label: 'Continue button' },
     ],
   },
+  {
+    title: 'Shared feature list',
+    description:
+      'One list below the cards. Every paid term includes all of it, so it is written once rather than per card.',
+    fields: [
+      { key: 'features_heading', label: 'Heading' },
+      { key: 'features_subheading', label: 'Sub-heading', multiline: true },
+    ],
+    // The lines themselves are a repeatable JSONB list on the plan row,
+    // not a settings column, so they need their own editor and their own
+    // save. Rendered inside this group anyway: an operator writing the
+    // heading is writing the list it introduces, and splitting them
+    // across two tabs is what made this hard to find before.
+    withFeatureList: true,
+  },
+  // The Custom card used to be edited here. It moved to Plans & Pricing:
+  // its bullet list is a repeatable JSONB list, which this flat field map
+  // cannot express, and two editors writing the same columns meant
+  // whichever tab saved last quietly reverted the other.
   {
     title: 'Payment page',
     description: 'The QR and submission screen.',
@@ -102,6 +141,147 @@ const COPY_GROUPS: {
     ],
   },
 ];
+
+/**
+ * The feature lines shown once under the pricing cards.
+ *
+ * These live on `subscription_plans.features`, not on the settings row, so
+ * this has its own fetch and its own save rather than riding along with
+ * the settings form below. Mixing them would mean one Save button writing
+ * to two tables, where a failure on the second leaves the first applied
+ * with no way to tell from the UI.
+ *
+ * Targets the same plan /upgrade-plan sells: first visible, by position.
+ */
+function SharedFeatureList() {
+  const [planId, setPlanId] = useState<string | null>(null);
+  const [features, setFeatures] = useState<PlanFeature[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [state, setState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/super-admin/billing/plans');
+        if (!res.ok) throw new Error('Failed to load the feature list');
+        const bundle = (await res.json()) as PlansBundle;
+        if (cancelled) return;
+
+        const plan =
+          bundle.plans
+            .filter((p) => p.is_visible)
+            .sort((a, b) => a.position - b.position)[0] ?? null;
+
+        setPlanId(plan?.id ?? null);
+        setFeatures(plan ? normalisePlanFeatures(plan.features) : []);
+        setError(null);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to load');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const save = async () => {
+    if (!planId) return;
+    setState('saving');
+    setError(null);
+    try {
+      const res = await fetch('/api/super-admin/billing/plans', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: planId,
+          features: features.filter((f) => f.label.trim()),
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body?.error ?? 'Could not save the feature list');
+        setState('idle');
+        return;
+      }
+      setState('saved');
+      setTimeout(() => setState('idle'), 2000);
+    } catch {
+      setError('Could not save the feature list');
+      setState('idle');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-slate-400">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading feature lines…
+      </div>
+    );
+  }
+
+  if (!planId) {
+    return (
+      <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        No visible plan exists, so there is no feature list to edit.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <FeatureRows
+        label="Feature lines"
+        hint="Shown once under the cards. Use the star to bold a line."
+        placeholder="e.g. Unlimited marketing messages"
+        features={features}
+        onChange={(next) => {
+          setFeatures(next);
+          setState('idle');
+        }}
+      />
+
+      {error ? (
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+          <p className="text-sm text-red-700">{error}</p>
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex items-center gap-3">
+        <button
+          type="button"
+          disabled={state === 'saving'}
+          onClick={() => void save()}
+          className="inline-flex items-center gap-2 rounded-lg bg-[#25D366] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#20b958] disabled:opacity-60"
+        >
+          {state === 'saving' ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Save className="h-4 w-4" />
+          )}
+          Save feature list
+        </button>
+        {state === 'saved' ? (
+          <p className="flex items-center gap-1.5 text-sm text-green-600">
+            <Check className="h-4 w-4" />
+            Saved — live immediately
+          </p>
+        ) : (
+          <p className="text-xs text-slate-400">
+            Saved separately from the settings below.
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
 
 export function BillingConfigPanel() {
   const [settings, setSettings] = useState<Partial<SubscriptionSettings> | null>(null);
@@ -155,6 +335,13 @@ export function BillingConfigPanel() {
       delete payload.id;
       delete payload.created_at;
       delete payload.updated_at;
+
+      // The Custom card is owned by the Plans & Pricing tab. This panel
+      // loads the whole settings row, so without this it would echo back
+      // whatever those columns held when the tab opened — reverting an
+      // edit made there in the meantime. Not sending them at all makes
+      // the boundary real rather than a convention.
+      for (const key of CUSTOM_CARD_SETTING_KEYS) delete payload[key];
 
       const res = await fetch('/api/super-admin/billing/settings', {
         method: 'PUT',
@@ -411,6 +598,12 @@ export function BillingConfigPanel() {
               );
             })}
           </div>
+
+          {group.withFeatureList ? (
+            <div className="mt-5 border-t border-slate-100 pt-5">
+              <SharedFeatureList />
+            </div>
+          ) : null}
         </section>
       ))}
 

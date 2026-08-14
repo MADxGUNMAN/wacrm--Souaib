@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -15,6 +16,8 @@ import {
   Mail,
   CreditCard,
   Tag,
+  Newspaper,
+  LibraryBig,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -31,7 +34,15 @@ const navItems = [
   { href: "/super-admin/payments", label: "Payments", icon: CreditCard },
   { href: "/super-admin/plans", label: "Plans & Pricing", icon: Tag },
   { href: "/super-admin/cms", label: "CMS & Landing", icon: FileText },
+  // Beside CMS rather than under it: both are operator-authored content
+  // shipped to every account, and neither is per-tenant data.
+  {
+    href: "/super-admin/template-library",
+    label: "Template Library",
+    icon: LibraryBig,
+  },
   { href: "/super-admin/contact-submissions", label: "Contact", icon: Mail },
+  { href: "/super-admin/newsletter", label: "Newsletter", icon: Newspaper },
   { href: "/super-admin/health", label: "Health", icon: Activity },
   { href: "/super-admin/settings", label: "Settings", icon: Settings },
 ];
@@ -39,13 +50,31 @@ const navItems = [
 export function SuperAdminSidebar({ open, onClose }: SuperAdminSidebarProps) {
   const pathname = usePathname();
   const { signOut } = useAuth();
+  const [iconUrl, setIconUrl] = useState<string>("/logo-icon.png");
+  const [siteName, setSiteName] = useState<string>("Replai");
+
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        const res = await fetch("/api/public/settings", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.settings?.favicon_url) setIconUrl(data.settings.favicon_url);
+          if (data.settings?.site_name) setSiteName(data.settings.site_name);
+        }
+      } catch (err) {
+        console.error("Failed to load settings in super admin sidebar:", err);
+      }
+    }
+    loadSettings();
+  }, []);
 
   return (
     <>
       {/* Mobile backdrop */}
       {open && (
         <div
-          className="fixed inset-0 z-40 bg-black/80 lg:hidden"
+          className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm lg:hidden"
           onClick={onClose}
         />
       )}
@@ -59,9 +88,9 @@ export function SuperAdminSidebar({ open, onClose }: SuperAdminSidebarProps) {
       >
         <div className="flex items-center justify-between gap-3 mb-8 px-2">
           <div className="flex items-center gap-3">
-            <img src="/logo-icon.png" alt="Replai" className="h-10 w-10 object-contain" />
+            <img src={iconUrl} alt={siteName} className="h-10 w-10 object-contain" />
             <div>
-              <h1 className="text-xl font-black text-[#25D366] tracking-tight">Replai</h1>
+              <h1 className="text-xl font-black text-[#25D366] tracking-tight">{siteName}</h1>
               <p className="text-xs text-slate-500 font-medium">Super Admin</p>
             </div>
           </div>

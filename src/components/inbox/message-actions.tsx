@@ -10,6 +10,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import type { Message } from "@/types";
+import { isOutboundSender } from "@/lib/messages/sender-type";
 import { useTranslations } from "next-intl";
 
 // WhatsApp's own quick-reaction bar starts with these six. Picking the same
@@ -42,8 +43,7 @@ export function MessageActions({
   const [touchOpen, setTouchOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  const isAgent =
-    message.sender_type === "agent" || message.sender_type === "bot";
+  const isAgent = isOutboundSender(message.sender_type);
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();

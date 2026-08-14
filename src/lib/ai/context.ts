@@ -1,17 +1,25 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ChatMessage } from './types'
 import { aiContextMessageLimit } from './defaults'
+import type { SenderType } from '@/types'
 
 interface DbMessage {
-  sender_type: 'customer' | 'agent' | 'bot'
+  sender_type: SenderType
   content_text: string | null
 }
 
 /**
  * Fetch the last N text messages of a conversation and map them to the
- * provider-neutral chat shape. Customer messages become `user`; agent
- * and bot messages become `assistant`. Non-text messages (media,
- * templates, interactive) are excluded — they carry no text to model.
+ * provider-neutral chat shape. Customer messages become `user`;
+ * everything else the business said — agent, bot, and messages typed in
+ * the WhatsApp Business App on a phone — becomes `assistant`. Non-text
+ * messages (media, templates, interactive) are excluded — they carry no
+ * text to model.
+ *
+ * The "anything not customer is assistant" mapping is why Coexistence
+ * needed no change here: a phone-typed reply IS the business speaking,
+ * and the model should see it as such, or it would answer a question a
+ * colleague already answered from their phone.
  *
  * Ordered oldest-first (chronological) so the transcript reads
  * naturally and the most recent customer message lands last.

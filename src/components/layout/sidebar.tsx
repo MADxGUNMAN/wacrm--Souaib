@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
+import { useTheme } from "@/hooks/use-theme";
 import { hasSectionAccess } from "@/lib/auth/roles";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
@@ -18,6 +19,7 @@ import {
   UserCog,
   UsersRound,
   X,
+  FileText,
   Inbox,
   KanbanSquare,
   Megaphone,
@@ -83,6 +85,10 @@ const navItems: NavItem[] = [
   { href: "/contacts", labelKey: "contacts", icon: UsersRound },
   { href: "/pipelines", labelKey: "pipelines", icon: KanbanSquare },
   { href: "/broadcasts", labelKey: "broadcasts", icon: Megaphone },
+  // Sits next to Broadcasts because that is where templates get used —
+  // you pick one every time you send. It used to be a Settings tab,
+  // which framed it as one-time configuration rather than daily work.
+  { href: "/templates", labelKey: "templates", icon: FileText },
   { href: "/automations", labelKey: "automations", icon: Cpu },
   { href: "/flows", labelKey: "flows", icon: Waypoints, beta: true },
   { href: "/agents", labelKey: "aiAgents", icon: Sparkles },
@@ -143,6 +149,28 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
     };
   }, [open, onClose]);
 
+  const { mode } = useTheme();
+  const [logoLightUrl, setLogoLightUrl] = useState<string>("/Replai-logo.png");
+  const [logoDarkUrl, setLogoDarkUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadLogo() {
+      try {
+        const res = await fetch("/api/public/settings", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.settings?.logo_url) setLogoLightUrl(data.settings.logo_url);
+          if (data.settings?.logo_dark_url) setLogoDarkUrl(data.settings.logo_dark_url);
+        }
+      } catch (err) {
+        console.error("Failed to load logo in sidebar:", err);
+      }
+    }
+    loadLogo();
+  }, []);
+
+  const activeLogo = mode === "dark" ? (logoDarkUrl || logoLightUrl) : logoLightUrl;
+
   return (
     <>
       {/* Backdrop — only exists on mobile and only when open. Clicking
@@ -173,9 +201,9 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
       >
         {/* Logo row. On mobile we put a close button here; on desktop the
             close button is hidden since the sidebar is always-visible. */}
-        <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
+        <div className="flex h-20 shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-3">
           <Link href="/dashboard" className="flex items-center gap-2">
-            <img src="/Replai-logo.png" alt="Replai" className="h-9 object-contain" />
+            <img src={activeLogo} alt="Replai" className="h-12 w-auto max-w-[200px] object-contain" />
           </Link>
           <button
             type="button"

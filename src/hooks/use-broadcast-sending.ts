@@ -4,6 +4,10 @@ import { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { Contact, MessageTemplate } from '@/types';
+import {
+  localInputToMs,
+  type BroadcastSendExtras,
+} from '@/lib/whatsapp/template-send-inputs';
 
 export type CustomFieldOperator = 'is' | 'is_not' | 'contains';
 
@@ -46,6 +50,15 @@ interface BroadcastPayload {
    * falls back to the template's stored URL only when this is empty.
    */
   headerMediaUrl?: string;
+  /**
+   * Send-time values that are identical for every recipient: a
+   * limited-time offer's deadline and a carousel's per-card media, text
+   * and link values. Collected in the personalize step.
+   *
+   * Kept separate from `variables` because those resolve per contact —
+   * these do not, and there is exactly one countdown per broadcast.
+   */
+  sendExtras?: BroadcastSendExtras;
 }
 
 interface UseBroadcastSendingReturn {
@@ -114,6 +127,38 @@ export function resolveVariables(
 
     // custom_field
     return customValues?.get(v.value) ?? '';
+  });
+}
+
+/**
+ * The NAMED equivalent of `resolveVariables`: the same per-contact
+ * resolution, but returning [name, value] pairs instead of a positional
+ * array.
+ *
+ * Kept separate rather than folded into `resolveVariables` because that
+ * function's contract — "positional array in template order" — is relied
+ * on by the legacy send path, and a function that sometimes returns an
+ * array and sometimes a map is the kind of thing that gets passed to the
+ * wrong caller.
+ */
+export function resolveNamedVariables(
+  variables: Record<string, VariableMapping>,
+  contact: Contact | null,
+  customValues?: Map<string, string>,
+): [string, string][] {
+  return Object.entries(variables).map(([name, v]) => {
+    if (v.type === 'static') return [name, v.value];
+    if (!contact) return [name, ''];
+    if (v.type === 'field') {
+      const fieldMap: Record<string, string | undefined> = {
+        name: contact.name,
+        phone: contact.phone,
+        email: contact.email,
+        company: contact.company,
+      };
+      return [name, fieldMap[v.value] ?? ''];
+    }
+    return [name, customValues?.get(v.value) ?? ''];
   });
 }
 
@@ -451,25 +496,74 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
         headerType === 'video' ||
         headerType === 'document';
       const headerMediaUrl = payload.headerMediaUrl?.trim();
+
+      // Everything that is the same for every recipient, assembled once.
+      // Previously this was only ever `{ headerMediaUrl }`, which is why a
+      // limited-time offer or a variable carousel could be created and
+      // approved but never broadcast — there was no channel to carry the
+      // expiry or the per-card values.
+      const isNamed = payload.template.parameter_format === 'NAMED';
+      const extras = payload.sendExtras;
+      const offerExpiresAtMs = extras?.offerExpiryLocal
+        ? localInputToMs(extras.offerExpiryLocal)
+        : undefined;
+      const cards = extras?.cards?.length ? extras.cards : undefined;
+      const extraButtonParams =
+        extras?.buttonParams && Object.keys(extras.buttonParams).length > 0
+          ? extras.buttonParams
+          : undefined;
+
+      const sharedParams = {
+        ...(isMediaHeader && headerMediaUrl ? { headerMediaUrl } : {}),
+        ...(extras?.headerLocation ? { headerLocation: extras.headerLocation } : {}),
+        ...(offerExpiresAtMs ? { offerExpiresAtMs } : {}),
+        ...(cards ? { cards } : {}),
+        ...(extraButtonParams ? { buttonParams: extraButtonParams } : {}),
+      };
       const messageParams =
-        isMediaHeader && headerMediaUrl ? { headerMediaUrl } : undefined;
+        Object.keys(sharedParams).length > 0 ? sharedParams : undefined;
 
       for (let i = 0; i < recipients.length; i += SEND_BATCH_SIZE) {
         const batch = recipients.slice(i, i + SEND_BATCH_SIZE);
 
         const apiRecipients = batch
           .filter((r) => r.contact?.phone)
-          .map((r) => ({
-            phone: r.contact!.phone as string,
-            params: r.contact
+          .map((r) => {
+            const values = r.contact
               ? resolveVariables(
                   payload.variables,
                   r.contact,
                   customValueIndex.get(r.contact.id),
                 )
-              : [],
-            ...(messageParams ? { messageParams } : {}),
-          }));
+              : [];
+
+            // A NAMED template is matched by parameter name, not position,
+            // so the positional array is useless to it — the values have to
+            // travel keyed. Built per recipient because these resolve from
+            // the contact, unlike the shared params above.
+            const namedBody = isNamed
+              ? Object.fromEntries(
+                  resolveNamedVariables(
+                    payload.variables,
+                    r.contact ?? null,
+                    r.contact ? customValueIndex.get(r.contact.id) : undefined,
+                  ),
+                )
+              : null;
+
+            const perRecipient = {
+              ...(messageParams ?? {}),
+              ...(namedBody ? { namedBody } : {}),
+            };
+
+            return {
+              phone: r.contact!.phone as string,
+              params: values,
+              ...(Object.keys(perRecipient).length > 0
+                ? { messageParams: perRecipient }
+                : {}),
+            };
+          });
 
         if (apiRecipients.length === 0) continue;
 

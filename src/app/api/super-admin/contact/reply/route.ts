@@ -36,10 +36,10 @@ export async function POST(request: Request) {
     const { supabaseAdmin } = await import('@/lib/auth/admin-client');
     const admin = supabaseAdmin();
     
-    // Fetch site name for a personalized touch
+    // Fetch site settings for branding
     const { data: settings } = await admin
       .from('site_settings')
-      .select('site_name')
+      .select('site_name, full_logo_url, logo_url')
       .limit(1)
       .maybeSingle();
       
@@ -105,8 +105,10 @@ export async function POST(request: Request) {
 </html>
     `;
 
-    // Try to attach logo-full.jpg, fallback to logo-icon.png if it doesn't exist
-    const logoFullPath = path.join(process.cwd(), 'public', 'logo-full.jpg');
+    const logoUrl = settings?.full_logo_url || settings?.logo_url;
+    const logoAttachment = logoUrl && (logoUrl.startsWith('http://') || logoUrl.startsWith('https://'))
+      ? { filename: 'logo.png', path: logoUrl, cid: 'company-logo' }
+      : { filename: 'logo.jpg', path: path.join(process.cwd(), 'public', 'logo-full.jpg'), cid: 'company-logo' };
     
     await transporter.sendMail({
       from: `"${siteName} Support" <${SMTP_USER}>`,
@@ -114,13 +116,7 @@ export async function POST(request: Request) {
       subject,
       html: htmlBody,
       replyTo: SMTP_USER,
-      attachments: [
-        {
-          filename: 'logo.jpg',
-          path: logoFullPath,
-          cid: 'company-logo' // Same CID used in the img src
-        }
-      ]
+      attachments: [logoAttachment]
     });
 
     // Save the reply and update submission status

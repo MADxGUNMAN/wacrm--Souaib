@@ -107,7 +107,17 @@ export default function SuperAdminDashboardPage() {
         fetch("/api/super-admin/health"),
       ]);
 
-      if (!metricsRes.ok) throw new Error("Failed to fetch metrics");
+      if (!metricsRes.ok) {
+        // Surface the server's OWN reason. This used to throw a fixed
+        // "Failed to fetch metrics", so a missing service-role key, an
+        // expired session and a genuine permission problem all rendered
+        // as "ensure you have super admin access" — which sent us
+        // checking permissions for a deployment problem.
+        const body = await metricsRes.json().catch(() => null);
+        throw new Error(
+          body?.error || `Request failed with HTTP ${metricsRes.status}`,
+        );
+      }
 
       const metricsData = await metricsRes.json();
       setMetrics(metricsData.metrics);
@@ -140,9 +150,18 @@ export default function SuperAdminDashboardPage() {
 
   if (error && !metrics) {
     return (
-      <div className="flex h-[50vh] items-center justify-center text-red-400">
-        <AlertCircle className="mr-2 h-5 w-5" />
-        Failed to load metrics. Ensure you have super admin access.
+      <div className="flex h-[50vh] flex-col items-center justify-center gap-3 px-6 text-center">
+        <div className="flex items-start gap-2 text-red-500">
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+          <p className="max-w-xl text-sm leading-relaxed">{error.message}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => fetchAll(true)}
+          className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+        >
+          Try again
+        </button>
       </div>
     );
   }

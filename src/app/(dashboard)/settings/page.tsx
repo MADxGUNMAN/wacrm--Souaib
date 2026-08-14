@@ -16,13 +16,14 @@ import { BillingSettings } from '@/components/settings/billing-settings';
 import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
 import { WhatsAppSetup } from '@/components/settings/whatsapp-setup';
 import { MetaSDKProvider } from '@/components/providers/meta-sdk-provider';
-import { TemplateManager } from '@/components/settings/template-manager';
+
 import { QuickRepliesManager } from '@/components/settings/quick-replies-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
 import { MembersTab } from '@/components/settings/members-tab';
 import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import {
+  RELOCATED_SECTIONS,
   SECTION_META,
   resolveSection,
   type SettingsSection,
@@ -55,7 +56,16 @@ function SettingsPageInner() {
   // section — deep-linkable, and it keeps the existing links in the
   // app sidebar/header working. Legacy tab values (tags, custom-fields)
   // resolve onto their new home; unknown/empty → the Overview landing.
-  const rawSection = resolveSection(searchParams.get('tab'));
+  const tabParam = searchParams.get('tab');
+  const rawSection = resolveSection(tabParam);
+
+  // Sections that graduated to their own route. Without this an old
+  // bookmark to ?tab=templates would quietly land on Overview and look
+  // like the feature had been removed.
+  const relocatedTo = tabParam ? RELOCATED_SECTIONS[tabParam] : undefined;
+  useEffect(() => {
+    if (relocatedTo) router.replace(relocatedTo);
+  }, [relocatedTo, router]);
   const canAccessSettings = hasSectionAccess(profile?.account_role, profile?.permissions, 'settings');
   const canAccessThisSection = canAccessSettingsSection(profile?.account_role, profile?.permissions, rawSection);
   const section = (!canAccessSettings && SECTION_META[rawSection]?.group !== 'account') || !canAccessThisSection ? 'profile' : rawSection;
@@ -107,7 +117,6 @@ function SettingsPageInner() {
       </MetaSDKProvider>
     ),
     whatsapp: <WhatsAppConfig />,
-    templates: <TemplateManager />,
     'quick-replies': <QuickRepliesManager />,
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,

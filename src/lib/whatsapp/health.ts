@@ -297,7 +297,9 @@ export function resolveHealthIssueLink(
   ) {
     return {
       label: 'Open payment settings',
-      url: `${BUSINESS_SETTINGS}/payment-methods`,
+      url: wabaId
+        ? `https://business.facebook.com/settings/payment-methods?waba_id=${encodeURIComponent(wabaId)}`
+        : `${BUSINESS_SETTINGS}/payment-methods`,
     };
   }
 
@@ -309,7 +311,9 @@ export function resolveHealthIssueLink(
   ) {
     return {
       label: 'Open business verification',
-      url: `${BUSINESS_SETTINGS}/security`,
+      url: wabaId
+        ? `https://business.facebook.com/settings/security?waba_id=${encodeURIComponent(wabaId)}`
+        : `${BUSINESS_SETTINGS}/security`,
     };
   }
 

@@ -185,18 +185,9 @@ export function SettingsOverview({
                 : ''
             }`,
     },
-    {
-      section: 'templates',
-      loading: countsLoading,
-      subtitle:
-        counts?.templates == null
-          ? t('manageTemplates')
-          : `${t('templatesCount', { count: counts.templates })}${
-              counts.templatesPending
-                ? ` · ${t('pendingReview', { count: counts.templatesPending })}`
-                : ''
-            }`,
-    },
+    // Templates are no longer a settings section — they have their own
+    // top-level route with the creation wizard, so there is no card here
+    // to link to. See RELOCATED_SECTIONS in settings-sections.ts.
     {
       section: 'deals',
       loading: false,

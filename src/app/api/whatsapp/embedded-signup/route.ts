@@ -7,8 +7,11 @@ import {
   verifyPhoneNumber,
 } from '@/lib/whatsapp/meta-api';
 
-const META_API_VERSION = 'v23.0';
-const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`;
+import { META_API_BASE } from '@/lib/whatsapp/graph-version';
+import { requestCoexistenceSync } from '@/lib/whatsapp/coexistence-sync';
+import { expiresInToTimestamp } from '@/lib/whatsapp/token-expiry';
+import { upgradeToNonExpiringToken } from '@/lib/whatsapp/token-upgrade';
+import { resolveConnectionMode } from '@/lib/whatsapp/connection-mode';
 
 /**
  * Exchange an Embedded Signup token code for the customer's business token.
@@ -126,7 +129,65 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { code, waba_id: clientWabaId, phone_number_id: clientPhoneNumberId } = body;
+    const {
+      code,
+      waba_id: clientWabaId,
+      phone_number_id: clientPhoneNumberId,
+      finish_event: finishEvent,
+      requested_feature_type: requestedFeatureType,
+    } = body;
+
+    // ── Coexistence detection ────────────────────────────────
+    // Coexistence means this number stays live on the WhatsApp Business
+    // App while also running on the Cloud API. It has to be recorded,
+    // because it changes behaviour (Meta sends echoes of messages typed
+    // on the phone) and it changes the rules the operator must follow
+    // (open the app every 13 days, profile picture is frozen).
+    //
+    // PRECEDENCE, and why it is not an OR.
+    //
+    // Two signals exist, and they are NOT equal in authority:
+    //
+    //   * `finish_event` — Meta's report of what actually happened.
+    //     `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING` means coexistence;
+    //     plain `FINISH` / `FINISH_ONLY_WABA` / `FINISH_OBO_MIGRATION`
+    //     mean it was not. This is an OUTCOME.
+    //
+    //   * `requested_feature_type` — what the operator picked in our own
+    //     modal before the flow opened. This is only an INTENTION, and
+    //     the operator can freely diverge from it once inside Meta's UI.
+    //
+    // This used to be `finishEvent says coexistence || operator asked for
+    // coexistence`, which let the intention override the outcome. That
+    // misfired in practice: the operator chose "a number currently active
+    // on WhatsApp Business app", then inside Meta's flow selected an
+    // EXISTING Cloud API WhatsApp Business Account instead of "Connect a
+    // WhatsApp Business app". Meta correctly returned a plain FINISH, but
+    // the OR still stamped the row `coexistence`.
+    //
+    // The consequences were all user-visible: Settings showed a
+    // Coexistence badge and the "open the app every 13 days or Meta drops
+    // the connection" warning for a number with no phone app attached,
+    // and the history/contact sync fired against an account that cannot
+    // serve it, failing with Meta error #133010 "Account not registered"
+    // and burning 2 of its 3 one-shot attempts.
+    //
+    // So: when Meta reported an outcome, that outcome wins outright. The
+    // operator's intention is consulted ONLY when no outcome arrived at
+    // all, which happens when the postMessage channel is lost (popup
+    // closed early, blocked message). Guessing coexistence in that
+    // narrow case is still worthwhile, because the sync has a hard 24h
+    // window and a missed echo is more expensive than a wrong badge.
+    //
+    // The webhook remains the final authority either way: the first real
+    // echo promotes the row to coexistence (see handleMessageEchoes), and
+    // an echo is proof rather than inference.
+    // Lives in connection-mode.ts so the precedence rule is unit-testable;
+    // as an inline ternary it was wrong for months with nothing to catch it.
+    const connectionMode = resolveConnectionMode({
+      finishEvent,
+      requestedFeatureType,
+    });
 
     if (!code) {
       return NextResponse.json({ error: 'Authorization code is required' }, { status: 400 });
@@ -268,8 +329,25 @@ export async function POST(request: Request) {
         waba_id: wabaId,
         access_token: encryptedAccessToken,
         connection_source: 'embedded_signup',
+        connection_mode: connectionMode,
         status: 'connected',
         connected_at: new Date().toISOString(),
+        // The login configuration in use issues 60-day tokens, and
+        // `expires_in` came back from the exchange above. It used to be
+        // parsed and then discarded, which made expiry the worst class of
+        // outage: on day 61 every Meta call fails, webhooks keep arriving
+        // and silently cannot be answered, and nothing records the cause.
+        // Persisting it is what allows a warning before the deadline
+        // instead of a diagnosis after it. Null when Meta reported no
+        // expiry — see token-expiry.ts, where null is explicitly NOT
+        // treated as expired.
+        token_expires_at: expiresInToTimestamp(exchange.expiresIn),
+        // Clear any previous disconnect. Reconnecting IS the fix for most
+        // coexistence disconnect reasons, so leaving a stale reason behind
+        // would keep showing the operator a problem they just solved.
+        disconnect_event: null,
+        disconnect_reason: null,
+        disconnected_at: null,
       }, { onConflict: 'account_id' });
 
     if (upsertError) {
@@ -286,8 +364,95 @@ export async function POST(request: Request) {
     // provided the PIN in the popup. If it isn't, the user will see the "Not registered" 
     // banner and can enter a PIN manually later.
 
+    // ── Make the connection permanent ────────────────────────
+    //
+    // The login configuration in use issues 60-day tokens, so without this
+    // step every connection quietly dies two months after it is made.
+    //
+    // Meta has no refresh grant for business tokens, but it does expose
+    // POST /{client-business-id}/system_user_access_tokens, which mints a
+    // NEW system user token from an existing one. Its
+    // `set_token_expires_in_60_days` flag is opt-in, and system user tokens
+    // "default to never expire", so omitting the flag yields a permanent
+    // credential. See token-upgrade.ts for the full reasoning.
+    //
+    // Runs here, while the freshly issued token is definitely valid, rather
+    // than in a background job that would have to race the deadline.
+    //
+    // Non-fatal: a 60-day token is still a working connection, so a failure
+    // must not turn a successful onboarding into an error. On failure
+    // `token_expires_at` stays populated and the expiry warning covers it.
+    let tokenPermanent = false;
+    try {
+      const { data: cfg } = await supabase
+        .from('whatsapp_config')
+        .select('id')
+        .eq('account_id', accountId)
+        .maybeSingle();
+
+      if (cfg) {
+        const upgrade = await upgradeToNonExpiringToken({
+          db: supabase,
+          configId: cfg.id,
+          accessToken,
+          appSecret,
+        });
+        tokenPermanent = upgrade.upgraded;
+        if (!upgrade.upgraded) {
+          console.warn('[embedded-signup] token upgrade skipped:', upgrade.message);
+        }
+      }
+    } catch (err) {
+      console.error(
+        '[embedded-signup] token upgrade threw:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    // ── Coexistence: start the history + contact import ──────
+    //
+    // Deliberately done HERE, inline, rather than left to a button the
+    // operator might click tomorrow. Meta only accepts this request once,
+    // and only within 24 hours of onboarding — after that the customer
+    // has to disconnect and re-onboard to get their history, which is the
+    // very thing they chose Coexistence to avoid.
+    //
+    // Non-fatal: the number is connected and usable either way, so a sync
+    // failure must not turn a successful connection into an error. The
+    // reason is persisted to `sync_last_error` and surfaced in Settings,
+    // where it can still be retried inside the window.
+    let syncRequested = false;
+    if (connectionMode === 'coexistence') {
+      try {
+        const { data: savedConfig } = await supabase
+          .from('whatsapp_config')
+          .select('id, connected_at')
+          .eq('account_id', accountId)
+          .maybeSingle();
+
+        if (savedConfig) {
+          const outcome = await requestCoexistenceSync({
+            db: supabase,
+            configId: savedConfig.id,
+            phoneNumberId,
+            accessToken,
+            connectedAt: savedConfig.connected_at,
+          });
+          syncRequested = outcome.requested;
+        }
+      } catch (err) {
+        console.error(
+          '[embedded-signup] coexistence sync request threw:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     return NextResponse.json({
       success: true,
+      connection_mode: connectionMode,
+      token_permanent: tokenPermanent,
+      sync_requested: syncRequested,
       phone_info: phoneInfo,
       waba_id: wabaId,
       phone_number_id: phoneNumberId,

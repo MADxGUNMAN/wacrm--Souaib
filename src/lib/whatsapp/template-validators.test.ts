@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { TEMPLATE_LIMITS } from './template-limits';
+import { extractVariableIndices } from './template-variables';
 import {
-  extractVariableIndices,
-  TEMPLATE_LIMITS,
   validateBody,
   validateButtons,
   validateFooter,
@@ -154,21 +154,75 @@ describe('validateButtons', () => {
       ]),
     ).toThrow(/At most 1 COPY_CODE/);
   });
-  it('rejects QUICK_REPLY interleaved with CTA buttons', () => {
+  // Meta's documented groupings. Invalid means a group is SPLIT, not that
+  // quick replies came second:
+  //   Valid:   QR,QR  |  QR,QR,URL,Phone  |  URL,Phone,QR,QR
+  //   Invalid: QR,URL,QR  |  URL,QR,URL
+  it('rejects QUICK_REPLY split across a CTA button', () => {
     expect(() =>
       validateButtons([
         { type: 'QUICK_REPLY', text: 'A' },
         { type: 'URL', text: 'B', url: 'https://x' },
         { type: 'QUICK_REPLY', text: 'C' },
       ]),
-    ).toThrow(/cannot be interleaved/);
+    ).toThrow(/must be kept together/);
   });
-  it('accepts QUICK_REPLY then CTA in correct order', () => {
+  it('rejects a CTA group split across a QUICK_REPLY', () => {
+    expect(() =>
+      validateButtons([
+        { type: 'URL', text: 'A', url: 'https://x' },
+        { type: 'QUICK_REPLY', text: 'B' },
+        { type: 'PHONE_NUMBER', text: 'C', phone_number: '+911234567890' },
+      ]),
+    ).toThrow(/must be kept together/);
+  });
+  it('accepts QUICK_REPLY before CTA buttons', () => {
     expect(() =>
       validateButtons([
         { type: 'QUICK_REPLY', text: 'A' },
         { type: 'QUICK_REPLY', text: 'B' },
         { type: 'URL', text: 'C', url: 'https://x' },
+      ]),
+    ).not.toThrow();
+  });
+  /**
+   * THE REGRESSION. Meta lists "URL, Phone, Quick Reply, Quick Reply" as a
+   * valid grouping, but the validator demanded quick replies come first. That
+   * blocked submission of every library template shaped CTA-then-quick-reply
+   * (ec-shipping-update, ec-order-confirmation, and others) before the payload
+   * ever reached Meta.
+   */
+  it('accepts CTA buttons before QUICK_REPLY', () => {
+    expect(() =>
+      validateButtons([
+        { type: 'URL', text: 'Track Package', url: 'https://x' },
+        { type: 'QUICK_REPLY', text: 'Delivery Instructions' },
+      ]),
+    ).not.toThrow();
+  });
+  it('accepts URL, Phone, QUICK_REPLY, QUICK_REPLY exactly as Meta documents', () => {
+    expect(() =>
+      validateButtons([
+        { type: 'URL', text: 'A', url: 'https://x' },
+        { type: 'PHONE_NUMBER', text: 'B', phone_number: '+911234567890' },
+        { type: 'QUICK_REPLY', text: 'C' },
+        { type: 'QUICK_REPLY', text: 'D' },
+      ]),
+    ).not.toThrow();
+  });
+  it('accepts quick replies only', () => {
+    expect(() =>
+      validateButtons([
+        { type: 'QUICK_REPLY', text: 'A' },
+        { type: 'QUICK_REPLY', text: 'B' },
+      ]),
+    ).not.toThrow();
+  });
+  it('accepts CTA buttons only', () => {
+    expect(() =>
+      validateButtons([
+        { type: 'URL', text: 'A', url: 'https://x' },
+        { type: 'PHONE_NUMBER', text: 'B', phone_number: '+911234567890' },
       ]),
     ).not.toThrow();
   });

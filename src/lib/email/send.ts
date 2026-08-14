@@ -125,13 +125,19 @@ export async function sendEmail(message: EmailMessage): Promise<EmailResult> {
 
     const logo = await resolveLogoAttachment();
 
+    // Ensure the from address has a domain to prevent 501 errors
+    // If SMTP_USER is just a username (e.g. 'apikey' for SendGrid), we must use a valid email
+    const fromEmail = SMTP_USER.includes('@')
+      ? SMTP_USER
+      : `noreply@${SMTP_HOST.replace(/^mail\./, '')}`;
+
     await transporter.sendMail({
-      from: `"${message.fromName}" <${SMTP_USER}>`,
+      from: `"${message.fromName}" <${fromEmail}>`,
       to,
       subject: message.subject,
       html: message.html,
       text: message.text,
-      replyTo: message.replyTo?.trim() || SMTP_USER,
+      replyTo: message.replyTo?.trim() || fromEmail,
       attachments: logo ? [logo] : [],
     });
 

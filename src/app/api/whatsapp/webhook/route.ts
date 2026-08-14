@@ -5,6 +5,7 @@ import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
+import { parseFlowResponse } from '@/lib/whatsapp/flow-response'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
@@ -13,6 +14,20 @@ import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook'
+import {
+  historyStatusToMessageStatus,
+  isAccountUpdateField,
+  isCoexistenceWebhookField,
+  isMessageMutation,
+  parseAccountUpdate,
+  parseAppStateSync,
+  parseEdit,
+  parseHistory,
+  parseMessageEchoes,
+  parseRevoke,
+  type HistoryThread,
+  type MessageEcho,
+} from '@/lib/whatsapp/coexistence'
 
 // The `after()` callback in POST runs within this route's max duration.
 // Inbound processing can fan out to per-media Meta verification calls, so
@@ -53,9 +68,18 @@ interface WhatsAppMessage {
    * to advance the per-contact run.
    */
   interactive?: {
-    type: 'button_reply' | 'list_reply'
+    type: 'button_reply' | 'list_reply' | 'nfm_reply'
     button_reply?: { id: string; title: string }
     list_reply?: { id: string; title: string; description?: string }
+    /**
+     * A completed META WhatsApp Flow — the multi-screen form opened by a
+     * template's FLOW button. (Not this app's own Flows engine, which
+     * uses button_reply / list_reply above.)
+     *
+     * `response_json` is a JSON STRING, not an object, and contains the
+     * flow_token we sent plus one entry per answered field.
+     */
+    nfm_reply?: { response_json?: string; body?: string; name?: string }
   }
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
@@ -253,6 +277,26 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 
       const value = change.value
 
+      // ── Account lifecycle ────────────────────────────────────
+      // How Meta reports a BROKEN coexistence pairing (and other
+      // account-level news). Handled before the messaging branches
+      // because its `value` carries no metadata.phone_number_id, so it
+      // resolves tenancy by waba_id instead.
+      if (isAccountUpdateField(change.field)) {
+        await handleAccountUpdate(entry.id, value as unknown)
+        continue
+      }
+
+      // ── Coexistence: messages sent from the WhatsApp Business App ──
+      // These do NOT arrive on the `messages` field and carry no
+      // `contacts[]`, which is why the old `if (!value.messages ||
+      // !value.contacts) continue` gate dropped every one of them
+      // silently. See @/lib/whatsapp/coexistence.
+      if (isCoexistenceWebhookField(change.field)) {
+        await handleCoexistenceChange(change.field, value as unknown)
+        continue
+      }
+
       // Handle status updates
       if (value.statuses) {
         for (const status of value.statuses) {
@@ -260,53 +304,41 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         }
       }
 
-      // Handle incoming messages
-      if (!value.messages || !value.contacts) continue
-
-      const phoneNumberId = value.metadata.phone_number_id
-
-      // Find user's config by phone_number_id. `.single()` returns
-      // PGRST116 for both 0 rows AND ≥2 rows — distinguish them so
-      // operators see the real cause in logs. ≥2 rows shouldn't happen
-      // post-migration 013 (UNIQUE constraint), but a row created
-      // before the constraint, or a race, would still surface here.
-      const { data: configRows, error: configError } = await supabaseAdmin()
-        .from('whatsapp_config')
-        .select('*')
-        .eq('phone_number_id', phoneNumberId)
-
-      if (configError) {
-        console.error(
-          'Error fetching whatsapp_config for phone_number_id:',
-          phoneNumberId,
-          configError
-        )
+      // ── Inbound customer messages ────────────────────────────
+      // Anything else with no messages/contacts is genuinely not for us,
+      // but it is LOGGED rather than dropped in silence. The old silent
+      // `continue` here is exactly why nobody noticed coexistence echoes
+      // were being discarded: a field we do not handle looked identical
+      // to a field with nothing in it.
+      if (!value.messages || !value.contacts) {
+        if (!value.statuses) {
+          console.warn(
+            `[webhook] unhandled change.field "${change.field}" — no messages/contacts/statuses in payload`,
+          )
+        }
         continue
       }
 
-      if (!configRows || configRows.length === 0) {
-        console.error('No config found for phone_number_id:', phoneNumberId)
-        continue
-      }
-
-      if (configRows.length > 1) {
-        console.error(
-          `Multiple configs (${configRows.length}) found for phone_number_id:`,
-          phoneNumberId,
-          '— inbound message dropped. Resolve duplicates so each number maps to a single account.',
-          'Account owners:',
-          configRows.map((r: { account_id: string; user_id: string }) => `${r.account_id} (admin ${r.user_id})`)
-        )
-        continue
-      }
-
-      const config = configRows[0]
+      const config = await resolveConfigByPhoneNumberId(
+        value.metadata.phone_number_id,
+      )
+      if (!config) continue
 
       const decryptedAccessToken = decrypt(config.access_token)
 
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]
         const contact = value.contacts[i] || value.contacts[0]
+
+        // Edits and deletes CHANGE an existing message rather than
+        // adding one. They must divert before processMessage, whose
+        // content-type mapping would fall them through to 'text' and
+        // insert a new row — showing an edited message twice, and a
+        // deleted one as an empty bubble.
+        if (isMessageMutation(message.type)) {
+          await handleMessageMutation(message, config.account_id)
+          continue
+        }
 
         await processMessage(
           message,
@@ -323,6 +355,986 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       }
     }
   }
+}
+
+/**
+ * Resolve the owning account for a business phone number.
+ *
+ * Extracted so the inbound-message path and the coexistence echo path
+ * share one implementation — two copies would drift, and the
+ * multiple-rows case below is subtle enough that only one of them would
+ * end up handling it.
+ *
+ * `.single()` is avoided deliberately: it returns PGRST116 for both 0
+ * rows AND ≥2 rows, so the two are distinguished here to keep the logs
+ * honest. ≥2 rows should not happen post-migration 013 (UNIQUE
+ * constraint), but a row created before the constraint, or a race, would
+ * still surface here.
+ */
+async function resolveConfigByPhoneNumberId(phoneNumberId: string): Promise<{
+  id: string
+  account_id: string
+  user_id: string
+  access_token: string
+  connection_mode?: string
+  coexistence_detected_at?: string | null
+} | null> {
+  const { data: configRows, error: configError } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .select('*')
+    .eq('phone_number_id', phoneNumberId)
+
+  if (configError) {
+    console.error(
+      'Error fetching whatsapp_config for phone_number_id:',
+      phoneNumberId,
+      configError
+    )
+    return null
+  }
+
+  if (!configRows || configRows.length === 0) {
+    console.error('No config found for phone_number_id:', phoneNumberId)
+    return null
+  }
+
+  if (configRows.length > 1) {
+    console.error(
+      `Multiple configs (${configRows.length}) found for phone_number_id:`,
+      phoneNumberId,
+      '— inbound event dropped. Resolve duplicates so each number maps to a single account.',
+      'Account owners:',
+      configRows.map((r: { account_id: string; user_id: string }) => `${r.account_id} (admin ${r.user_id})`)
+    )
+    return null
+  }
+
+  return configRows[0]
+}
+
+// ============================================================
+// COEXISTENCE
+//
+// One number running on the WhatsApp Business App (a phone) and the
+// Cloud API (this CRM) at once. Meta mirrors CRM → phone by itself; the
+// phone → CRM direction is these webhooks.
+// ============================================================
+
+/**
+ * Route a coexistence change to its handler.
+ *
+ * `smb_app_state_sync` (the phone's address book) and `history` (up to
+ * six months of past chats) are Phase 2. They are logged EXPLICITLY
+ * rather than ignored, because the whole reason echoes went missing for
+ * so long is that an unhandled field looked exactly like an empty one.
+ */
+async function handleCoexistenceChange(field: string, value: unknown) {
+  switch (field) {
+    case 'smb_message_echoes':
+      await handleMessageEchoes(value)
+      return
+    case 'history':
+      await handleHistory(value)
+      return
+    case 'smb_app_state_sync':
+      await handleAppStateSync(value)
+      return
+    default:
+      // isCoexistenceWebhookField said yes but nothing handles it — that
+      // means a field was added to the set without a handler. Loud, so it
+      // cannot repeat the original silent-drop bug.
+      console.warn(
+        `[webhook][coexistence] "${field}" is recognised but has no handler`,
+      )
+  }
+}
+
+/**
+ * Mirror messages the business sent from their phone.
+ *
+ * Deliberately does NOT call processMessage. Every side effect in that
+ * function assumes a CUSTOMER just spoke, and all of them are wrong here:
+ *
+ *   unread_count            the business does not have unread messages
+ *                           from itself
+ *   broadcast "replied"     the business replying to itself is not a
+ *                           campaign response
+ *   flow runner             would treat the business's own words as the
+ *                           customer's menu selection
+ *   automation triggers     new_contact_created / first_inbound_message /
+ *                           keyword_match would all misfire
+ *   AI auto-reply           WOULD REPLY TO THE BUSINESS'S OWN MESSAGE,
+ *                           in front of the customer
+ *
+ * What it does do: create the contact and conversation if needed, store
+ * the message as `sender_type: 'business_app'`, and refresh the
+ * conversation preview so the inbox list stays truthful.
+ */
+async function handleMessageEchoes(value: unknown) {
+  const batch = parseMessageEchoes(value)
+  if (!batch) {
+    console.warn('[webhook][coexistence] unusable smb_message_echoes payload')
+    return
+  }
+
+  const config = await resolveConfigByPhoneNumberId(batch.phoneNumberId)
+  if (!config) return
+
+  // An echo is PROOF of coexistence, regardless of what onboarding
+  // reported. Onboarding detection relies on the browser telling us which
+  // flow variation it used, which a popup blocker or a mid-flow refresh
+  // can lose — and a number connected through the legacy manual form
+  // never reports it at all. Recorded once; cheap to skip thereafter.
+  if (!config.coexistence_detected_at) {
+    const { error: markErr } = await supabaseAdmin()
+      .from('whatsapp_config')
+      .update({
+        connection_mode: 'coexistence',
+        coexistence_detected_at: new Date().toISOString(),
+      })
+      .eq('id', config.id)
+    if (markErr) {
+      console.error(
+        '[webhook][coexistence] could not mark config as coexistence:',
+        markErr.message,
+      )
+    }
+  }
+
+  const accessToken = decrypt(config.access_token)
+
+  for (const echo of batch.echoes) {
+    await processEcho(echo, config.account_id, config.user_id, accessToken)
+  }
+}
+
+async function processEcho(
+  echo: MessageEcho,
+  accountId: string,
+  configOwnerUserId: string,
+  accessToken: string,
+) {
+  // THE CUSTOMER IS `to`, NOT `from`. In an echo `from` is the business's
+  // own number — resolving the contact from it would create a contact for
+  // the business itself and a conversation with itself.
+  const customerPhone = normalizePhone(echo.to)
+
+  // No profile name is included in an echo payload, so the phone number
+  // is the only name available for a contact we have never seen. Passing
+  // '' lets findOrCreateContact fall back to the number WITHOUT
+  // overwriting a good existing name with a worse one.
+  const contactOutcome = await findOrCreateContact(
+    accountId,
+    configOwnerUserId,
+    customerPhone,
+    '',
+  )
+  if (!contactOutcome) return
+  const contactRecord = contactOutcome.contact
+
+  const convResult = await findOrCreateConversation(
+    accountId,
+    configOwnerUserId,
+    contactRecord.id,
+  )
+  if (!convResult) return
+  const conversation = convResult.conversation
+
+  if (convResult.created) {
+    await dispatchWebhookEvent(supabaseAdmin(), accountId, 'conversation.created', {
+      conversation_id: conversation.id,
+      contact_id: contactRecord.id,
+    })
+  }
+
+  // Already stored? Then this is Meta echoing back a message THIS CRM
+  // sent — the send path already wrote the row with the same wamid and
+  // sender_type 'agent'. Storing it again would show the operator their
+  // own message twice, once as theirs and once as if it came from the
+  // phone. Checked explicitly rather than relying on upsert because the
+  // unique index (migration 069) is partial, and Supabase's onConflict
+  // cannot express an index predicate.
+  const { data: existing } = await supabaseAdmin()
+    .from('messages')
+    .select('id, sender_type')
+    .eq('conversation_id', conversation.id)
+    .eq('message_id', echo.id)
+    .maybeSingle()
+
+  if (existing) return
+
+  // Echo content is shaped exactly like inbound content — a property
+  // named after `type` — so the existing parser is reused rather than
+  // duplicated. Casting because parseMessageContent is typed for inbound
+  // messages; the fields it reads are identical.
+  const { contentText, mediaUrl, interactiveReplyId } = await parseMessageContent(
+    echo as unknown as WhatsAppMessage,
+    accessToken,
+  )
+
+  const ALLOWED_CONTENT_TYPES = new Set([
+    'text', 'image', 'document', 'audio', 'video',
+    'location', 'template', 'interactive',
+  ])
+  const contentType = ALLOWED_CONTENT_TYPES.has(echo.type)
+    ? echo.type
+    : echo.type === 'sticker'
+      ? 'image'
+      : 'text'
+
+  // A missing timestamp falls back to now. Being a few seconds out beats
+  // dropping a message the operator can see on their phone.
+  const sentAt = echo.timestamp
+    ? new Date(parseInt(echo.timestamp) * 1000).toISOString()
+    : new Date().toISOString()
+
+  const { error: msgError } = await supabaseAdmin().from('messages').insert({
+    conversation_id: conversation.id,
+    // The whole point of migration 069's fourth sender_type. Not 'agent':
+    // no CRM user sent this, and folding it in would credit it to
+    // whoever happened to be looked up and corrupt per-agent reporting.
+    sender_type: 'business_app',
+    content_type: contentType,
+    content_text: contentText,
+    media_url: mediaUrl,
+    message_id: echo.id,
+    // Meta accepted it — it left the phone. Delivery/read then arrive as
+    // ordinary status webhooks against the same wamid.
+    status: 'sent',
+    created_at: sentAt,
+    interactive_reply_id: interactiveReplyId,
+  })
+
+  if (msgError) {
+    // Lost a race with a concurrent delivery of the same echo. The unique
+    // index did its job; nothing more to do.
+    if (isUniqueViolation(msgError)) return
+    console.error('[webhook][coexistence] error inserting echo:', msgError)
+    return
+  }
+
+  // Refresh the preview so the conversation list is not stale, but do NOT
+  // touch unread_count — see the note on handleMessageEchoes.
+  const { error: convError } = await supabaseAdmin()
+    .from('conversations')
+    .update({
+      last_message_text: contentText || `[${echo.type}]`,
+      last_message_at: sentAt,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', conversation.id)
+
+  if (convError) {
+    console.error('[webhook][coexistence] error updating conversation:', convError)
+  }
+
+  // Public-API subscribers get told, with a sender that names where it
+  // came from — an integration reconciling its own sends needs to know
+  // this was typed on a phone, not sent through the API.
+  await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.sent', {
+    conversation_id: conversation.id,
+    contact_id: contactRecord.id,
+    whatsapp_message_id: echo.id,
+    content_type: contentType,
+    text: contentText,
+    sender_type: 'business_app',
+  })
+}
+
+// ============================================================
+// HISTORY BACKFILL
+//
+// Up to ~6 months of past chats, streamed in chunks after onboarding.
+// ============================================================
+
+/**
+ * Extract content from a history message WITHOUT touching the network.
+ *
+ * Deliberately not `parseMessageContent`: that verifies every media id
+ * against Meta before building a URL, which is right for a single live
+ * message and fatal here. A backfill can carry thousands of messages and
+ * this route has a 60s budget — a Meta round trip per media item would
+ * time out and lose the rest of the chunk.
+ *
+ * So media is recorded by id, pointing at the same proxy route the live
+ * path uses. If an id turns out to be dead the image simply fails to
+ * load later, which is a far better outcome than dropping the import.
+ */
+function historyContent(message: MessageEcho | Record<string, unknown>): {
+  contentType: string
+  contentText: string | null
+  mediaUrl: string | null
+} {
+  const type = String((message as Record<string, unknown>).type ?? 'text')
+  const get = (key: string) =>
+    (message as Record<string, unknown>)[key] as
+      | Record<string, unknown>
+      | undefined
+
+  // Meta omits the contents when it is not shipping the asset in this
+  // chunk. For anything older than two weeks the follow-up webhook never
+  // comes, so this is stored as a visible placeholder rather than waited
+  // on or silently skipped — the message DID happen and the thread should
+  // show that something was there.
+  if (type === 'media_placeholder') {
+    return {
+      contentType: 'text',
+      contentText: '[Media message — not included in history export]',
+      mediaUrl: null,
+    }
+  }
+
+  // Meta could not export this one (e.g. code 131051, unknown type).
+  if (type === 'errors' || Array.isArray((message as Record<string, unknown>).errors)) {
+    return {
+      contentType: 'text',
+      contentText: '[Unsupported message]',
+      mediaUrl: null,
+    }
+  }
+
+  switch (type) {
+    case 'text':
+      return {
+        contentType: 'text',
+        contentText: (get('text')?.body as string) ?? null,
+        mediaUrl: null,
+      }
+    case 'image':
+    case 'video':
+    case 'document':
+    case 'audio':
+    case 'sticker': {
+      const media = get(type)
+      const mediaId = media?.id as string | undefined
+      return {
+        // Stickers have no content_type of their own in our CHECK, and
+        // they are images — same mapping the live path uses.
+        contentType: type === 'sticker' ? 'image' : type,
+        contentText: (media?.caption as string) ?? null,
+        mediaUrl: mediaId ? `/api/whatsapp/media/${mediaId}` : null,
+      }
+    }
+    case 'location': {
+      const loc = get('location')
+      const name = (loc?.name as string) ?? ''
+      return {
+        contentType: 'location',
+        contentText: name || '[Location]',
+        mediaUrl: null,
+      }
+    }
+    default:
+      // Anything unrecognised is kept as text with a marker rather than
+      // dropped. Losing a message from someone's history is worse than
+      // rendering it plainly.
+      return {
+        contentType: 'text',
+        contentText: `[${type}]`,
+        mediaUrl: null,
+      }
+  }
+}
+
+/**
+ * Ingest a chat-history chunk.
+ *
+ * ─── What this must NOT do ────────────────────────────────────────
+ *
+ * Every message here is from the PAST. None of the live reactions may
+ * fire: no automations, no flow runner, no AI auto-reply, no unread
+ * bump, no broadcast "replied" flag. Importing six months of history
+ * through the live path would replay half a year of triggers in one go
+ * and could send a wall of messages to every customer at once.
+ *
+ * That is the single biggest risk in this feature, which is why history
+ * has its own insert path rather than reusing processMessage.
+ */
+async function handleHistory(value: unknown) {
+  const parsed = parseHistory(value)
+  if (!parsed) {
+    console.warn('[webhook][coexistence] unusable history payload')
+    return
+  }
+
+  const config = await resolveConfigByPhoneNumberId(parsed.phoneNumberId)
+  if (!config) return
+
+  // Chunks can arrive out of order, so sort by chunk_order before
+  // applying. Progress is monotonic per phase and processing a later
+  // chunk first would make the UI count backwards.
+  const chunks = [...parsed.chunks].sort(
+    (a, b) => (a.chunkOrder ?? 0) - (b.chunkOrder ?? 0),
+  )
+
+  for (const chunk of chunks) {
+    // ---- The business refused, or Meta failed ----
+    if (chunk.error) {
+      await upsertHistoryImport(config, chunk.phase, {
+        status: chunk.error.isDeclined ? 'declined' : 'failed',
+        progress: 100,
+        last_chunk_order: chunk.chunkOrder,
+        error_code: chunk.error.code != null ? String(chunk.error.code) : null,
+        error_message: chunk.error.message,
+      })
+      console.log(
+        `[webhook][coexistence] history phase ${chunk.phase} ` +
+          (chunk.error.isDeclined
+            ? 'declined by the business — nothing to import'
+            : `failed: ${chunk.error.message ?? 'unknown error'}`),
+      )
+      continue
+    }
+
+    let stored = 0
+    let skipped = 0
+
+    for (const thread of chunk.threads) {
+      const result = await ingestHistoryThread(
+        thread,
+        config.account_id,
+        config.user_id,
+      )
+      stored += result.stored
+      skipped += result.skipped
+    }
+
+    await upsertHistoryImport(config, chunk.phase, {
+      // Meta's own figure. Never computed locally — the total chunk count
+      // is unknown in advance, so any local maths would disagree with it.
+      progress: chunk.progress,
+      last_chunk_order: chunk.chunkOrder,
+      status: chunk.progress >= 100 ? 'completed' : 'running',
+      threads_delta: chunk.threads.length,
+      stored_delta: stored,
+      skipped_delta: skipped,
+    })
+
+    console.log(
+      `[webhook][coexistence] history phase ${chunk.phase} chunk ${chunk.chunkOrder ?? '?'}: ` +
+        `${chunk.threads.length} thread(s), ${stored} stored, ${skipped} already present, ${chunk.progress}%`,
+    )
+  }
+}
+
+/**
+ * Create or advance the progress row for one phase.
+ *
+ * Counters are applied as DELTAS read-then-written rather than as
+ * absolute values, because chunks are cumulative: each one adds messages
+ * to a phase that is already part-imported. Writing absolutes would make
+ * the final count equal the last chunk's size instead of the total.
+ */
+async function upsertHistoryImport(
+  config: { id: string; account_id: string },
+  phase: number,
+  patch: {
+    status: 'running' | 'completed' | 'declined' | 'failed'
+    progress: number
+    last_chunk_order: number | null
+    error_code?: string | null
+    error_message?: string | null
+    threads_delta?: number
+    stored_delta?: number
+    skipped_delta?: number
+  },
+) {
+  const { data: existing } = await supabaseAdmin()
+    .from('coexistence_history_imports')
+    .select('id, threads_seen, messages_stored, messages_skipped, progress')
+    .eq('config_id', config.id)
+    .eq('phase', phase)
+    .maybeSingle()
+
+  const row = {
+    account_id: config.account_id,
+    config_id: config.id,
+    phase,
+    status: patch.status,
+    // Never let progress regress. A retried or replayed chunk arriving
+    // late would otherwise drag the bar backwards, which reads as the
+    // import having broken.
+    progress: Math.max(patch.progress, existing?.progress ?? 0),
+    last_chunk_order: patch.last_chunk_order,
+    error_code: patch.error_code ?? null,
+    error_message: patch.error_message ?? null,
+    threads_seen: (existing?.threads_seen ?? 0) + (patch.threads_delta ?? 0),
+    messages_stored:
+      (existing?.messages_stored ?? 0) + (patch.stored_delta ?? 0),
+    messages_skipped:
+      (existing?.messages_skipped ?? 0) + (patch.skipped_delta ?? 0),
+  }
+
+  const query = existing
+    ? supabaseAdmin()
+        .from('coexistence_history_imports')
+        .update(row)
+        .eq('id', existing.id)
+    : supabaseAdmin().from('coexistence_history_imports').insert(row)
+
+  const { error } = await query
+  if (error) {
+    // A racing chunk created the row between our read and insert. The
+    // unique constraint on (config_id, phase) did its job; the next chunk
+    // will pick up the existing row.
+    if (!isUniqueViolation(error)) {
+      console.error(
+        '[webhook][coexistence] history progress write failed:',
+        error.message,
+      )
+    }
+  }
+}
+
+/**
+ * Store one thread's worth of history.
+ *
+ * BATCHED on purpose. The naive version — check-then-insert per message —
+ * is two round trips per message, and a phase can carry thousands. This
+ * does one SELECT for the wamids already present and one bulk INSERT for
+ * the rest, which is what keeps a large import inside the route's budget.
+ */
+async function ingestHistoryThread(
+  thread: HistoryThread,
+  accountId: string,
+  configOwnerUserId: string,
+): Promise<{ stored: number; skipped: number }> {
+  if (thread.messages.length === 0) return { stored: 0, skipped: 0 }
+
+  const contactOutcome = await findOrCreateContact(
+    accountId,
+    configOwnerUserId,
+    normalizePhone(thread.customerPhone),
+    // History carries no profile name, so pass '' and let the helper fall
+    // back to the number rather than overwriting a better existing name.
+    '',
+  )
+  if (!contactOutcome) return { stored: 0, skipped: 0 }
+
+  const convResult = await findOrCreateConversation(
+    accountId,
+    configOwnerUserId,
+    contactOutcome.contact.id,
+  )
+  if (!convResult) return { stored: 0, skipped: 0 }
+  const conversationId = convResult.conversation.id
+
+  // Which of these do we already hold? Covers a re-sync, an overlapping
+  // chunk, and — importantly — messages the CRM itself sent or received
+  // live before the backfill arrived.
+  const wamids = thread.messages.map((m) => m.id)
+  const { data: existingRows } = await supabaseAdmin()
+    .from('messages')
+    .select('message_id')
+    .eq('conversation_id', conversationId)
+    .in('message_id', wamids)
+
+  const existing = new Set(
+    ((existingRows ?? []) as { message_id: string }[]).map((r) => r.message_id),
+  )
+
+  const rows: Record<string, unknown>[] = []
+  const seenInBatch = new Set<string>()
+  for (const message of thread.messages) {
+    if (existing.has(message.id)) continue
+    // Meta has been observed repeating a message inside one chunk. A bulk
+    // insert containing the same wamid twice would violate the unique
+    // index and fail the WHOLE batch, so de-dupe in memory first.
+    if (seenInBatch.has(message.id)) continue
+    seenInBatch.add(message.id)
+
+    const { contentType, contentText, mediaUrl } = historyContent(message)
+
+    rows.push({
+      conversation_id: conversationId,
+      // fromMe is derived from the PRESENCE of history_context.from_me —
+      // customer messages omit it rather than sending false. A historical
+      // business message was typed in the Business App, hence
+      // 'business_app' rather than 'agent'.
+      sender_type: message.fromMe ? 'business_app' : 'customer',
+      content_type: contentType,
+      content_text: contentText,
+      media_url: mediaUrl,
+      message_id: message.id,
+      status: historyStatusToMessageStatus(message.historyStatus),
+      // Backdated to when it actually happened, so the thread reads in the
+      // right order instead of the whole history appearing as "now".
+      created_at: message.timestamp
+        ? new Date(parseInt(message.timestamp) * 1000).toISOString()
+        : new Date().toISOString(),
+    })
+  }
+
+  const skipped = thread.messages.length - rows.length
+  if (rows.length === 0) return { stored: 0, skipped }
+
+  const { error } = await supabaseAdmin().from('messages').insert(rows)
+
+  if (error) {
+    // A concurrent chunk stored one of these first. Fall back to
+    // one-at-a-time so the rest of the batch still lands — a single
+    // collision must not cost thousands of messages.
+    if (isUniqueViolation(error)) {
+      let stored = 0
+      for (const row of rows) {
+        const { error: rowErr } = await supabaseAdmin()
+          .from('messages')
+          .insert(row)
+        if (!rowErr) stored++
+      }
+      return { stored, skipped: thread.messages.length - stored }
+    }
+    console.error(
+      '[webhook][coexistence] history batch insert failed:',
+      error.message,
+    )
+    return { stored: 0, skipped: thread.messages.length }
+  }
+
+  await refreshConversationPreviewFromHistory(conversationId)
+
+  return { stored: rows.length, skipped }
+}
+
+/**
+ * Point the conversation's preview at its genuinely newest message.
+ *
+ * Recomputed from the table rather than taken from the chunk, because a
+ * backfill is arbitrary-order OLD data. Assigning the last imported
+ * message to `last_message_text` would overwrite a live conversation's
+ * current preview with something from months ago — the inbox list would
+ * disagree with the thread and look broken.
+ *
+ * Deliberately does NOT touch unread_count. These messages have all been
+ * seen already; marking them unread would show a badge for six months of
+ * history the operator has read on their phone.
+ */
+async function refreshConversationPreviewFromHistory(conversationId: string) {
+  const { data: newest } = await supabaseAdmin()
+    .from('messages')
+    .select('content_text, content_type, created_at')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (!newest) return
+
+  const { error } = await supabaseAdmin()
+    .from('conversations')
+    .update({
+      last_message_text:
+        newest.content_text || `[${newest.content_type ?? 'message'}]`,
+      last_message_at: newest.created_at,
+    })
+    .eq('id', conversationId)
+
+  if (error) {
+    console.error(
+      '[webhook][coexistence] conversation preview refresh failed:',
+      error.message,
+    )
+  }
+}
+
+// ============================================================
+// ADDRESS BOOK SYNC
+// ============================================================
+
+/**
+ * Stage the phone's contacts for review.
+ *
+ * These do NOT become CRM contacts automatically, and that is the whole
+ * point. `smb_app_state_sync` sends the owner's ENTIRE address book —
+ * family, friends, the plumber, every one-off number they ever saved.
+ * Writing that into `contacts` would pollute the CRM permanently and
+ * silently inflate every broadcast audience built from "all contacts",
+ * so someone's mother receives a marketing campaign.
+ *
+ * A human approves them instead. The cost is one review step; the
+ * alternative cannot be undone without knowing which rows came from where.
+ */
+async function handleAppStateSync(value: unknown) {
+  const parsed = parseAppStateSync(value)
+  if (!parsed) {
+    console.warn('[webhook][coexistence] unusable smb_app_state_sync payload')
+    return
+  }
+
+  const config = await resolveConfigByPhoneNumberId(parsed.phoneNumberId)
+  if (!config) return
+
+  let staged = 0
+  let removed = 0
+
+  for (const entry of parsed.contacts) {
+    const phone = normalizePhone(entry.phone)
+    if (!phone) continue
+
+    if (entry.action === 'remove') {
+      // The number left the phone's address book. Mark the STAGING row
+      // only — never delete a CRM contact. The operator may have imported
+      // and since built a whole relationship around it; a phonebook edit
+      // is not authority to destroy CRM data.
+      const { error } = await supabaseAdmin()
+        .from('coexistence_staged_contacts')
+        .update({ status: 'removed', reviewed_at: new Date().toISOString() })
+        .eq('config_id', config.id)
+        .eq('phone', phone)
+        .eq('status', 'pending')
+      if (error) {
+        console.error(
+          '[webhook][coexistence] staged contact removal failed:',
+          error.message,
+        )
+      } else {
+        removed++
+      }
+      continue
+    }
+
+    // Flagged so an operator reviewing hundreds of numbers can skip the
+    // ones already in the CRM. Uses the shared dedupe helper, so "already
+    // known" means the same thing here as everywhere else (issue #212).
+    const alreadyKnown = await findExistingContact(
+      supabaseAdmin(),
+      config.account_id,
+      phone,
+    )
+
+    const { data: existingStaged } = await supabaseAdmin()
+      .from('coexistence_staged_contacts')
+      .select('id, status')
+      .eq('config_id', config.id)
+      .eq('phone', phone)
+      .maybeSingle()
+
+    // A decision already made stays made. Re-staging a 'skipped' number
+    // would re-offer the owner's family on every sync, and re-staging an
+    // 'imported' one would offer a duplicate.
+    if (
+      existingStaged &&
+      (existingStaged.status === 'skipped' ||
+        existingStaged.status === 'imported')
+    ) {
+      continue
+    }
+
+    const row = {
+      account_id: config.account_id,
+      config_id: config.id,
+      phone,
+      phone_normalized: phone,
+      full_name: entry.fullName,
+      first_name: entry.firstName,
+      status: 'pending',
+      already_known: Boolean(alreadyKnown),
+    }
+
+    const { error } = existingStaged
+      ? await supabaseAdmin()
+          .from('coexistence_staged_contacts')
+          .update(row)
+          .eq('id', existingStaged.id)
+      : await supabaseAdmin().from('coexistence_staged_contacts').insert(row)
+
+    if (error) {
+      if (!isUniqueViolation(error)) {
+        console.error(
+          '[webhook][coexistence] staging contact failed:',
+          error.message,
+        )
+      }
+      continue
+    }
+    staged++
+  }
+
+  console.log(
+    `[webhook][coexistence] address book sync: ${staged} staged for review, ${removed} marked removed`,
+  )
+}
+
+/**
+ * Account-level lifecycle events.
+ *
+ * The one that matters today is a broken coexistence pairing. Meta
+ * reports six different causes as the SAME event with the real reason in
+ * a code, so the reason is persisted verbatim — otherwise every cause
+ * looks like "disconnected", and most of them are things the operator
+ * could fix in two minutes if only they were told which one happened.
+ *
+ * Tenancy resolves by waba_id, because this payload carries no
+ * phone_number_id.
+ */
+async function handleAccountUpdate(wabaIdFromEntry: string, value: unknown) {
+  const update = parseAccountUpdate(value)
+  if (!update) return
+
+  if (!update.isDisconnect) {
+    // Informational — verification updates and the like also land on
+    // account_update. Logged so it is visible, but deliberately NOT
+    // treated as a disconnect: doing so would take a working number
+    // offline in the UI the day Meta ships a new notification type.
+    console.log(
+      `[webhook][account_update] "${update.event}" — informational, no action taken`,
+    )
+    return
+  }
+
+  const wabaId = update.wabaId || wabaIdFromEntry
+  if (!wabaId) {
+    console.error('[webhook][account_update] disconnect with no resolvable waba_id')
+    return
+  }
+
+  const { data: rows, error } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .update({
+      status: 'disconnected',
+      disconnect_event: update.event,
+      disconnect_reason: update.reason,
+      disconnected_at: new Date().toISOString(),
+    })
+    .eq('waba_id', wabaId)
+    .select('id, account_id')
+
+  if (error) {
+    console.error('[webhook][account_update] could not mark disconnected:', error.message)
+    return
+  }
+
+  if (!rows || rows.length === 0) {
+    console.warn(`[webhook][account_update] no config matched waba_id ${wabaId}`)
+    return
+  }
+
+  console.warn(
+    `[webhook][account_update] ${update.event}` +
+      (update.reason ? ` (${update.reason})` : '') +
+      ` — marked ${rows.length} config(s) disconnected for waba_id ${wabaId}`,
+  )
+
+  // Tell each affected account's subscribers. A disconnected number stops
+  // every send silently otherwise, and an integration cannot poll for
+  // something it has no idea happened.
+  for (const row of rows as { id: string; account_id: string }[]) {
+    await dispatchWebhookEvent(
+      supabaseAdmin(),
+      row.account_id,
+      'whatsapp.disconnected',
+      {
+        event: update.event,
+        reason: update.reason,
+        initiated_by: update.initiatedBy,
+        waba_id: wabaId,
+      },
+    )
+  }
+}
+
+/**
+ * Apply an `edit` or `revoke` to a message we already stored.
+ *
+ * Without this both fall through processMessage's content-type mapping to
+ * 'text' and get INSERTED as new rows — so an edited message shows the
+ * conversation twice with two different texts, and a deleted one adds a
+ * blank bubble. Coexistence makes both common, because editing and
+ * deleting are everyday phone actions.
+ *
+ * A mutation for a message we never stored is a no-op: WhatsApp keeps
+ * history far longer than this CRM has existed for any given account.
+ */
+async function handleMessageMutation(
+  message: WhatsAppMessage,
+  accountId: string,
+) {
+  const edit = parseEdit(message)
+  if (edit) {
+    // Reuse the ordinary content parser on the replacement payload. No
+    // access token is passed: re-verifying media on an edit is not worth a
+    // Meta round trip, and the caption is the part that usually changed.
+    const { contentText } = await parseMessageContent(
+      { ...edit.newMessage, id: edit.editMessageId, type: edit.newType } as unknown as WhatsAppMessage,
+      '',
+    )
+
+    const { data, error } = await supabaseAdmin()
+      .from('messages')
+      .update({
+        content_text: contentText,
+        edited_at: new Date().toISOString(),
+      })
+      .eq('message_id', edit.originalMessageId)
+      .select('id, conversation_id')
+
+    if (error) {
+      console.error('[webhook] failed to apply message edit:', error.message)
+      return
+    }
+    if (!data || data.length === 0) {
+      console.log(
+        `[webhook] edit for unknown message ${edit.originalMessageId} — ignored`,
+      )
+      return
+    }
+
+    // Keep the conversation preview in step, but ONLY when the edited
+    // message is still the newest one in its thread. Editing an older
+    // message must not overwrite the preview with text from the middle of
+    // the conversation — that would make the list disagree with the
+    // thread for no reason the operator could work out.
+    for (const row of data as { id: string; conversation_id: string }[]) {
+      const { data: newest } = await supabaseAdmin()
+        .from('messages')
+        .select('id')
+        .eq('conversation_id', row.conversation_id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (newest?.id !== row.id) continue
+
+      await supabaseAdmin()
+        .from('conversations')
+        .update({ last_message_text: contentText })
+        .eq('id', row.conversation_id)
+    }
+
+    await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.edited', {
+      whatsapp_message_id: edit.originalMessageId,
+      text: contentText,
+    })
+    return
+  }
+
+  const revoke = parseRevoke(message)
+  if (!revoke) return
+
+  // SOFT delete. The row stays so the thread can render "This message was
+  // deleted" in place — removing it would silently reflow the
+  // conversation and lose the fact that something was there, and would
+  // dangle any reply_to_message_id pointing at it.
+  const { data, error } = await supabaseAdmin()
+    .from('messages')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('message_id', revoke.originalMessageId)
+    .select('id')
+
+  if (error) {
+    console.error('[webhook] failed to apply message revoke:', error.message)
+    return
+  }
+  if (!data || data.length === 0) {
+    console.log(
+      `[webhook] revoke for unknown message ${revoke.originalMessageId} — ignored`,
+    )
+    return
+  }
+
+  await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.deleted', {
+    whatsapp_message_id: revoke.originalMessageId,
+  })
 }
 
 // The happy-path status ladder — pending → sent → delivered → read →
@@ -978,6 +1990,21 @@ async function parseMessageContent(
           interactiveReplyId: reply.id,
         }
       }
+
+      // A completed Meta WhatsApp Flow. Until this existed the answers
+      // fell through to '[Interactive reply]' and were DISCARDED — the
+      // customer filled in a form and the business received a placeholder.
+      if (message.interactive?.nfm_reply) {
+        const parsed = parseFlowResponse(message.interactive.nfm_reply)
+        return {
+          ...empty,
+          contentText: parsed.text,
+          // The flow_token we generated when sending, so a submission can
+          // be tied back to the message that started it.
+          interactiveReplyId: parsed.flowToken,
+        }
+      }
+
       return { ...empty, contentText: '[Interactive reply]' }
     }
 

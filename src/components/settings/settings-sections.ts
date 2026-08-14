@@ -1,7 +1,6 @@
 import {
   Coins,
   CreditCard,
-  FileText,
   KeyRound,
   LayoutGrid,
   Palette,
@@ -31,7 +30,11 @@ export const SETTINGS_SECTIONS = [
   'billing',
   'whatsapp-setup',
   'whatsapp',
-  'templates',
+  // NOTE: 'templates' deliberately absent. Templates moved to their own
+  // top-level route (/templates) — a three-step creation wizard does not
+  // belong in a settings pane, and templates are daily working material
+  // rather than one-time configuration. `?tab=templates` redirects there;
+  // see the settings page.
   'quick-replies',
   'fields',
   'deals',
@@ -61,7 +64,6 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   billing: { id: 'billing', label: 'Billing & plan', icon: CreditCard, group: 'workspace' },
   'whatsapp-setup': { id: 'whatsapp-setup', label: 'WhatsApp Setup', icon: Smartphone, group: 'workspace' },
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
-  templates: { id: 'templates', label: 'Templates', icon: FileText, group: 'workspace' },
   'quick-replies': { id: 'quick-replies', label: 'Quick replies', icon: Zap, group: 'workspace' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
   deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
@@ -90,3 +92,15 @@ export function resolveSection(raw: string | null): SettingsSection {
   if (isSection(raw)) return raw;
   return DEFAULT_SECTION;
 }
+
+/**
+ * Sections that are no longer panes here and live at their own route.
+ *
+ * Kept as an explicit map rather than letting `resolveSection` silently
+ * fall back to Overview: an old bookmark to `?tab=templates` should land
+ * on templates, not dump the user on a landing page wondering where the
+ * feature went.
+ */
+export const RELOCATED_SECTIONS: Record<string, string> = {
+  templates: '/templates',
+};

@@ -95,6 +95,7 @@ const nextConfig: NextConfig = {
     "*.ngrok.app",
     "*.ngrok.io",
     "*.trycloudflare.com",
+    "*.junkiescoder.com",
     "*.loca.lt",
     ...(process.env.ALLOWED_DEV_ORIGINS
       ? process.env.ALLOWED_DEV_ORIGINS.split(",")
@@ -142,6 +143,43 @@ const nextConfig: NextConfig = {
    */
   async headers() {
     return [
+      /**
+       * DEV ONLY — never cache Turbopack chunks.
+       *
+       * Turbopack dev chunk filenames are hashed from the MODULE GROUP,
+       * not from the contents: `src_06fx2uu._.js` keeps the same name
+       * across rebuilds while its contents change. Combined with a
+       * cacheable response, the browser happily reuses yesterday's copy
+       * of a filename whose contents have moved on.
+       *
+       * The symptom is nasty to diagnose because nothing looks wrong:
+       * typecheck passes, tests pass, the production build passes, the
+       * chunk on disk is correct — and the browser throws
+       * "Cannot read properties of undefined" for an export that was
+       * added since it last fetched that filename. It bit three times in
+       * a row while adding constants to shared modules, and each time
+       * looked like a bundler or circular-import bug.
+       *
+       * Especially likely over a tunnel (ngrok), where there is an extra
+       * edge between the dev server and the browser.
+       *
+       * Production is untouched: there, chunk names ARE content-hashed
+       * and Next emits the correct immutable headers itself. Forcing
+       * anything here would work against that.
+       */
+      ...(process.env.NODE_ENV !== "production"
+        ? [
+            {
+              source: "/_next/static/:path*",
+              headers: [
+                {
+                  key: "Cache-Control",
+                  value: "no-store, no-cache, must-revalidate",
+                },
+              ],
+            },
+          ]
+        : []),
       {
         source: "/api/:path*",
         headers: [{ key: "Cache-Control", value: "no-store" }],
@@ -168,3 +206,4 @@ const nextConfig: NextConfig = {
 };
 
 export default withNextIntl(nextConfig);
+// Bust cache

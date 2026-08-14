@@ -49,9 +49,10 @@ import {
   type SendMediaPayload,
 } from "./message-composer";
 import { deleteAccountMedia } from "@/lib/storage/upload-media";
-import { TemplatePicker } from "./template-picker";
+import { TemplatePicker, type TemplateSendValues } from "./template-picker";
 import { AiThreadBanner } from "./ai-thread-banner";
 import { buildReplyPreview } from "./reply-quote";
+import { isOutboundSender } from "@/lib/messages/sender-type";
 import { toast } from "sonner";
 
 interface ReplyDraft {
@@ -650,14 +651,7 @@ export function MessageThread({
   }, []);
 
   const handleSendTemplate = useCallback(
-    async (
-      template: MessageTemplate,
-      values: {
-        body: string[];
-        headerText?: string;
-        buttonParams?: Record<number, string>;
-      },
-    ) => {
+    async (template: MessageTemplate, values: TemplateSendValues) => {
       if (!conversation) return;
 
       const renderedBody = renderTemplateBody(template.body_text, values.body);
@@ -684,15 +678,15 @@ export function MessageThread({
             message_type: "template",
             template_name: template.name,
             template_language: template.language,
-            // Structured params drive the new send-builder path
-            // (header media + URL button substitution). Body values
-            // are mirrored under both shapes so the route can fall
-            // back if the template row isn't found locally.
-            template_message_params: {
-              body: values.body,
-              headerText: values.headerText,
-              buttonParams: values.buttonParams,
-            },
+            // Structured params drive the send-builder path (header
+            // media, URL buttons, offer expiry, per-card carousel
+            // values). Spread rather than listed field by field: the
+            // previous version named three fields and so silently
+            // dropped `headerMediaUrl` — which the picker collects —
+            // along with anything added later. Body values are mirrored
+            // under both shapes so the route can fall back if the
+            // template row isn't found locally.
+            template_message_params: values,
             template_params: values.body,
             content_text: renderedBody,
           }),
@@ -744,9 +738,10 @@ export function MessageThread({
   // contact name when the customer sent it.
   const authorLabelFor = useCallback(
     (m: Message): string => {
-      const isAgentMsg =
-        m.sender_type === "agent" || m.sender_type === "bot";
-      return isAgentMsg ? "You" : contactDisplayName;
+      // 'business_app' counts as "You": the business did send it, just
+      // from the phone rather than here. The bubble carries a "from
+      // phone" marker so the distinction is not lost.
+      return isOutboundSender(m.sender_type) ? "You" : contactDisplayName;
     },
     [contactDisplayName],
   );
@@ -1125,10 +1120,9 @@ export function MessageThread({
                       : null;
                     const reply = parent
                       ? {
-                          authorLabel:
-                            parent.sender_type === "agent" || parent.sender_type === "bot"
-                              ? t("me") 
-                              : contact?.name || contact?.phone || "Unknown",
+                          authorLabel: isOutboundSender(parent.sender_type)
+                            ? t("me")
+                            : contact?.name || contact?.phone || "Unknown",
                           preview: buildReplyPreview(parent, tQuote),
                         }
                       : null;

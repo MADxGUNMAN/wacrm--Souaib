@@ -57,16 +57,84 @@ function makeSupabaseStub(
 }
 
 describe('isTemplateWebhookField', () => {
-  it('recognises the three template fields', () => {
+  it('recognises the template lifecycle fields', () => {
     expect(isTemplateWebhookField('message_template_status_update')).toBe(true);
     expect(isTemplateWebhookField('message_template_quality_update')).toBe(true);
     expect(isTemplateWebhookField('message_template_components_update')).toBe(
       true,
     );
   });
+  // Meta's docs and its live payloads have disagreed on the prefix for
+  // this one, so both spellings must be recognised or the event is
+  // dropped and the local category silently goes stale.
+  it('recognises both spellings of the category field', () => {
+    expect(isTemplateWebhookField('template_category_update')).toBe(true);
+    expect(isTemplateWebhookField('message_template_category_update')).toBe(true);
+  });
   it('rejects messaging fields', () => {
     expect(isTemplateWebhookField('messages')).toBe(false);
     expect(isTemplateWebhookField('message_status')).toBe(false);
+  });
+});
+
+describe('handleTemplateWebhookChange — category update', () => {
+  it('persists a MARKETING → UTILITY reclassification in local TitleCase', async () => {
+    const { stub, calls } = makeSupabaseStub();
+    await handleTemplateWebhookChange(
+      {
+        field: 'template_category_update',
+        value: {
+          message_template_id: 555,
+          message_template_name: 'order_update',
+          previous_category: 'MARKETING',
+          new_category: 'UTILITY',
+        },
+      },
+      stub,
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0].table).toBe('message_templates');
+    expect(calls[0].update).toEqual({ category: 'Utility' });
+    expect(calls[0].filter).toEqual({
+      column: 'meta_template_id',
+      value: '555',
+    });
+  });
+
+  it('accepts correct_category when new_category is absent', async () => {
+    const { stub, calls } = makeSupabaseStub();
+    await handleTemplateWebhookChange(
+      {
+        field: 'message_template_category_update',
+        value: { message_template_id: 7, correct_category: 'marketing' },
+      },
+      stub,
+    );
+    expect(calls[0].update).toEqual({ category: 'Marketing' });
+  });
+
+  it('writes nothing when the category is unrecognised', async () => {
+    const { stub, calls } = makeSupabaseStub();
+    await handleTemplateWebhookChange(
+      {
+        field: 'template_category_update',
+        value: { message_template_id: 7, new_category: 'SOMETHING_NEW' },
+      },
+      stub,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it('writes nothing when the template id is missing', async () => {
+    const { stub, calls } = makeSupabaseStub();
+    await handleTemplateWebhookChange(
+      {
+        field: 'template_category_update',
+        value: { new_category: 'UTILITY' },
+      },
+      stub,
+    );
+    expect(calls).toHaveLength(0);
   });
 });
 

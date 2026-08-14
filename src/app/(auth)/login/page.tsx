@@ -1,6 +1,7 @@
 "use client";
+// Force rebuild to resolve Turbopack hydration mismatch
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
@@ -42,7 +43,27 @@ function LoginPageInner() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [logoUrl, setLogoUrl] = useState<string>("/Replai-logo.png");
+  const [iconUrl, setIconUrl] = useState<string>("/logo-icon.png");
+  const [siteName, setSiteName] = useState<string>("Replai");
   const supabase = createClient();
+
+  useEffect(() => {
+    async function loadBranding() {
+      try {
+        const res = await fetch("/api/public/settings", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.settings?.logo_url) setLogoUrl(data.settings.logo_url);
+          if (data.settings?.favicon_url) setIconUrl(data.settings.favicon_url);
+          if (data.settings?.site_name) setSiteName(data.settings.site_name);
+        }
+      } catch (err) {
+        console.error("Failed to load branding in login page:", err);
+      }
+    }
+    loadBranding();
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,10 +107,10 @@ function LoginPageInner() {
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
         
         <div className="relative z-10 max-w-lg px-8 text-center flex flex-col items-center">
-          <img src="/Replai-logo.png" alt="Replai Logo" className="h-10 w-auto mb-8" />
+          <img src={logoUrl} alt={siteName} suppressHydrationWarning className="h-24 w-auto max-w-[360px] object-contain mb-8" />
           <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Scale your customer communication</h2>
           <p className="text-lg text-slate-600 leading-relaxed">
-            Join thousands of businesses using Replai to automate WhatsApp support, sales, and marketing.
+            Join thousands of businesses using {siteName} to automate WhatsApp support, sales, and marketing.
           </p>
         </div>
       </div>
@@ -98,11 +119,11 @@ function LoginPageInner() {
       <div className="flex w-full lg:w-1/2 items-center justify-center px-4 sm:px-8 bg-white">
         <Card className="w-full max-w-md border-0 sm:border border-slate-200 sm:bg-white shadow-none sm:shadow-xl sm:shadow-slate-200/50">
         <CardHeader className="items-center text-center">
-          <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#25D366]/10 border border-[#25D366]/20 shadow-inner">
+          <div className="mb-2 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#25D366]/10 border border-[#25D366]/20 shadow-inner">
             {inviteToken ? (
-              <UsersRound className="h-7 w-7 text-[#25D366]" />
+              <UsersRound className="h-8 w-8 text-[#25D366]" />
             ) : (
-              <img src="/logo-icon.png" alt="Replai" className="h-8 w-8 object-contain" />
+              <img src={iconUrl} alt={siteName} suppressHydrationWarning className="h-10 w-10 object-contain" />
             )}
           </div>
           <CardTitle className="text-2xl font-bold text-slate-900 mt-2">

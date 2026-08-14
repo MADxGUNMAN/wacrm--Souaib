@@ -166,7 +166,7 @@ export async function proxy(request: NextRequest) {
   // signed-out visitor gets bounced to login, but they are deliberately
   // NOT in `crmPaths` below — they are the destinations of the
   // subscription gate, so gating them would loop forever.
-  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/settings', '/super-admin', '/upgrade-plan', '/subscription-required']
+  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/templates', '/automations', '/settings', '/super-admin', '/upgrade-plan', '/subscription-required']
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
@@ -176,7 +176,7 @@ export async function proxy(request: NextRequest) {
   // ── Super Admin access control ──────────────────────────────────────
   // Super admins are platform operators. They must NOT access the normal
   // CRM dashboard. Conversely, normal users must NOT access /super-admin.
-  const crmPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/settings']
+  const crmPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/templates', '/automations', '/settings']
   const isSuperAdminPath = request.nextUrl.pathname.startsWith('/super-admin')
   const isCrmPath = crmPaths.some(path => request.nextUrl.pathname.startsWith(path))
   // API requests that the subscription gate applies to. Separated from

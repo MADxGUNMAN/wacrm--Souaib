@@ -1,0 +1,33 @@
+-- ============================================================
+-- 056_remove_quarterly_cycle.sql
+--
+-- Deletes the retired Quarterly billing cycle outright. 055 only hid it,
+-- which left a dead "Quarterly (hidden)" column in every row of the
+-- admin price matrix and a dead row in the cycles list — an editable
+-- control that could no longer affect anything a customer sees.
+--
+-- SAFE TO DELETE. Verified against the live database before running,
+-- rather than assumed:
+--
+--   * payment_requests.cycle_id is ON DELETE SET NULL, not CASCADE, so
+--     no payment row is destroyed by this.
+--   * Every payment_requests row carries its own snapshots —
+--     cycle_label_snapshot, cycle_months, cycle_duration_days,
+--     expected_amount, paid_amount — so the three historical Quarterly
+--     payments still read "Pro · Quarterly · ₹7,560" with the FK nulled.
+--     The super admin review queue renders those snapshot columns and
+--     never joins back to billing_cycles.
+--   * subscription_plan_prices.cycle_id is ON DELETE CASCADE, which is
+--     precisely what clears the stale price cells.
+--
+-- Confirmed after running: cycles = Monthly (30d) + Yearly (360d), price
+-- rows dropped from 9 to 6, all six payment rows still report their plan
+-- and cycle names, and exactly 3 rows have a null cycle_id as expected.
+--
+-- Deliberately NOT deleting the retired Growth / Business plans in the
+-- same breath. They were not asked for, and 2 live accounts plus 4
+-- payments still reference them. They are already invisible to
+-- customers, so there is no urgency to take an irreversible step.
+-- ============================================================
+
+DELETE FROM billing_cycles WHERE cycle_key = 'quarterly';

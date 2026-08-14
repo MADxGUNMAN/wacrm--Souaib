@@ -12,6 +12,7 @@ import {
   CreditCard,
   Building2,
   Gauge,
+  Zap,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -31,6 +32,7 @@ import type {
 } from '@/lib/whatsapp/limits';
 import { usagePercent, type InitiatedUsage } from '@/lib/whatsapp/usage';
 import { SettingsPanelHead } from './settings-panel-head';
+import { CoexistencePanel } from './coexistence-panel';
 import { WhatsAppConnectModal } from './whatsapp-connect-modal';
 
 interface EmbeddedConfig {
@@ -62,6 +64,7 @@ interface MetaAccountInfo {
     nameReview: NameReview | null;
     usage: UsageTotals | null;
     initiated: InitiatedUsage | null;
+    sevenDayUnique?: number;
   } | null;
 }
 
@@ -155,6 +158,17 @@ export function WhatsAppSetup() {
     waba_id?: string;
     phone_number_id?: string;
     business_id?: string;
+    /**
+     * WHICH onboarding variation Meta finished with.
+     *
+     * `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING` means Coexistence — the
+     * number stays live on the WhatsApp Business App and also runs on the
+     * Cloud API. That changes real behaviour (Meta sends us echoes of
+     * messages typed on the phone) and it changes the rules the operator
+     * has to follow (open the app every 13 days or Meta drops the
+     * pairing). We were receiving this and throwing it away.
+     */
+    finish_event?: string;
   }>({});
 
   // Meta reports in-flow failures through the same message channel rather
@@ -187,6 +201,10 @@ export function WhatsAppSetup() {
             waba_id: data.data?.waba_id ?? data.data?.waba_ids?.[0],
             phone_number_id: data.data?.phone_number_id,
             business_id: data.data?.business_id,
+            // Kept verbatim rather than pre-interpreted here. The server
+            // decides what it means, so the rule lives in one place and
+            // a new FINISH_* variant needs no client change.
+            finish_event: data.event,
           };
           flowErrorRef.current = null;
         } else if (data.event === 'ERROR' || data.data?.error_message) {
@@ -233,9 +251,30 @@ export function WhatsAppSetup() {
     // Cloud API flow expects the key to be *absent*, not an empty string,
     // otherwise Meta falls back to a plain Login for Business dialog
     // instead of the Embedded Signup screens.
+    // `version: 'v4'` — NOT `sessionInfoVersion`.
+    //
+    // This used to send `sessionInfoVersion: '3'`, which is the older
+    // Embedded Signup contract. Meta's Embedded Signup Integration Helper
+    // for THIS app (App Dashboard > WhatsApp > Embedded Signup Builder)
+    // generates exactly:
+    //
+    //   extras: { "version": "v4", "setup": {}, "featureType": ... }
+    //
+    // and its launch panel reports "ES Version: v4". Meta's own docs also
+    // carry a deprecation notice: Embedded Signup v2 is retired on
+    // October 15, 2026, with instructions to move to v4.
+    //
+    // The key name changed as well as the value, so the old pairing was not
+    // "an older version" so much as an unrecognised key plus a missing one —
+    // Meta falls back to default behaviour rather than reporting it, which is
+    // why this never surfaced as an error.
+    //
+    // The postMessage listener above reads `data.type`, `data.event` and
+    // `data.data.*`, none of which changed between these versions, so it
+    // keeps working unmodified.
     const extras: Record<string, unknown> = {
+      version: 'v4',
       setup: {},
-      sessionInfoVersion: '3',
     };
     if (option === 'existing' || option === 'migrate') {
       extras.featureType = 'whatsapp_business_app_onboarding';
@@ -259,6 +298,34 @@ export function WhatsAppSetup() {
               waba_id: embeddedDataRef.current.waba_id,
               phone_number_id: embeddedDataRef.current.phone_number_id,
               business_id: embeddedDataRef.current.business_id,
+              finish_event: embeddedDataRef.current.finish_event,
+              // What the operator picked in the connect modal, as a
+              // cross-check for when Meta's finish_event goes missing (a
+              // popup closed early, a blocked message channel).
+              //
+              // ONLY 'existing' counts. That is the option whose wording
+              // actually describes Coexistence — "a phone number that's
+              // currently active on WhatsApp Business app". 'migrate'
+              // means moving an existing API number off another provider
+              // (Twilio, Wati, …), which is NOT coexistence: that number
+              // is already on the Cloud API and is not on the Business
+              // App at all. Claiming it was would set connection_mode
+              // wrong, and the CRM would then wait for phone echoes that
+              // can never arrive.
+              //
+              // Note the `extras.featureType` line above still sends the
+              // Business-App variation for 'migrate' too. That looks
+              // wrong for the same reason, but it is pre-existing
+              // behaviour on a flow there is no way to test here, so it
+              // is left alone and flagged rather than changed blind.
+              // Meta's own finish_event stays authoritative either way:
+              // if a migrate really does complete Business-App
+              // onboarding, the event says so and the mode is still set
+              // correctly.
+              requested_feature_type:
+                option === 'existing'
+                  ? 'whatsapp_business_app_onboarding'
+                  : undefined,
             }),
           })
             .then(async (res) => {
@@ -272,9 +339,51 @@ export function WhatsAppSetup() {
                   if (accountId) await fetchConfig(accountId);
                 }
               } else {
+                // A non-JSON body here means the request never reached the
+                // route handler, because the handler returns JSON on every
+                // path including its own 500. The previous version logged
+                // only the body, which is the least diagnostic part — an
+                // HTML page looks identical whether it came from a 404, a
+                // followed redirect to /login, or a dev-server error
+                // overlay, and those have completely different fixes.
+                //
+                // `redirected` and `url` are the tell: fetch() follows
+                // redirects silently, so a 307 to /login arrives here as a
+                // 200 full of login-page HTML. Comparing the final `url`
+                // against the requested path is the only way to see that.
                 const text = await res.text();
-                console.error('Expected JSON but got HTML/text:', text.substring(0, 500));
-                toast.error('Server returned an invalid response. Please check the console.');
+                const looksLikeHtml = text.trimStart().startsWith('<');
+                console.error('[embedded-signup] non-JSON response from the API', {
+                  status: res.status,
+                  statusText: res.statusText,
+                  requested: '/api/whatsapp/embedded-signup',
+                  finalUrl: res.url,
+                  wasRedirected: res.redirected,
+                  contentType: contentType ?? '(none)',
+                  bodyStart: text.substring(0, 300),
+                });
+
+                if (res.redirected) {
+                  toast.error(
+                    `Setup was redirected to ${new URL(res.url).pathname} instead of ` +
+                      'completing. Your session has probably expired — sign in again and retry.',
+                  );
+                } else if (res.status === 404) {
+                  toast.error(
+                    'The setup endpoint was not found. If this is a deployed ' +
+                      'environment, it may be running an older build.',
+                  );
+                } else if (looksLikeHtml) {
+                  toast.error(
+                    `The server returned a web page instead of data (HTTP ${res.status}). ` +
+                      'Check the browser console for details.',
+                  );
+                } else {
+                  toast.error(
+                    `Unexpected response from the server (HTTP ${res.status}). ` +
+                      'Check the browser console for details.',
+                  );
+                }
               }
             })
             .catch((err) => {
@@ -391,31 +500,46 @@ export function WhatsAppSetup() {
                 WhatsApp Business Account Information
               </h2>
             </div>
-            <div className="grid gap-px sm:grid-cols-4 rounded-xl border border-border overflow-hidden bg-border">
+            <div className="grid gap-px grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 rounded-xl border border-border overflow-hidden bg-border">
               {/* Business */}
-              <div className="bg-card p-4 space-y-1">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block">
                   Business
                 </span>
-                <div className="flex items-center gap-2 font-medium text-foreground">
-                  <Building2 className="size-4 text-primary" />
+                <div className="flex items-center gap-1.5 font-medium text-foreground text-sm">
+                  <Building2 className="size-4 text-primary shrink-0" />
                   <span className="truncate">
                     {metaInfoLoading ? '...' : (metaInfo?.phone?.verified_name ?? metaInfo?.waba?.name ?? 'Connected')}
                   </span>
                 </div>
               </div>
+
               {/* WhatsApp Number */}
-              <div className="bg-card p-4 space-y-1">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block">
                   WhatsApp Number
                 </span>
-                <div className="font-medium text-primary">
+                <div className="font-medium text-primary text-sm truncate">
                   {metaInfoLoading ? '...' : (metaInfo?.phone?.display_phone_number ?? `+${config.phone_number_id}`)}
                 </div>
               </div>
+
+              {/* Message Limit */}
+              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block" title="24-Hour Message Limit">
+                  Message Limit
+                </span>
+                <div className="flex items-center gap-1.5 font-semibold text-foreground text-sm">
+                  <Zap className="size-3.5 text-amber-500 shrink-0 fill-amber-500/20" />
+                  <span>
+                    {metaInfoLoading ? '...' : (limits?.messaging?.label ?? '2,000')}
+                  </span>
+                </div>
+              </div>
+
               {/* Account Status */}
-              <div className="bg-card p-4 space-y-1">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block">
                   Account Status
                 </span>
                 {(() => {
@@ -423,22 +547,23 @@ export function WhatsAppSetup() {
                   const isGood = status === 'CONNECTED';
                   const isBad = status === 'FLAGGED' || status === 'RESTRICTED' || status === 'RATE_LIMITED';
                   return (
-                    <div className={`flex items-center gap-1.5 font-medium ${
+                    <div className={`flex items-center gap-1.5 font-semibold text-sm ${
                       metaInfoLoading ? 'text-muted-foreground' :
                       isGood ? 'text-emerald-500' :
                       isBad ? 'text-red-500' : 'text-amber-500'
                     }`}>
-                      {isGood ? <CheckCircle2 className="size-3.5" /> :
-                       isBad ? <AlertTriangle className="size-3.5" /> :
-                       <AlertTriangle className="size-3.5" />}
-                      {metaInfoLoading ? '...' : (status ?? 'Unknown')}
+                      {isGood ? <CheckCircle2 className="size-3.5 shrink-0" /> :
+                       isBad ? <AlertTriangle className="size-3.5 shrink-0" /> :
+                       <AlertTriangle className="size-3.5 shrink-0" />}
+                      <span className="truncate">{metaInfoLoading ? '...' : (status ?? 'Unknown')}</span>
                     </div>
                   );
                 })()}
               </div>
+
               {/* Quality Rating */}
-              <div className="bg-card p-4 space-y-1">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block">
                   Quality Rating
                 </span>
                 {(() => {
@@ -447,21 +572,43 @@ export function WhatsAppSetup() {
                   const isRed = rating === 'RED';
                   const isYellow = rating === 'YELLOW';
                   return (
-                    <div className={`flex items-center gap-1.5 font-medium ${
+                    <div className={`flex items-center gap-1.5 font-semibold text-sm ${
                       metaInfoLoading ? 'text-muted-foreground' :
                       isGreen ? 'text-emerald-500' :
                       isRed ? 'text-red-500' :
                       isYellow ? 'text-amber-500' : 'text-muted-foreground'
                     }`}>
-                      <Shield className={`size-3.5 ${
+                      <Shield className={`size-3.5 shrink-0 ${
                         isGreen ? 'text-emerald-500' :
                         isRed ? 'text-red-500' :
                         isYellow ? 'text-amber-500' : 'text-primary'
                       }`} />
-                      {metaInfoLoading ? '...' : (rating ?? 'Unknown')}
+                      <span className="truncate">{metaInfoLoading ? '...' : (rating ?? 'Unknown')}</span>
                     </div>
                   );
                 })()}
+              </div>
+
+              {/* Message Usage (View Insights) */}
+              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block">
+                  Message Usage
+                </span>
+                <div className="text-sm">
+                  <a
+                    href={
+                      metaInfo?.waba?.id || config?.waba_id
+                        ? `https://business.facebook.com/latest/whatsapp_manager/insights?business_id=${metaInfo?.waba?.id || config?.waba_id}&asset_id=${metaInfo?.waba?.id || config?.waba_id}`
+                        : 'https://business.facebook.com/latest/whatsapp_manager/insights'
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 font-semibold text-primary hover:underline"
+                  >
+                    <span>View Insights</span>
+                    <ExternalLink className="size-3.5 shrink-0" />
+                  </a>
+                </div>
               </div>
             </div>
           </CardContent>
@@ -670,6 +817,140 @@ export function WhatsAppSetup() {
         </Card>
       ) : null}
 
+      {/* ─── Increase Messaging Limits (Meta Replica) ─── */}
+      {isConnected && (
+        <Card className="mb-8 shadow-sm border border-border">
+          <CardContent className="py-6 space-y-6">
+            {/* Header with Title & Meta Direct Link */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-bold text-foreground">
+                    Messaging limits
+                  </h2>
+                  <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full font-medium">
+                    Meta Tier Progress
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Updated automatically from your Meta WhatsApp Business Portfolio
+                </p>
+              </div>
+
+              <a
+                href={
+                  metaInfo?.waba?.id || config?.waba_id
+                    ? `https://business.facebook.com/latest/whatsapp_manager/messaging_limits?business_id=${metaInfo?.waba?.id || config?.waba_id}&asset_id=${metaInfo?.waba?.id || config?.waba_id}`
+                    : 'https://business.facebook.com/latest/whatsapp_manager/messaging_limits'
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3.5 py-2 text-xs font-semibold text-foreground shadow-sm transition-colors hover:bg-muted hover:text-primary"
+              >
+                <span>View Limits in Meta</span>
+                <ExternalLink className="size-3.5" />
+              </a>
+            </div>
+
+            {/* 5-Tier Progress Cards (250, 2000, 10000, 100000, Unlimited) */}
+            {(() => {
+              const currentPerDay = limits?.messaging?.perDay ?? 2000;
+              const tiers = [
+                { label: '250', value: 250, nextGoal: 125, nextTierLabel: '2,000' },
+                { label: '2,000', value: 2000, nextGoal: 1000, nextTierLabel: '10,000' },
+                { label: '10,000', value: 10000, nextGoal: 5000, nextTierLabel: '100,000' },
+                { label: '100,000', value: 100000, nextGoal: 50000, nextTierLabel: 'Unlimited' },
+                { label: 'Unlimited', value: Infinity, nextGoal: null, nextTierLabel: null },
+              ];
+
+              // Find active tier index
+              let activeIndex = tiers.findIndex((t) => t.value === currentPerDay);
+              if (activeIndex === -1) {
+                if (currentPerDay <= 250) activeIndex = 0;
+                else if (currentPerDay <= 2000) activeIndex = 1;
+                else if (currentPerDay <= 10000) activeIndex = 2;
+                else if (currentPerDay <= 100000) activeIndex = 3;
+                else activeIndex = 4;
+              }
+
+              const activeTier = tiers[activeIndex];
+              const sevenDayCount = limits?.sevenDayUnique ?? 0;
+              const targetCount = activeTier.nextGoal ?? 1000;
+              const progressPct = targetCount > 0 ? Math.min(100, Math.round((sevenDayCount / targetCount) * 100)) : 100;
+
+              return (
+                <div className="space-y-6">
+                  {/* Visual Tier Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 sm:gap-3">
+                    {tiers.map((tier, idx) => {
+                      const isCurrent = idx === activeIndex;
+                      const isPassed = idx < activeIndex;
+                      return (
+                        <div
+                          key={tier.label}
+                          className={`relative rounded-xl p-4 text-center transition-all ${
+                            isCurrent
+                              ? 'bg-card border-2 border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
+                              : isPassed
+                                ? 'bg-muted/40 border border-border text-muted-foreground'
+                                : 'bg-muted/20 border border-border/60 text-muted-foreground/70'
+                          }`}
+                        >
+                          {isCurrent ? (
+                            <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm">
+                              Current
+                            </span>
+                          ) : null}
+                          <p className={`text-base font-bold ${isCurrent ? 'text-foreground text-lg mt-1' : 'text-foreground/80'}`}>
+                            {tier.label}
+                          </p>
+                          <p className="text-[10px] leading-tight text-muted-foreground mt-1">
+                            {isCurrent ? 'Business-initiated conversations in 24h' : 'Tier Limit'}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Increase Messaging Limit Section */}
+                  <div className="rounded-xl border border-border bg-muted/20 p-5 space-y-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-foreground">
+                        Increase your messaging limit
+                      </h3>
+                      <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                        Meta automatically evaluates your specific account requirements (such as Business Verification, Quality Rating, and conversation volume) to upgrade your messaging tier. Upgrades can take up to 24 hours.
+                      </p>
+                    </div>
+
+                    <div className="pt-2 border-t border-border/40 flex flex-wrap gap-4 text-xs">
+                      <a
+                        href="https://www.facebook.com/business/help/687938765816627"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline text-xs inline-flex items-center gap-1 font-medium"
+                      >
+                        <span>What are high-quality messages?</span>
+                        <ExternalLink className="size-3" />
+                      </a>
+                      <a
+                        href="https://developers.facebook.com/documentation/business-messaging/whatsapp/messaging-limits"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline text-xs inline-flex items-center gap-1 font-medium"
+                      >
+                        <span>Meta Messaging Limit Rules</span>
+                        <ExternalLink className="size-3" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      )}
+
       {/* ─── Steps ─── */}
       <div className="space-y-6">
         {/* ── Step 1: Get Your WhatsApp Business API ── */}
@@ -730,6 +1011,16 @@ export function WhatsAppSetup() {
                     <RotateCcw className="mr-2 size-3" />
                     Reconnect WhatsApp
                   </Button>
+                </div>
+              ) : null}
+
+              {/* Coexistence status, history import and contact review.
+                  Renders nothing for an ordinary API-only number, so it
+                  costs those accounts no space. Sits inside step 1 because
+                  it is all about the state of THIS connection. */}
+              {isConnected ? (
+                <div className="pt-4">
+                  <CoexistencePanel />
                 </div>
               ) : (
                 <div className="pt-1">
@@ -938,13 +1229,13 @@ export function WhatsAppSetup() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() =>
-                            window.open(
-                              'https://business.facebook.com/settings/payment-methods',
-                              '_blank',
-                              'noopener,noreferrer',
-                            )
-                          }
+                          onClick={() => {
+                            const wabaId = metaInfo?.waba?.id || config?.waba_id;
+                            const url = wabaId
+                              ? `https://business.facebook.com/settings/payment-methods?waba_id=${encodeURIComponent(wabaId)}`
+                              : 'https://business.facebook.com/settings/payment-methods';
+                            window.open(url, '_blank', 'noopener,noreferrer');
+                          }}
                         >
                           <CreditCard className="mr-2 size-3.5" />
                           Open payment settings

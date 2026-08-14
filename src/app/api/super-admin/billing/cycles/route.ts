@@ -48,7 +48,11 @@ function buildCyclePatch(
     patch.label = label;
   }
 
-  for (const field of ['unit_label', 'discount_label'] as const) {
+  for (const field of [
+    'unit_label',
+    'discount_label',
+    'recommended_label',
+  ] as const) {
     if (!(field in body)) continue;
     const raw = body[field];
     const value = raw === null ? null : String(raw).trim();
@@ -82,7 +86,7 @@ function buildCyclePatch(
     }
   }
 
-  for (const field of ['is_default', 'is_visible'] as const) {
+  for (const field of ['is_default', 'is_visible', 'is_recommended'] as const) {
     if (field in body) patch[field] = Boolean(body[field]);
   }
 

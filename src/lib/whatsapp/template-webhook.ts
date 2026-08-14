@@ -7,6 +7,11 @@
  *   - message_template_status_update      — APPROVED / REJECTED / PAUSED / etc.
  *   - message_template_quality_update     — GREEN / YELLOW / RED quality score
  *   - message_template_components_update  — Meta auto-modified the template
+ *   - template_category_update            — Meta reclassified the category
+ *
+ * The category field is accepted under two names because Meta's docs and
+ * its actual payloads have disagreed on the prefix; subscribing to both
+ * costs nothing and avoids missing the event entirely.
  *
  * The route handler at /api/whatsapp/webhook receives every change and
  * delegates here when `change.field` starts with `message_template_`.
@@ -34,6 +39,10 @@ const TEMPLATE_WEBHOOK_FIELDS = new Set([
   'message_template_status_update',
   'message_template_quality_update',
   'message_template_components_update',
+  // Meta reclassified the template's category after review. This one
+  // costs money if ignored — see handleCategoryUpdate.
+  'template_category_update',
+  'message_template_category_update',
 ])
 
 export function isTemplateWebhookField(field: string): boolean {
@@ -60,6 +69,16 @@ interface TemplateComponentsUpdateValue {
   message_template_id?: string | number
   message_template_name?: string
   message_template_language?: string
+}
+
+interface TemplateCategoryUpdateValue {
+  message_template_id?: string | number
+  message_template_name?: string
+  message_template_language?: string
+  previous_category?: string
+  new_category?: string
+  /** Sent on some payload variants instead of `new_category`. */
+  correct_category?: string
 }
 
 export interface TemplateWebhookChange {
@@ -96,6 +115,13 @@ export async function handleTemplateWebhookChange(
     case 'message_template_components_update':
       handleComponentsUpdate(
         change.value as TemplateComponentsUpdateValue,
+      )
+      return
+    case 'template_category_update':
+    case 'message_template_category_update':
+      await handleCategoryUpdate(
+        change.value as TemplateCategoryUpdateValue,
+        supabase,
       )
       return
   }
@@ -211,5 +237,86 @@ function handleComponentsUpdate(value: TemplateComponentsUpdateValue): void {
     value.message_template_id,
     value.message_template_name,
     '— run "Sync from Meta" in Settings to pull the new components.',
+  )
+}
+
+/**
+ * Meta reclassified the template's category after review — typically
+ * MARKETING → UTILITY or the reverse.
+ *
+ * This one is persisted rather than logged, unlike a components update,
+ * because the category IS THE PRICE. Meta bills marketing, utility and
+ * authentication messages at different rates, so a stale local category
+ * means the operator is reading the wrong cost for every send of that
+ * template, and any category-based logic we add later silently disagrees
+ * with what Meta is actually charging for.
+ *
+ * Only the category is written. The rest of the row is left alone: a
+ * reclassification doesn't change the content, and blindly re-syncing
+ * components from a webhook would overwrite what the user believes they
+ * submitted.
+ */
+const META_CATEGORY_TO_LOCAL: Record<string, 'Marketing' | 'Utility' | 'Authentication'> = {
+  MARKETING: 'Marketing',
+  UTILITY: 'Utility',
+  AUTHENTICATION: 'Authentication',
+}
+
+async function handleCategoryUpdate(
+  value: TemplateCategoryUpdateValue,
+  supabase: SupabaseClient,
+): Promise<void> {
+  const metaTemplateId =
+    value.message_template_id !== undefined
+      ? String(value.message_template_id)
+      : null
+  if (!metaTemplateId) {
+    console.warn(
+      '[template-webhook] category update missing message_template_id:',
+      value,
+    )
+    return
+  }
+
+  const raw = (value.new_category ?? value.correct_category ?? '').toUpperCase()
+  const category = META_CATEGORY_TO_LOCAL[raw]
+  if (!category) {
+    // An unrecognised category is not something to guess at — writing a
+    // wrong value is worse than leaving the old one and logging.
+    console.warn(
+      '[template-webhook] category update had an unrecognised category',
+      raw || '(empty)',
+      'for meta_template_id',
+      metaTemplateId,
+    )
+    return
+  }
+
+  const { data, error } = await supabase
+    .from('message_templates')
+    .update({ category })
+    .eq('meta_template_id', metaTemplateId)
+    .select('id')
+
+  if (error) {
+    console.error(
+      '[template-webhook] category update failed for meta_template_id',
+      metaTemplateId,
+      error.message,
+    )
+    return
+  }
+  if (!data || data.length === 0) {
+    console.warn(
+      '[template-webhook] category update received for unknown template:',
+      metaTemplateId,
+      value.message_template_name,
+    )
+    return
+  }
+  console.info(
+    '[template-webhook] Meta reclassified template',
+    value.message_template_name ?? metaTemplateId,
+    `${value.previous_category ?? '?'} → ${category} — billing rate for this template has changed.`,
   )
 }

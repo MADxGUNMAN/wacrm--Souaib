@@ -8,7 +8,14 @@ import {
   type TemplatePayload,
 } from '@/lib/whatsapp/template-validators'
 import { buildMetaTemplatePayload } from '@/lib/whatsapp/template-components'
-import { ensureImageHeaderHandle } from '@/lib/whatsapp/template-header-handle'
+import {
+  ensureCarouselCardHandles,
+  ensureMediaHeaderHandle,
+} from '@/lib/whatsapp/template-header-handle'
+import {
+  deriveFlatColumns,
+  type TemplateComponent,
+} from '@/lib/whatsapp/template-definition'
 import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
 
 /**
@@ -16,6 +23,29 @@ import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
  * Meta-success path write nearly identical rows; dropping the shared
  * fields here means adding a column later only touches one spot.
  */
+/**
+ * Which wizard flow this payload came from. Stored so the editor can
+ * reopen the right form instead of re-deriving it from components.
+ */
+function resolveTemplateType(payload: TemplatePayload) {
+  if (payload.category === 'Authentication') return 'authentication'
+  // Checked before the rest because an order-status template's components
+  // are indistinguishable from a plain Utility template's — the
+  // sub_category is the only signal, and losing it here would reopen the
+  // template in the wrong editor.
+  if (payload.sub_category === 'ORDER_STATUS') return 'order_status'
+  if (payload.sub_category === 'CALL_PERMISSION_REQUEST') {
+    return 'calling_permission_request'
+  }
+  if (payload.catalog) return 'catalogue'
+  if (payload.mpm) return 'multi_product'
+  if (payload.order_details) return 'order_details'
+  if (payload.offer) return 'limited_time_offer'
+  if (payload.cards && payload.cards.length > 0) return 'carousel'
+  if (payload.flow) return 'flows'
+  return 'default'
+}
+
 function buildUpsertRow(
   accountId: string,
   userId: string,
@@ -24,6 +54,8 @@ function buildUpsertRow(
     status: 'DRAFT' | string
     metaTemplateId: string | null
     submissionError: string | null
+    /** Exactly what was (or would be) POSTed to Meta. */
+    components: unknown[]
   },
 ) {
   return {
@@ -31,21 +63,32 @@ function buildUpsertRow(
     // of migration 017. Without this an INSERT throws on the
     // not-null constraint.
     account_id: accountId,
-    // Original author — kept as audit only. The unique index is
-    // still on (user_id, name, language) — see the upsert helper
-    // for the cross-teammate dedup follow-up.
+    // Original author — audit only. Uniqueness is enforced on
+    // (account_id, name, language) as of migration 060, matching
+    // Meta's own one-template-per-name-per-WABA rule.
     user_id: userId,
     name: payload.name,
     category: payload.category,
     language: payload.language,
-    header_type: payload.header_type ?? null,
-    header_content: payload.header_content ?? null,
-    header_media_url: payload.header_media_url ?? null,
-    header_handle: payload.header_handle ?? null,
-    body_text: payload.body_text,
-    footer_text: payload.footer_text ?? null,
-    buttons: payload.buttons ?? null,
-    sample_values: payload.sample_values ?? null,
+    // Source of truth (migration 061). These are the exact components
+    // handed to Meta — passed in rather than re-derived here so the
+    // stored form cannot differ from the one under review. That matters
+    // most for AUTHENTICATION, whose shape (a text-less BODY carrying
+    // add_security_recommendation) cannot be expressed by the flat
+    // payload at all.
+    components: extras.components,
+    template_type: resolveTemplateType(payload),
+    parameter_format: 'POSITIONAL',
+    message_send_ttl_seconds: payload.message_send_ttl_seconds ?? null,
+    // ---- Derived cache of the above (see template-definition.ts).
+    ...deriveFlatColumns({
+      name: payload.name,
+      category: payload.category,
+      language: payload.language,
+      template_type: resolveTemplateType(payload),
+      parameter_format: 'POSITIONAL',
+      components: extras.components as TemplateComponent[],
+    }),
     status: extras.status,
     meta_template_id: extras.metaTemplateId,
     submission_error: extras.submissionError,
@@ -60,14 +103,15 @@ async function upsertTemplateRow(
   supabase: SupabaseClient,
   row: ReturnType<typeof buildUpsertRow>,
 ) {
-  // TODO(account-sharing): conflict target is still scoped to
-  // user_id. Once a follow-up migration drops the legacy unique
-  // index on (user_id, name, language) and adds (account_id,
-  // name, language), switch `onConflict` here so two teammates
-  // can't shadow each other's same-named template.
+  // Conflict target must match the unique index from migration 060.
+  // Account-scoped, because Meta allows exactly one template per
+  // (name, language) per WABA — so if a teammate already created
+  // `order_update` in en_US, this must UPDATE that row rather than
+  // insert a second one that silently fights over the same Meta
+  // template.
   return supabase
     .from('message_templates')
-    .upsert(row, { onConflict: 'user_id,name,language' })
+    .upsert(row, { onConflict: 'account_id,name,language' })
     .select()
     .single()
 }
@@ -119,16 +163,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 })
     }
 
-    if (payload.category === 'Authentication') {
-      return NextResponse.json(
-        {
-          error:
-            'AUTHENTICATION templates are not yet supported here — create them in Meta WhatsApp Manager and use "Sync from Meta".',
-        },
-        { status: 400 },
-      )
-    }
-
+    // AUTHENTICATION used to be rejected here. It is supported now — the
+    // validators branch on the category and the payload builder emits the
+    // OTP component shape Meta requires.
+    //
+    // Worth knowing: Meta additionally gates this category on the WABA
+    // itself (business verification plus a 2,000/day messaging limit). We
+    // cannot check that from here, so a rejection surfaces as Meta's own
+    // error message rather than something we invent.
     try {
       validateTemplatePayload(payload)
     } catch (e) {
@@ -175,19 +217,28 @@ export async function POST(request: Request) {
 
       const accessToken = decrypt(config.access_token)
 
-      // Image headers need a Resumable-Upload handle (Meta rejects a
-      // plain URL at creation). Derive it from header_media_url before
-      // building the payload. Surfaces a 400 with an actionable message
-      // (missing META_APP_ID, unreachable URL, wrong type/size).
+      // Media headers (image, video, document) need a Resumable-Upload
+      // handle — Meta rejects a plain URL at creation. Derive it from
+      // header_media_url before building the payload. Surfaces a 400
+      // with an actionable message (missing META_APP_ID, unreachable
+      // URL, wrong type/size).
       try {
-        await ensureImageHeaderHandle(payload, accessToken)
+        await ensureMediaHeaderHandle(payload, accessToken)
+        // Carousel cards each carry their own media asset, so a 10-card
+        // carousel performs 10 uploads. Sequential by design — see the
+        // helper.
+        await ensureCarouselCardHandles(payload, accessToken)
       } catch (e) {
         return NextResponse.json(
-          { error: e instanceof Error ? e.message : 'Header image upload failed.' },
+          { error: e instanceof Error ? e.message : 'Header media upload failed.' },
           { status: 400 },
         )
       }
 
+      // Recomputed here rather than reusing the outer `storedComponents`
+      // because ensureMediaHeaderHandle has just mutated `payload` with a
+      // fresh header handle, and the handle must be part of what Meta
+      // receives.
       const metaPayload = buildMetaTemplatePayload(payload)
       try {
         const meta = await submitMessageTemplate({
@@ -207,6 +258,7 @@ export async function POST(request: Request) {
             status: 'DRAFT',
             metaTemplateId: null,
             submissionError: message,
+            components: metaPayload.components,
           }),
         )
         const isRateLimit = /\b429\b/.test(message)
@@ -221,12 +273,17 @@ export async function POST(request: Request) {
       }
     }
 
+    // Built from the final payload — after any header handle was derived
+    // — so what is stored is what Meta was asked to approve.
+    const storedComponents = buildMetaTemplatePayload(payload).components
+
     const { data: row, error: upsertErr } = await upsertTemplateRow(
       supabase,
       buildUpsertRow(accountId, user.id, payload, {
         status: normalizeStatus(metaStatus),
         metaTemplateId,
         submissionError: null,
+        components: storedComponents,
       }),
     )
 

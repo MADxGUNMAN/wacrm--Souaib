@@ -14,6 +14,8 @@ import {
   ImageOff,
   CornerDownLeft,
   Sparkles,
+  Smartphone,
+  Ban,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
@@ -21,6 +23,10 @@ import { MessageReactions } from "./message-reactions";
 import { InteractivePreview } from "@/components/interactive/interactive-preview";
 import { useTranslations } from "next-intl";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
+import {
+  isFromBusinessApp,
+  isOutboundSender,
+} from "@/lib/messages/sender-type";
 
 interface MessageBubbleProps {
   message: Message;
@@ -279,7 +285,12 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const t = useTranslations("Inbox.bubble");
 
-  const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
+  // Covers 'business_app' too — a message typed in the WhatsApp Business
+  // App on a phone is ours, and belongs on our side of the thread.
+  const isAgent = isOutboundSender(message.sender_type);
+  const fromPhone = isFromBusinessApp(message.sender_type);
+  const isDeleted = Boolean(message.deleted_at);
+  const isEdited = Boolean(message.edited_at);
   const time = format(new Date(message.created_at), "HH:mm");
   const isImage = message.content_type === "image";
 
@@ -307,13 +318,44 @@ export function MessageBubble({
             onPrimary={false}
           />
         )}
-        <MessageContent message={message} t={t} />
+        {/* A deleted message must NOT render its content. The text is
+            still in the column (the delete is soft, so the thread keeps
+            its shape and replies pointing here do not dangle), but
+            showing it would display something the sender explicitly
+            retracted — and would disagree with what WhatsApp shows on the
+            phone. */}
+        {isDeleted ? (
+          <p className="flex items-center gap-1.5 text-sm italic opacity-60">
+            <Ban className="size-3.5 shrink-0" />
+            This message was deleted
+          </p>
+        ) : (
+          <MessageContent message={message} t={t} />
+        )}
         <div
           className={cn(
             "mt-1 flex items-center gap-1",
             isAgent ? "justify-end" : "justify-start",
           )}
         >
+          {/* "Phone" badge — this message was typed in the WhatsApp
+              Business App, not here (Coexistence). Without it an agent
+              sees an outbound message nobody on the team wrote and
+              assumes either a colleague sent it or the CRM double-sent.
+              Same treatment as the AI badge, since it answers the same
+              kind of question: who actually wrote this? */}
+          {fromPhone && (
+            <span
+              className={cn(
+                "inline-flex items-center gap-0.5 rounded-full px-1.5 py-px text-[9px] font-semibold uppercase leading-none tracking-wide",
+                (isAgent && !isImage) ? "bg-emerald-200/60 text-emerald-900 dark:bg-emerald-800 dark:text-emerald-100" : "bg-primary/10 text-primary"
+              )}
+              title="Sent from the WhatsApp Business App on your phone, not from this CRM"
+            >
+              <Smartphone className="h-2.5 w-2.5" />
+              Phone
+            </span>
+          )}
           {/* AI badge — only on replies the auto-reply bot generated
               (always outbound, so it sits on the primary fill). Lets
               agents tell an AI reply from their own / a Flow's at a
@@ -340,6 +382,12 @@ export function MessageBubble({
               (isAgent && !isImage) ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground",
             )}
           >
+            {/* WhatsApp marks an edited message beside its timestamp, so
+                this matches. Without it the CRM shows corrected text with
+                no hint it changed, and an agent reading back a thread
+                cannot tell why their quote no longer matches. Suppressed
+                on a deleted message, where it would be noise. */}
+            {isEdited && !isDeleted ? "edited · " : null}
             {time}
           </span>
           {isAgent && <StatusIcon status={message.status} />}

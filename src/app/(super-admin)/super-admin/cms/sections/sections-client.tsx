@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -50,7 +50,41 @@ export function SectionsClient({ initialSections }: { initialSections: any[] }) 
   const [editingSection, setEditingSection] = useState<any | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  
+  /**
+   * The real billing terms, fetched so the price-override rows are keyed
+   * by the EXACT cycle labels the landing page matches on. Typing labels
+   * by hand would fail silently — a typo would just show the real price
+   * with no indication why the override was ignored.
+   */
+  const [landingCycles, setLandingCycles] = useState<
+    { id: string; label: string; duration_days: number | null }[]
+  >([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch('/api/super-admin/billing/cycles');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setLandingCycles(
+          (data.cycles ?? [])
+            .filter((c: { is_visible: boolean }) => c.is_visible)
+            .sort(
+              (a: { position: number }, b: { position: number }) =>
+                a.position - b.position,
+            ),
+        );
+      } catch {
+        // Non-fatal: the editor shows a loading note instead of rows.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const supabase = createClient();
 
   const handleEditClick = (section: any) => {
@@ -88,6 +122,10 @@ export function SectionsClient({ initialSections }: { initialSections: any[] }) 
         images: editingSection.images || [],
         images_secondary: editingSection.images_secondary || [],
         is_visible: editingSection.is_visible,
+        // Without this every extra_data editor on this form (features, steps,
+        // integrations, testimonials, FAQs, badge text, landing prices) edits
+        // local state, reports "saved", and silently discards the change.
+        extra_data: editingSection.extra_data || {},
       });
 
       if (res.error) {
@@ -733,171 +771,122 @@ export function SectionsClient({ initialSections }: { initialSections: any[] }) 
 
             {currentConfig.pricing_list && (
               <div className="pt-4 border-t border-slate-100">
-                <div className="flex items-center justify-between mb-6">
-                  <h4 className="text-sm font-semibold text-slate-900">Pricing Tiers</h4>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const currentTiers = editingSection.extra_data?.tiers || [];
-                      const newTiers = [...currentTiers, { 
-                        id: crypto.randomUUID(), 
-                        name: "New Tier", 
-                        description: "Tier description",
-                        price_monthly: "$99",
-                        price_subtitle: "per month",
-                        cta_text: "Get Started",
-                        cta_link: "/signup",
-                        is_highlighted: false,
-                        highlight_label: "Most Popular",
-                        features: "Feature 1\nFeature 2"
-                      }];
-                      setEditingSection({ 
-                        ...editingSection, 
-                        extra_data: { ...(editingSection.extra_data || {}), tiers: newTiers } 
-                      });
-                    }}
-                  >
-                    <Plus className="w-4 h-4 mr-2" /> Add Tier
-                  </Button>
+                <h4 className="text-sm font-semibold text-slate-900">
+                  Landing page prices
+                </h4>
+                <p className="mt-1 mb-4 text-xs leading-relaxed text-slate-500">
+                  The cards on the landing page read their real prices from{" "}
+                  <strong>Plans &amp; Pricing</strong>. Fill anything in here to
+                  show a DIFFERENT price on the landing page only — useful for
+                  advertising in another currency. Leave a field blank to use the
+                  real price.
+                </p>
+
+                <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <span className="mt-0.5 text-amber-600">⚠</span>
+                  <p className="text-xs leading-relaxed text-amber-800">
+                    Anything you override here will NOT match the checkout page or
+                    the amount actually charged. Use it for marketing display only,
+                    and clear it before taking real signups at these prices.
+                  </p>
                 </div>
-                
-                <div className="space-y-4">
-                  {(editingSection.extra_data?.tiers || []).map((tier: any, index: number) => (
-                    <Card key={index} className="p-5 relative bg-slate-50/50">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute top-2 right-2 text-red-500 hover:text-red-700 hover:bg-red-50 z-10"
-                        onClick={() => {
-                          const currentTiers = editingSection.extra_data?.tiers || [];
-                          const newTiers = currentTiers.filter((_: any, i: number) => i !== index);
-                          setEditingSection({ 
-                            ...editingSection, 
-                            extra_data: { ...(editingSection.extra_data || {}), tiers: newTiers } 
-                          });
-                        }}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mr-10">
-                        <div className="space-y-2">
-                          <Label className="text-xs">Tier Name</Label>
-                          <Input
-                            value={tier.name}
-                            className="bg-white"
-                            onChange={(e) => {
-                              const currentTiers = [...(editingSection.extra_data?.tiers || [])];
-                              currentTiers[index].name = e.target.value;
-                              setEditingSection({ ...editingSection, extra_data: { ...(editingSection.extra_data || {}), tiers: currentTiers } });
-                            }}
-                          />
+
+                <div className="mb-4 max-w-xs">
+                  <label className="mb-1.5 block text-xs font-medium text-slate-600">
+                    Currency to display
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={3}
+                    value={(editingSection.extra_data?.price_currency as string) || ""}
+                    onChange={(e) =>
+                      setEditingSection({
+                        ...editingSection,
+                        extra_data: {
+                          ...(editingSection.extra_data || {}),
+                          price_currency: e.target.value.toUpperCase(),
+                        },
+                      })
+                    }
+                    placeholder="Blank = use the real currency"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-[#25D366] focus:outline-none"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">
+                    3-letter code, e.g. USD. Applies to the two priced cards.
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  {landingCycles.length === 0 ? (
+                    <p className="rounded-lg border-2 border-dashed border-slate-200 py-6 text-center text-sm text-slate-500">
+                      Loading billing terms…
+                    </p>
+                  ) : (
+                    landingCycles.map((cycle) => {
+                      const overrides =
+                        (editingSection.extra_data?.price_overrides as Record<
+                          string,
+                          { per_day?: string; total?: string }
+                        >) || {};
+                      const row = overrides[cycle.label] || {};
+                      const setRow = (patch: { per_day?: string; total?: string }) =>
+                        setEditingSection({
+                          ...editingSection,
+                          extra_data: {
+                            ...(editingSection.extra_data || {}),
+                            price_overrides: {
+                              ...overrides,
+                              [cycle.label]: { ...row, ...patch },
+                            },
+                          },
+                        });
+                      return (
+                        <div
+                          key={cycle.id}
+                          className="rounded-xl border border-slate-200 p-4"
+                        >
+                          <p className="mb-3 text-sm font-semibold text-slate-900">
+                            {cycle.label}
+                            <span className="ml-2 font-normal text-slate-400">
+                              {cycle.duration_days} days
+                            </span>
+                          </p>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="mb-1.5 block text-xs font-medium text-slate-600">
+                                Big per-day figure
+                              </label>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={row.per_day ?? ""}
+                                onChange={(e) => setRow({ per_day: e.target.value })}
+                                placeholder="e.g. 2"
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-[#25D366] focus:outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1.5 block text-xs font-medium text-slate-600">
+                                Total under it
+                              </label>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={row.total ?? ""}
+                                onChange={(e) => setRow({ total: e.target.value })}
+                                placeholder="e.g. 60"
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-[#25D366] focus:outline-none"
+                              />
+                            </div>
+                          </div>
+                          <p className="mt-2 text-xs text-slate-400">
+                            Shows as “{row.per_day || "real price"} / day = 
+                            {row.total || "real total"} for {cycle.duration_days} days”.
+                            The savings badge recalculates itself.
+                          </p>
                         </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs">Price (e.g., $79 or Custom)</Label>
-                          <Input
-                            value={tier.price_monthly}
-                            className="bg-white"
-                            onChange={(e) => {
-                              const currentTiers = [...(editingSection.extra_data?.tiers || [])];
-                              currentTiers[index].price_monthly = e.target.value;
-                              setEditingSection({ ...editingSection, extra_data: { ...(editingSection.extra_data || {}), tiers: currentTiers } });
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2 md:col-span-2">
-                          <Label className="text-xs">Description</Label>
-                          <Input
-                            value={tier.description}
-                            className="bg-white"
-                            onChange={(e) => {
-                              const currentTiers = [...(editingSection.extra_data?.tiers || [])];
-                              currentTiers[index].description = e.target.value;
-                              setEditingSection({ ...editingSection, extra_data: { ...(editingSection.extra_data || {}), tiers: currentTiers } });
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs">Price Subtitle (e.g. per month)</Label>
-                          <Input
-                            value={tier.price_subtitle}
-                            className="bg-white"
-                            onChange={(e) => {
-                              const currentTiers = [...(editingSection.extra_data?.tiers || [])];
-                              currentTiers[index].price_subtitle = e.target.value;
-                              setEditingSection({ ...editingSection, extra_data: { ...(editingSection.extra_data || {}), tiers: currentTiers } });
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs">Highlight Label</Label>
-                          <Input
-                            value={tier.highlight_label}
-                            className="bg-white"
-                            onChange={(e) => {
-                              const currentTiers = [...(editingSection.extra_data?.tiers || [])];
-                              currentTiers[index].highlight_label = e.target.value;
-                              setEditingSection({ ...editingSection, extra_data: { ...(editingSection.extra_data || {}), tiers: currentTiers } });
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs">Button Text</Label>
-                          <Input
-                            value={tier.cta_text}
-                            className="bg-white"
-                            onChange={(e) => {
-                              const currentTiers = [...(editingSection.extra_data?.tiers || [])];
-                              currentTiers[index].cta_text = e.target.value;
-                              setEditingSection({ ...editingSection, extra_data: { ...(editingSection.extra_data || {}), tiers: currentTiers } });
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs">Button Link</Label>
-                          <Input
-                            value={tier.cta_link}
-                            className="bg-white"
-                            onChange={(e) => {
-                              const currentTiers = [...(editingSection.extra_data?.tiers || [])];
-                              currentTiers[index].cta_link = e.target.value;
-                              setEditingSection({ ...editingSection, extra_data: { ...(editingSection.extra_data || {}), tiers: currentTiers } });
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2 md:col-span-2">
-                          <Label className="text-xs">Features (One per line)</Label>
-                          <Textarea
-                            value={tier.features}
-                            rows={4}
-                            className="bg-white"
-                            onChange={(e) => {
-                              const currentTiers = [...(editingSection.extra_data?.tiers || [])];
-                              currentTiers[index].features = e.target.value;
-                              setEditingSection({ ...editingSection, extra_data: { ...(editingSection.extra_data || {}), tiers: currentTiers } });
-                            }}
-                          />
-                        </div>
-                        <div className="flex items-center space-x-2 pt-2 md:col-span-2">
-                          <Switch
-                            checked={tier.is_highlighted}
-                            onCheckedChange={(checked) => {
-                              const currentTiers = [...(editingSection.extra_data?.tiers || [])];
-                              currentTiers[index].is_highlighted = checked;
-                              setEditingSection({ ...editingSection, extra_data: { ...(editingSection.extra_data || {}), tiers: currentTiers } });
-                            }}
-                          />
-                          <Label className="text-xs">Highlight this tier (e.g. Most Popular)</Label>
-                        </div>
-                      </div>
-                    </Card>
-                  ))}
-                  {(!editingSection.extra_data?.tiers || editingSection.extra_data.tiers.length === 0) && (
-                    <div className="text-center py-8 text-sm text-slate-500 border-2 border-dashed border-slate-200 rounded-xl">
-                      No pricing tiers added yet. Click &quot;Add Tier&quot; to create one.
-                    </div>
+                      );
+                    })
                   )}
                 </div>
               </div>

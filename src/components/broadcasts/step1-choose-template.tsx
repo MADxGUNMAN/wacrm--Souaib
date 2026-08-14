@@ -6,6 +6,7 @@ import { MessageTemplate } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Loader2, FileText, ArrowRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { templateSendability } from '@/lib/whatsapp/template-sendability';
 
 const categoryColors: Record<string, string> = {
   Marketing: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
@@ -87,13 +88,26 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
           {templates.map((template) => {
             const isSelected = selectedTemplate?.id === template.id;
             const catColor = categoryColors[template.category] ?? categoryColors.Utility;
+            // Approved does not mean sendable — a carousel needs per-card
+            // media uploaded at send time, which is not wired up yet.
+            // Shown disabled with the reason rather than hidden, so an
+            // approved template never looks like it vanished.
+            // 'broadcast' matters: an order-status template sends fine from
+            // a conversation but cannot be broadcast, because one order
+            // reference cannot apply to a whole list.
+            const verdict = templateSendability(template, 'broadcast');
 
             return (
               <button
                 key={template.id}
-                onClick={() => onSelect(template)}
+                onClick={() => verdict.sendable && onSelect(template)}
+                disabled={!verdict.sendable}
+                aria-disabled={!verdict.sendable}
+                title={verdict.reason}
                 className={`flex flex-col gap-3 rounded-xl border p-4 text-left transition-all min-w-0 overflow-hidden ${
-                  isSelected
+                  !verdict.sendable
+                    ? 'cursor-not-allowed border-border bg-card/30 opacity-60'
+                    : isSelected
                     ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
                     : 'border-border bg-card/50 hover:border-border hover:bg-card'
                 }`}
@@ -113,6 +127,11 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
                       shown here is already filtered to APPROVED,
                       so the chip carried no information. */}
                 </div>
+                {!verdict.sendable && verdict.reason ? (
+                  <p className="text-[10px] leading-relaxed text-amber-600 dark:text-amber-500">
+                    {verdict.reason}
+                  </p>
+                ) : null}
               </button>
             );
           })}

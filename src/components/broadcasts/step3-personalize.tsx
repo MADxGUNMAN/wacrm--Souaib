@@ -14,6 +14,21 @@ import {
 } from '@/components/ui/select';
 import { ArrowLeft, ArrowRight, Eye, ImageIcon, Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { definitionFromRow } from '@/lib/whatsapp/template-definition';
+import { WhatsAppPreview } from '@/components/templates/whatsapp-preview';
+import {
+  EMPTY_HEADER_LOCATION,
+  buildSendPlan,
+  localInputToMs,
+  missingSendValues,
+  type BroadcastSendExtras,
+} from '@/lib/whatsapp/template-send-inputs';
+import { extractNamedParams } from '@/lib/whatsapp/template-variables';
+import {
+  CarouselCardFields,
+  HeaderLocationFields,
+  OfferExpiryField,
+} from '@/components/templates/send-time-fields';
 
 type VariableType = 'static' | 'field' | 'custom_field';
 
@@ -29,6 +44,8 @@ interface Step3Props {
   /** Media URL for an IMAGE/VIDEO/DOCUMENT header, when the template has one. */
   headerMediaUrl: string;
   onHeaderMediaUrlChange: (url: string) => void;
+  sendExtras: BroadcastSendExtras;
+  onSendExtrasChange: (next: BroadcastSendExtras) => void;
   onNext: () => void;
   onBack: () => void;
 }
@@ -73,6 +90,8 @@ export function Step3Personalize({
   onUpdate,
   headerMediaUrl,
   onHeaderMediaUrlChange,
+  sendExtras,
+  onSendExtrasChange,
   onNext,
   onBack,
 }: Step3Props) {
@@ -128,11 +147,22 @@ export function Step3Personalize({
     };
   }, []);
 
+  /**
+   * The placeholders to map, as written in the text.
+   *
+   * A NAMED template's variables are `{{order_id}}`, which the positional
+   * regex does not match — without this branch a named template would show
+   * "nothing to personalise" and then send with empty values.
+   */
   const placeholders = useMemo(() => {
+    if (template.parameter_format === 'NAMED') {
+      // Order of appearance, so the fields read like the sentence.
+      return extractNamedParams(template.body_text).map((n) => `{{${n}}}`);
+    }
     const matches = template.body_text.match(/\{\{(\d+)\}\}/g);
     if (!matches) return [];
     return [...new Set(matches)].sort();
-  }, [template.body_text]);
+  }, [template.body_text, template.parameter_format]);
 
   // Templates with an IMAGE/VIDEO/DOCUMENT header need a media URL at
   // send time — Meta requires the media component on every delivery and
@@ -179,6 +209,50 @@ export function Step3Personalize({
     return missing;
   }, [placeholders, variables]);
 
+  // Carousel cards and a limited-time offer's deadline exist only in
+  // `components`, so this step could not see them at all before — it read
+  // `body_text` and one header URL. The plan describes every shape.
+  const plan = useMemo(() => buildSendPlan(template), [template]);
+
+  // Seed the card list once so the inputs are stable in length. Card
+  // count is frozen at approval, so there is nothing to add or remove.
+  useEffect(() => {
+    if (plan.cards.length > 0 && sendExtras.cards.length !== plan.cards.length) {
+      onSendExtrasChange({
+        ...sendExtras,
+        cards: plan.cards.map((_, i) => sendExtras.cards[i] ?? {}),
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan.cards.length]);
+
+  /**
+   * What the shared fields are still missing.
+   *
+   * Body variables are excluded on purpose: they resolve per contact from
+   * the field mappings, so `unmappedKeys` above is the right check for
+   * those and passing empty strings here would report them twice.
+   */
+  const missingExtras = useMemo(() => {
+    return missingSendValues(plan, {
+      // Stand-ins for the values this step does not own: body variables
+      // are per-contact (checked by `unmappedKeys`) and the header media
+      // URL has its own validation with a URL check (`headerMediaError`).
+      // Filling them keeps this list to the offer and card fields, so
+      // nothing is reported to the operator twice.
+      body: Array.from({ length: plan.bodyVarCount }, () => 'x'),
+      namedBody: Object.fromEntries(
+        plan.bodyParamNames.map((n) => [n, 'x']),
+      ),
+      headerText: 'x',
+      headerMediaUrl: 'x',
+      buttonParams: sendExtras.buttonParams,
+      offerExpiresAtMs: localInputToMs(sendExtras.offerExpiryLocal),
+      cards: sendExtras.cards,
+      headerLocation: sendExtras.headerLocation,
+    });
+  }, [plan, sendExtras]);
+
   function updateVariable(key: string, patch: Partial<VariableMapping>) {
     const current = variables[key] ?? { type: 'static' as VariableType, value: '' };
     onUpdate({
@@ -191,43 +265,44 @@ export function Step3Personalize({
    * Substitute placeholders using the first real contact where
    * possible. Placeholders keyed by "{{N}}" map to variable key "N".
    */
-  const previewText = useMemo(() => {
+  /**
+   * Resolved values keyed by variable name ("1" for "{{1}}").
+   *
+   * Produces a map rather than a finished string so the shared
+   * WhatsAppPreview can do the rendering — that way the broadcast
+   * preview also shows the header, footer and buttons, which the old
+   * body-only string substitution silently omitted. An unresolved
+   * placeholder is left out of the map entirely so the preview marks it
+   * as missing instead of printing braces.
+   */
+  const previewValues = useMemo(() => {
     const contact = firstContact ?? SAMPLE_CONTACT;
     const customValues = firstContact
       ? firstContactCustomValues
       : new Map<string, string>();
 
-    let text = template.body_text;
+    const resolved: Record<string, string | undefined> = {};
     for (const placeholder of placeholders) {
       const key = placeholder.replace(/^\{\{|\}\}$/g, '');
       const mapping = variables[key];
-      let replacement = placeholder;
+      if (!mapping || !mapping.value) continue;
 
-      if (mapping) {
-        if (mapping.type === 'static' && mapping.value) {
-          replacement = mapping.value;
-        } else if (mapping.type === 'field' && mapping.value) {
-          const fieldMap: Record<string, string | undefined> = {
-            name: contact.name,
-            phone: contact.phone,
-            email: contact.email,
-            company: contact.company,
-          };
-          replacement = fieldMap[mapping.value] ?? placeholder;
-        } else if (mapping.type === 'custom_field' && mapping.value) {
-          replacement = customValues.get(mapping.value) || placeholder;
-        }
+      if (mapping.type === 'static') {
+        resolved[key] = mapping.value;
+      } else if (mapping.type === 'field') {
+        const fieldMap: Record<string, string | undefined> = {
+          name: contact.name,
+          phone: contact.phone,
+          email: contact.email,
+          company: contact.company,
+        };
+        resolved[key] = fieldMap[mapping.value];
+      } else if (mapping.type === 'custom_field') {
+        resolved[key] = customValues.get(mapping.value) || undefined;
       }
-      text = text.replaceAll(placeholder, replacement);
     }
-    return text;
-  }, [
-    template.body_text,
-    variables,
-    placeholders,
-    firstContact,
-    firstContactCustomValues,
-  ]);
+    return resolved;
+  }, [variables, placeholders, firstContact, firstContactCustomValues]);
 
   const previewLabel = firstContact
     ? firstContact.name || firstContact.phone
@@ -284,7 +359,65 @@ export function Step3Personalize({
         </div>
       )}
 
-      {placeholders.length === 0 && !mediaHeaderType ? (
+      {plan.offer && (
+        <div className="rounded-xl border border-border bg-card/50 p-4">
+          <OfferExpiryField
+            offer={plan.offer}
+            value={sendExtras.offerExpiryLocal}
+            onChange={(next) =>
+              onSendExtrasChange({ ...sendExtras, offerExpiryLocal: next })
+            }
+            code={
+              plan.offer.code
+                ? (sendExtras.buttonParams[plan.offer.code.index] ?? '')
+                : ''
+            }
+            onCodeChange={(next) => {
+              const idx = plan.offer?.code?.index;
+              if (idx === undefined) return;
+              onSendExtrasChange({
+                ...sendExtras,
+                buttonParams: { ...sendExtras.buttonParams, [idx]: next },
+              });
+            }}
+          />
+          <p className="mt-2 text-xs text-muted-foreground">
+            One deadline applies to the whole broadcast. Every recipient sees
+            the same countdown, so a long send still ends at this moment.
+          </p>
+        </div>
+      )}
+
+      {plan.needsHeaderLocation && (
+        <div className="rounded-xl border border-border bg-card/50 p-4">
+          <HeaderLocationFields
+            value={sendExtras.headerLocation ?? EMPTY_HEADER_LOCATION}
+            onChange={(next) =>
+              onSendExtrasChange({ ...sendExtras, headerLocation: next })
+            }
+          />
+          <p className="mt-2 text-xs text-muted-foreground">
+            One pin for the whole broadcast. For per-recipient addresses, send
+            these from a conversation instead.
+          </p>
+        </div>
+      )}
+
+      {plan.cards.length > 0 && (
+        <div className="rounded-xl border border-border bg-card/50 p-4">
+          <CarouselCardFields
+            cards={plan.cards}
+            values={sendExtras.cards}
+            onChange={(cardIndex, patch) => {
+              const next = [...sendExtras.cards];
+              next[cardIndex] = { ...(next[cardIndex] ?? {}), ...patch };
+              onSendExtrasChange({ ...sendExtras, cards: next });
+            }}
+          />
+        </div>
+      )}
+
+      {placeholders.length === 0 && !mediaHeaderType && !plan.offer && plan.cards.length === 0 ? (
         <div className="rounded-xl border border-border bg-card/50 p-6 text-center">
           <p className="text-sm text-muted-foreground">
             {t('personalize.noPreview')}
@@ -411,12 +544,11 @@ export function Step3Personalize({
             <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
           )}
         </div>
-        <div className="rounded-lg bg-[#0e1a12] p-3 min-w-0 overflow-hidden">
-          <div className="ml-auto max-w-[85%] rounded-lg bg-primary/30 px-3 py-2 shadow-sm min-w-0 overflow-hidden">
-            <p className="whitespace-pre-wrap break-words text-sm text-primary min-w-0">
-              {previewText}
-            </p>
-          </div>
+        <div className="min-w-0 overflow-hidden">
+          <WhatsAppPreview
+            definition={definitionFromRow(template)}
+            values={previewValues}
+          />
         </div>
       </div>
 
@@ -427,6 +559,12 @@ export function Step3Personalize({
             {unmappedKeys.join(', ')}
           </span>
           . Otherwise those placeholders will ship to Meta as empty strings.
+        </div>
+      )}
+
+      {missingExtras.length > 0 && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          {`Still needed before this can send: ${missingExtras.join(', ')}.`}
         </div>
       )}
 
@@ -441,7 +579,11 @@ export function Step3Personalize({
         </Button>
         <Button
           onClick={onNext}
-          disabled={unmappedKeys.length > 0 || headerMediaError !== null}
+          disabled={
+            unmappedKeys.length > 0 ||
+            headerMediaError !== null ||
+            missingExtras.length > 0
+          }
           className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         >
           {t('next')}

@@ -17,8 +17,11 @@ import type { TemplateButton, TemplateSampleValues } from '@/types'
  * they remain visible so the user can notice drift and clean up.
  */
 
-const META_API_VERSION = 'v21.0'
-const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`
+import { META_API_BASE } from '@/lib/whatsapp/graph-version'
+import {
+  resolveBodyText,
+  resolveFooterText,
+} from '@/lib/whatsapp/template-definition'
 
 interface MetaButton {
   type: string
@@ -33,9 +36,15 @@ interface MetaTemplateComponent {
   text?: string
   format?: string
   buttons?: MetaButton[]
+  /** AUTHENTICATION templates carry these instead of body/footer text. */
+  add_security_recommendation?: boolean
+  code_expiration_minutes?: number
+  /** Present on CAROUSEL components — each card has its own components. */
+  cards?: { components?: MetaTemplateComponent[] }[]
   example?: {
     header_text?: string[]
     header_handle?: string[]
+    header_url?: string[]
     body_text?: string[][]
   }
 }
@@ -48,6 +57,39 @@ interface MetaTemplate {
   category: string
   components?: MetaTemplateComponent[]
   quality_score?: { score?: string } | string
+  parameter_format?: string
+  message_send_ttl_seconds?: number
+}
+
+/**
+ * Work out which wizard flow a Meta template corresponds to.
+ *
+ * Meta has no `template_type` field — the type is implied by the
+ * component mix — so it is inferred once here on sync rather than
+ * re-guessed on every read. Order matters: a carousel template also has
+ * a plain BODY, so the distinctive component has to be checked first.
+ */
+function inferTemplateType(t: MetaTemplate): string {
+  const components = t.components ?? []
+  const has = (type: string) =>
+    components.some((c) => c.type?.toUpperCase() === type)
+
+  if (has('CAROUSEL')) return 'carousel'
+  if (has('LIMITED_TIME_OFFER')) return 'limited_time_offer'
+  if (t.category?.toUpperCase() === 'AUTHENTICATION') return 'authentication'
+
+  const buttonTypes = new Set(
+    components
+      .flatMap((c) => c.buttons ?? [])
+      .map((b) => b.type?.toUpperCase()),
+  )
+  if (buttonTypes.has('ORDER_DETAILS')) return 'order_details'
+  if (buttonTypes.has('VOICE_CALL')) return 'calling_permission_request'
+  if (buttonTypes.has('CATALOG')) return 'catalogue'
+  if (buttonTypes.has('MPM')) return 'multi_product'
+  if (buttonTypes.has('FLOW')) return 'flows'
+
+  return 'default'
 }
 
 function normalizeCategory(
@@ -101,7 +143,11 @@ function parseButtons(metaButtons: MetaButton[] | undefined): TemplateButton[] {
           example: Array.isArray(b.example) ? b.example[0] ?? '' : b.example ?? '',
         })
         break
-      // OTP, FLOW, etc — out of scope for v1; drop silently.
+      // OTP / FLOW / MPM / CATALOG are intentionally absent: the flat
+      // `buttons` column is typed as the 4-member legacy TemplateButton
+      // union that the send builder switches over exhaustively, so a
+      // richer type here would be unsound. They are NOT lost — the raw
+      // `components` column keeps them (migration 061).
     }
   }
   return out
@@ -181,7 +227,7 @@ export async function POST() {
     const metaTemplates: MetaTemplate[] = []
     let nextUrl:
       | string
-      | null = `${META_API_BASE}/${config.waba_id}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`
+      | null = `${META_API_BASE}/${config.waba_id}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score,parameter_format,message_send_ttl_seconds`
     const PAGE_CAP = 20
     let pageCount = 0
 
@@ -228,7 +274,8 @@ export async function POST() {
         headerFormat === 'TEXT' ||
         headerFormat === 'IMAGE' ||
         headerFormat === 'VIDEO' ||
-        headerFormat === 'DOCUMENT'
+        headerFormat === 'DOCUMENT' ||
+        headerFormat === 'LOCATION'
           ? headerFormat.toLowerCase()
           : null
 
@@ -241,11 +288,37 @@ export async function POST() {
         name: t.name,
         category: normalizeCategory(t.category),
         language: t.language,
+        // ---- Source of truth: Meta's components array, stored verbatim.
+        // Everything below this is a derived cache of it.
+        //
+        // This is what stops the data loss that `parseButtons` used to
+        // cause on its own: OTP, FLOW, MPM and CATALOG buttons, carousel
+        // cards and limited-time-offer components were parsed away and
+        // gone. Now a template that Meta knows about survives the round
+        // trip intact even for types the UI cannot yet render.
+        components: t.components ?? [],
+        template_type: inferTemplateType(t),
+        parameter_format: t.parameter_format === 'NAMED' ? 'NAMED' : 'POSITIONAL',
+        // ---- Derived cache (see template-definition.ts).
         header_type: headerType,
         header_content: header?.text ?? null,
         header_handle: header?.example?.header_handle?.[0] ?? null,
-        body_text: body?.text ?? '',
-        footer_text: footer?.text ?? null,
+        // resolveBodyText/resolveFooterText synthesise Meta's preset
+        // wording for AUTHENTICATION templates, whose BODY may come back
+        // with no `text` at all. Storing '' there would make
+        // template-row-guard.ts throw on the next broadcast — it requires
+        // a truthy body_text — taking down sends for the whole account
+        // because of one synced OTP template.
+        body_text: resolveBodyText({
+          type: 'BODY',
+          text: body?.text,
+          add_security_recommendation: body?.add_security_recommendation,
+        }),
+        footer_text: resolveFooterText({
+          type: 'FOOTER',
+          text: footer?.text,
+          code_expiration_minutes: footer?.code_expiration_minutes,
+        }),
         buttons: parsedButtons.length ? parsedButtons : null,
         sample_values: sampleValues,
         status: normalizeStatus(t.status),

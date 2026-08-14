@@ -62,15 +62,29 @@ export async function loadMetrics(db: DB): Promise<MetricsBundle> {
       .gte('created_at', yesterdayStart)
       .lt('created_at', todayStart),
     db.from('deals').select('value, status').eq('status', 'open'),
+    // "Messages Sent Today" counts what a HUMAN sent: from this CRM
+    // ('agent') or from the WhatsApp Business App on their phone
+    // ('business_app', Coexistence). A phone-typed message is still a
+    // message the business sent today, and on a coexistence number the
+    // phone may well be the busier channel — counting only 'agent' would
+    // show a fraction of the real number.
+    //
+    // 'bot' stays excluded, as it always has been: automations and AI
+    // replies are volume the business did not personally send, and this
+    // KPI sits beside human-activity metrics. That asymmetry is
+    // deliberate, not an oversight.
+    //
+    // No existing account is affected — only coexistence numbers ever
+    // produce a 'business_app' row.
     db
       .from('messages')
       .select('id', { count: 'exact', head: true })
-      .eq('sender_type', 'agent')
+      .in('sender_type', ['agent', 'business_app'])
       .gte('created_at', todayStart),
     db
       .from('messages')
       .select('id', { count: 'exact', head: true })
-      .eq('sender_type', 'agent')
+      .in('sender_type', ['agent', 'business_app'])
       .gte('created_at', yesterdayStart)
       .lt('created_at', todayStart),
   ])
@@ -122,7 +136,11 @@ export async function loadConversationsSeries(
     const bucket = buckets.get(key)
     if (!bucket) continue
     if (row.sender_type === 'customer') bucket.incoming += 1
-    else bucket.outgoing += 1 // agent + bot both count as outgoing
+    // Everything that is not the customer is outgoing — agent, bot, and
+    // 'business_app' (typed on a phone under Coexistence). Written as an
+    // else rather than a list of values on purpose: it stayed correct
+    // when the fourth sender type was added.
+    else bucket.outgoing += 1
   }
 
   return keys.map((day) => ({ day, ...(buckets.get(day) ?? { incoming: 0, outgoing: 0 }) }))

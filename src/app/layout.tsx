@@ -20,25 +20,41 @@ const inter = Inter({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: {
-    default: "Replai - WhatsApp CRM Automation",
-    template: "%s — Replai",
-  },
-  description: "Self-hostable CRM and Automation platform for WhatsApp.",
-  robots: {
-    index: false,
-    follow: false,
-  },
-  icons: {
-    icon: [{ url: "/logo-icon.png" }],
-  },
-  formatDetection: {
-    email: false,
-    address: false,
-    telephone: false,
-  },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  let faviconUrl = "/logo-icon.png";
+  let siteName = "Replai - WhatsApp CRM Automation";
+  
+  try {
+    const { supabaseAdmin } = await import('@/lib/auth/admin-client');
+    const admin = supabaseAdmin();
+    const { data } = await admin.from('site_settings').select('favicon_url, site_name').limit(1).maybeSingle();
+    
+    if (data?.favicon_url) faviconUrl = data.favicon_url;
+    if (data?.site_name) siteName = data.site_name;
+  } catch (err) {
+    console.error("Failed to load metadata in root layout:", err);
+  }
+
+  return {
+    title: {
+      default: siteName,
+      template: `%s — ${siteName}`,
+    },
+    description: "Self-hostable CRM and Automation platform for WhatsApp.",
+    robots: {
+      index: false,
+      follow: false,
+    },
+    icons: {
+      icon: [{ url: faviconUrl }],
+    },
+    formatDetection: {
+      email: false,
+      address: false,
+      telephone: false,
+    },
+  };
+}
 
 export const viewport: Viewport = {
   themeColor: "#020617",
@@ -100,10 +116,10 @@ export default async function RootLayout({
       // children still surface.
       suppressHydrationWarning
     >
-      <head>
-        <Script
+      <head suppressHydrationWarning>
+        <script
           id="theme-boot"
-          strategy="beforeInteractive"
+          suppressHydrationWarning
           dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }}
         />
       </head>

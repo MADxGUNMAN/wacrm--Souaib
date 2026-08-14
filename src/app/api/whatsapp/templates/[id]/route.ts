@@ -10,7 +10,10 @@ import {
   type TemplatePayload,
 } from '@/lib/whatsapp/template-validators'
 import { buildMetaTemplatePayload } from '@/lib/whatsapp/template-components'
-import { ensureImageHeaderHandle } from '@/lib/whatsapp/template-header-handle'
+import {
+  ensureCarouselCardHandles,
+  ensureMediaHeaderHandle,
+} from '@/lib/whatsapp/template-header-handle'
 
 /**
  * Per-template lifecycle endpoint.
@@ -118,16 +121,6 @@ export async function PATCH(
       )
     }
 
-    if (payload.category === 'Authentication') {
-      return NextResponse.json(
-        {
-          error:
-            'AUTHENTICATION templates are not editable here — manage them in Meta WhatsApp Manager.',
-        },
-        { status: 400 },
-      )
-    }
-
     try {
       validateTemplatePayload(payload)
     } catch (e) {
@@ -151,13 +144,18 @@ export async function PATCH(
       }
       const accessToken = decrypt(config.access_token)
 
-      // Image headers need a fresh Resumable-Upload handle on every edit
+      // Media headers need a fresh Resumable-Upload handle on every edit
       // (Meta replaces components wholesale). Derive from header_media_url.
       try {
-        await ensureImageHeaderHandle(payload, accessToken)
+        await ensureMediaHeaderHandle(payload, accessToken)
+        // Carousel card media must be re-uploaded on every edit: Meta
+        // replaces components wholesale, and a creation handle is not
+        // reusable. Without this an edited carousel would submit with no
+        // card media at all.
+        await ensureCarouselCardHandles(payload, accessToken)
       } catch (e) {
         return NextResponse.json(
-          { error: e instanceof Error ? e.message : 'Header image upload failed.' },
+          { error: e instanceof Error ? e.message : 'Header media upload failed.' },
           { status: 400 },
         )
       }
@@ -178,15 +176,26 @@ export async function PATCH(
             last_submitted_at: new Date().toISOString(),
           })
           .eq('id', id)
-        return NextResponse.json({ error: message }, { status: 502 })
+        return NextResponse.json({ error: message }, { status: 400 })
       }
     }
+
+    // Built from the same payload and the same builder that produced
+    // what Meta was sent, so the stored components cannot drift from the
+    // ones under review. Computed here rather than inside the branch
+    // above because the dry-run path needs them too — and because
+    // ensureMediaHeaderHandle has by now mutated `payload` with the
+    // fresh header handle, which must be part of what we store.
+    const storedComponents = buildMetaTemplatePayload(payload).components
 
     // Meta accepted the edit — status flips back to PENDING for review.
     const { data: row, error: updErr } = await supabase
       .from('message_templates')
       .update({
         category: payload.category,
+        // Source of truth (migration 061).
+        components: storedComponents,
+        // ---- Derived cache of the above (see template-definition.ts).
         header_type: payload.header_type ?? null,
         header_content: payload.header_content ?? null,
         header_media_url: payload.header_media_url ?? null,
@@ -290,6 +299,12 @@ export async function DELETE(
         )
       }
       const accessToken = decrypt(config.access_token)
+      console.error('[TEMPLATE DELETE DEBUG]', {
+        wabaId: config.waba_id,
+        name: existing.name,
+        metaTemplateId: existing.meta_template_id,
+        accessTokenLength: accessToken?.length,
+      })
       try {
         await deleteMessageTemplate({
           wabaId: config.waba_id,
@@ -299,7 +314,17 @@ export async function DELETE(
         })
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Meta delete failed.'
-        return NextResponse.json({ error: message }, { status: 502 })
+        console.error('[TEMPLATE DELETE ERROR]', message)
+        // "Invalid parameter" typically means this is a Meta sample/system
+        // template that cannot be deleted via the API. In that case, proceed
+        // to remove the local row so it disappears from the UI — the
+        // template still lives on Meta's side but re-syncing will bring it
+        // back if the user wants it. For any OTHER Meta error (permissions,
+        // network, etc.) we still block.
+        if (!/invalid param/i.test(message)) {
+          return NextResponse.json({ error: message }, { status: 400 })
+        }
+        console.warn('[TEMPLATE DELETE] Meta rejected delete (sample template?) — removing local row only.')
       }
     }
 

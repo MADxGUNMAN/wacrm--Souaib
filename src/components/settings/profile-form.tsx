@@ -15,6 +15,14 @@ import {
   AvatarImage,
 } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useTranslations } from 'next-intl';
 import { SettingsPanelHead } from './settings-panel-head';
 
@@ -31,9 +39,12 @@ const ALLOWED_MIME = new Set([
 // just want to stop obvious typos before making a network call.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+import { useSearchParams } from 'next/navigation';
+
 export function ProfileForm() {
   const t = useTranslations('Settings.profile');
   const { user, profile, refreshProfile } = useAuth();
+  const searchParams = useSearchParams();
   const supabase = createClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -44,6 +55,28 @@ export function ProfileForm() {
   const [removeAvatar, setRemoveAvatar] = useState(false);
   const [saving, setSaving] = useState(false);
   const [emailChangePending, setEmailChangePending] = useState(false);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [verifyingPassword, setVerifyingPassword] = useState(false);
+
+  // Handle email confirmation redirects
+  useEffect(() => {
+    const error = searchParams.get('error');
+    const success = searchParams.get('email_updated');
+
+    if (success === 'true') {
+      toast.success('Email updated successfully!');
+      // Clean up the URL
+      window.history.replaceState({}, '', '/settings?tab=profile');
+    } else if (error === 'email_taken') {
+      toast.error('That email is already registered to another account.');
+      window.history.replaceState({}, '', '/settings?tab=profile');
+    } else if (error === 'invalid_token' || error === 'missing_token') {
+      toast.error('The confirmation link is invalid or has expired.');
+      window.history.replaceState({}, '', '/settings?tab=profile');
+    }
+  }, [searchParams]);
 
   // Seed form state once the profile loads.
   useEffect(() => {
@@ -95,6 +128,48 @@ export function ProfileForm() {
     setPendingAvatar(null);
     setPreviewUrl(null);
     setRemoveAvatar(true);
+  };
+
+  const handleConfirmEmailChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!confirmPassword) return;
+
+    setVerifyingPassword(true);
+    const trimmedEmail = email.trim();
+
+    try {
+      const res = await fetch('/api/auth/change-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          newEmail: trimmedEmail,
+          password: confirmPassword,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to request email change');
+        setVerifyingPassword(false);
+        return;
+      }
+
+      setEmailChangePending(true);
+      setPendingEmail(trimmedEmail);
+      setIsConfirmOpen(false);
+      setConfirmPassword('');
+      setPendingAvatar(null);
+      setPreviewUrl(null);
+      setRemoveAvatar(false);
+      await refreshProfile();
+
+      toast.success(t('profileSavedEmailCheck'));
+    } catch {
+      toast.error('Network error. Please try again.');
+    } finally {
+      setVerifyingPassword(false);
+    }
   };
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -151,38 +226,22 @@ export function ProfileForm() {
         throw new Error(t('saveFailed', { message: updateError.message }));
       }
 
-      // Email change goes through Supabase Auth, which emails a
-      // confirmation to both the old and new addresses. We don't
-      // touch profiles.email — Supabase will push the change there
-      // after the user clicks the link (handled by the handle_new_user
-      // trigger pattern in production deployments).
-      let emailSent = false;
-      if (trimmedEmail.toLowerCase() !== profile.email.toLowerCase()) {
-        const { error: emailError } = await supabase.auth.updateUser({
-          email: trimmedEmail,
-        });
-        if (emailError) {
-          // Partial success: name/avatar saved but email didn't.
-          toast.success(t('profileSaved'));
-          toast.error(t('emailChangeFailed', { message: emailError.message }));
-          setSaving(false);
-          await refreshProfile();
-          return;
-        }
-        emailSent = true;
+      const emailChanged =
+        trimmedEmail.toLowerCase() !== profile.email.toLowerCase();
+
+      if (emailChanged) {
+        // Open password confirmation dialog for email change
+        setIsConfirmOpen(true);
+        setSaving(false);
+        return;
       }
 
-      setEmailChangePending(emailSent);
       setPendingAvatar(null);
       setPreviewUrl(null);
       setRemoveAvatar(false);
       await refreshProfile();
 
-      toast.success(
-        emailSent
-          ? t('profileSavedEmailCheck')
-          : t('profileSaved'),
-      );
+      toast.success(t('profileSaved'));
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       toast.error(msg);
@@ -295,8 +354,7 @@ export function ProfileForm() {
                 <Mail className="mt-0.5 size-3.5 shrink-0" />
                 <span>
                   {t.rich('emailChangeHint', { 
-                    oldEmail: profile?.email || '', 
-                    newEmail: email,
+                    newEmail: pendingEmail || email,
                     bold: (chunks: React.ReactNode) => <strong>{chunks}</strong>
                   })}
                 </span>
@@ -352,6 +410,61 @@ export function ProfileForm() {
           </Button>
         </div>
       </form>
+
+      {/* Password Confirmation Modal */}
+      <Dialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
+        <DialogContent>
+          <form onSubmit={handleConfirmEmailChange} className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>{t('confirmPasswordTitle')}</DialogTitle>
+              <DialogDescription>
+                {t.rich('confirmPasswordDesc', {
+                  newEmail: email.trim(),
+                  bold: (chunks: React.ReactNode) => <strong>{chunks}</strong>,
+                })}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-2 py-2">
+              <Label htmlFor="confirm-password">{t('passwordLabel')}</Label>
+              <Input
+                id="confirm-password"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder={t('passwordPlaceholder')}
+                required
+                autoFocus
+                disabled={verifyingPassword}
+              />
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setIsConfirmOpen(false);
+                  setConfirmPassword('');
+                }}
+                disabled={verifyingPassword}
+              >
+                {t('cancel')}
+              </Button>
+              <Button type="submit" disabled={verifyingPassword || !confirmPassword}>
+                {verifyingPassword ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    {t('saving')}
+                  </>
+                ) : (
+                  t('confirmButton')
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

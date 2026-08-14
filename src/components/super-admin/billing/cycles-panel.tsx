@@ -19,6 +19,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  Sparkles,
   Star,
   Trash2,
   X,
@@ -147,9 +148,10 @@ export function CyclesPanel() {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-semibold text-slate-900">{cycle.label}</h3>
-                {cycle.discount_label ? (
-                  <span className="rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700">
-                    {cycle.discount_label}
+                {cycle.is_recommended ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                    <Sparkles className="h-2.5 w-2.5" />
+                    {cycle.recommended_label || 'Recommended'}
                   </span>
                 ) : null}
                 {cycle.is_default ? (
@@ -165,9 +167,8 @@ export function CyclesPanel() {
                 ) : null}
               </div>
               <p className="mt-1 text-xs text-slate-500">
-                Grants <strong>{describeCycleDuration(cycle)}</strong> · key{' '}
-                <code className="font-mono">{cycle.cycle_key}</code>
-                {cycle.unit_label ? <> · shows “{cycle.unit_label}”</> : null}
+                Grants <strong>{describeCycleDuration(cycle)}</strong> of access
+                per payment
               </p>
             </div>
 
@@ -240,14 +241,17 @@ function CycleDialog({
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
-  const [cycleKey, setCycleKey] = useState(cycle?.cycle_key ?? '');
   const [label, setLabel] = useState(cycle?.label ?? '');
-  const [unitLabel, setUnitLabel] = useState(cycle?.unit_label ?? '');
   const [months, setMonths] = useState(String(cycle?.months ?? 1));
   const [durationDays, setDurationDays] = useState(
     cycle?.duration_days ? String(cycle.duration_days) : '',
   );
-  const [discountLabel, setDiscountLabel] = useState(cycle?.discount_label ?? '');
+  const [isRecommended, setIsRecommended] = useState(
+    cycle?.is_recommended ?? false,
+  );
+  const [recommendedLabel, setRecommendedLabel] = useState(
+    cycle?.recommended_label ?? '',
+  );
   const [isDefault, setIsDefault] = useState(cycle?.is_default ?? false);
   const [isVisible, setIsVisible] = useState(cycle?.is_visible ?? true);
   const [position, setPosition] = useState(String(cycle?.position ?? 0));
@@ -272,13 +276,32 @@ function CycleDialog({
     setError(null);
 
     try {
+      // The key is an internal identifier, not customer-facing copy, so
+      // it is derived from the label rather than asked for. On an
+      // existing cycle we keep the stored key untouched — changing it is
+      // never something an operator needs, and the label is free to
+      // change without disturbing it.
+      const slug = label
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40);
+      const derivedKey =
+        cycle?.cycle_key ?? (slug || `cycle-${Date.now().toString(36)}`);
+
       const payload: Record<string, unknown> = {
-        cycle_key: cycleKey,
+        cycle_key: derivedKey,
         label,
-        unit_label: unitLabel || null,
         months: Number(months) || 0,
         duration_days: durationDays ? Number(durationDays) : null,
-        discount_label: discountLabel || null,
+        is_recommended: isRecommended,
+        // Default the badge text when the flag is switched on but no
+        // wording was given, otherwise the card renders a flagged cycle
+        // with no visible badge — the toggle would look broken.
+        recommended_label: isRecommended
+          ? recommendedLabel.trim() || 'Recommended'
+          : recommendedLabel.trim() || null,
         is_default: isDefault,
         is_visible: isVisible,
         position: Number(position) || 0,
@@ -322,29 +345,19 @@ function CycleDialog({
         </div>
 
         <div className="mt-5 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-slate-600">
-                Label <span className="text-red-500">*</span>
-              </p>
-              <Input
-                value={label}
-                onChange={(e) => setLabel(e.target.value)}
-                placeholder="Quarterly"
-                className="border-slate-200 bg-white text-slate-900"
-              />
-            </div>
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-slate-600">
-                Key <span className="text-red-500">*</span>
-              </p>
-              <Input
-                value={cycleKey}
-                onChange={(e) => setCycleKey(e.target.value)}
-                placeholder="quarterly"
-                className="border-slate-200 bg-white font-mono text-slate-900"
-              />
-            </div>
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-slate-600">
+              Card title <span className="text-red-500">*</span>
+            </p>
+            <Input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Monthly"
+              className="border-slate-200 bg-white text-slate-900"
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              The heading customers see on this card, e.g. Monthly or Yearly.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -390,29 +403,40 @@ function CycleDialog({
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-slate-600">
-                Price suffix
-              </p>
-              <Input
-                value={unitLabel}
-                onChange={(e) => setUnitLabel(e.target.value)}
-                placeholder="/quarter"
-                className="border-slate-200 bg-white text-slate-900"
+          {/* The savings pill on the card is derived automatically from
+              the daily rates (see /upgrade-plan), so there is no manual
+              discount field here. Recommended is the one badge an operator
+              sets by hand. */}
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <label className="flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={isRecommended}
+                onChange={(e) => setIsRecommended(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[#25D366]"
               />
-            </div>
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-slate-600">
-                Discount badge
-              </p>
-              <Input
-                value={discountLabel}
-                onChange={(e) => setDiscountLabel(e.target.value)}
-                placeholder="10%"
-                className="border-slate-200 bg-white text-slate-900"
-              />
-            </div>
+              <span>
+                <span className="block text-sm font-medium text-slate-700">
+                  Highlight this as the recommended term
+                </span>
+                <span className="block text-xs text-slate-500">
+                  Lifts the card on the plan page and shows a badge.
+                </span>
+              </span>
+            </label>
+            {isRecommended ? (
+              <div className="mt-3">
+                <p className="mb-1.5 text-xs font-medium text-slate-600">
+                  Badge text
+                </p>
+                <Input
+                  value={recommendedLabel}
+                  onChange={(e) => setRecommendedLabel(e.target.value)}
+                  placeholder="Recommended"
+                  className="border-slate-200 bg-white text-slate-900"
+                />
+              </div>
+            ) : null}
           </div>
 
           <div>

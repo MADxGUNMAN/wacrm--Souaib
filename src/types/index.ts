@@ -272,7 +272,24 @@ export interface Notification {
   created_at: string;
 }
 
-export type SenderType = 'customer' | 'agent' | 'bot';
+/**
+ * Who sent a message.
+ *
+ *   customer      — the person we are talking to
+ *   agent         — a human on the team, through this CRM
+ *   bot           — an automation, a flow, or the AI auto-reply
+ *   business_app  — the business, but typed in the WhatsApp Business App
+ *                   on a phone rather than here. Only possible on a
+ *                   Coexistence number, where Meta mirrors phone-sent
+ *                   messages to us (migration 069).
+ *
+ * `business_app` is OUTBOUND but has no CRM user behind it, so use
+ * `isOutboundSender` from @/lib/messages/sender-type rather than
+ * comparing against 'agent' and 'bot' by hand — that idiom was
+ * duplicated in four components and each copy was a place to forget the
+ * fourth value.
+ */
+export type SenderType = 'customer' | 'agent' | 'bot' | 'business_app';
 export type ContentType =
   | 'text'
   | 'image'
@@ -297,6 +314,23 @@ export interface Message {
   message_id?: string;
   status: MessageStatus;
   created_at: string;
+  /**
+   * Set when the sender edited this message. `content_text` holds the
+   * LATEST version — the original is not kept, matching what WhatsApp
+   * itself shows. Migration 069.
+   */
+  edited_at?: string | null;
+  /**
+   * Soft delete — set when the sender deleted this message for everyone.
+   * The row survives so the thread can show a placeholder where it was;
+   * hiding it entirely would silently reflow the conversation and dangle
+   * any `reply_to_message_id` pointing at it. Migration 069.
+   *
+   * Anything rendering `content_text` MUST check this first: the text of
+   * a deleted message is still in the column, and showing it would
+   * display something the sender explicitly retracted.
+   */
+  deleted_at?: string | null;
   reply_to_message_id?: string;
   /**
    * Only set when `content_type === 'interactive'` — the stable id of
@@ -372,7 +406,21 @@ export type TemplateButton =
   | { type: 'QUICK_REPLY'; text: string }
   | { type: 'URL'; text: string; url: string; example?: string }
   | { type: 'PHONE_NUMBER'; text: string; phone_number: string }
-  | { type: 'COPY_CODE'; text: string; example: string };
+  | { type: 'COPY_CODE'; text: string; example: string }
+  /**
+   * Places a WhatsApp voice call to the business when tapped.
+   *
+   * Carries no configuration — the number called is the WABA's own. It
+   * lives in this union rather than only in `MetaTemplateButton` because
+   * it needs no send-time parameter, so the flat `buttons` cache can
+   * represent it faithfully and every existing consumer handles it by
+   * adding one case.
+   *
+   * Requires WhatsApp Business Calling to be enabled on the phone number;
+   * without that the template is still approved and the button does
+   * nothing.
+   */
+  | { type: 'VOICE_CALL'; text: string };
 
 export interface TemplateSampleValues {
   body?: string[];
@@ -385,7 +433,11 @@ export interface MessageTemplate {
   name: string;
   category: 'Marketing' | 'Utility' | 'Authentication';
   language?: string;
-  header_type?: 'text' | 'image' | 'video' | 'document';
+  // ---- Flat columns: a DERIVED CACHE of `components`, not the truth.
+  // Written only by deriveFlatColumns(). Kept because
+  // template-row-guard.ts requires body_text and the broadcast engine
+  // reads these on every send. See template-definition.ts.
+  header_type?: 'text' | 'image' | 'video' | 'document' | 'location';
   header_content?: string;
   header_handle?: string;
   header_media_url?: string;
@@ -393,6 +445,18 @@ export interface MessageTemplate {
   footer_text?: string;
   buttons?: TemplateButton[];
   sample_values?: TemplateSampleValues;
+  // ---- Source of truth (migration 061). Meta's components array,
+  // verbatim. Typed as TemplateComponent[] via definitionFromRow();
+  // left as unknown here so @/types stays dependency-free.
+  components?: unknown;
+  /** Which wizard flow built this — see TemplateType. */
+  template_type?: string;
+  /** POSITIONAL ({{1}}) or NAMED ({{order_id}}). */
+  parameter_format?: 'POSITIONAL' | 'NAMED';
+  /** Validity period in seconds; null uses Meta's default. */
+  message_send_ttl_seconds?: number | null;
+  /** Set when created from Meta's pre-approved Template Library. */
+  library_template_name?: string | null;
   status?: MessageTemplateStatus;
   meta_template_id?: string;
   rejection_reason?: string;

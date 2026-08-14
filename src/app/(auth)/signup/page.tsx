@@ -1,9 +1,9 @@
 "use client";
+// Force rebuild to resolve Turbopack hydration mismatch
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,8 +42,26 @@ function SignupPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const supabase = createClient();
+  const [logoUrl, setLogoUrl] = useState<string>("/Replai-logo.png");
+  const [iconUrl, setIconUrl] = useState<string>("/logo-icon.png");
+  const [siteName, setSiteName] = useState<string>("Replai");
 
+  useEffect(() => {
+    async function loadBranding() {
+      try {
+        const res = await fetch("/api/public/settings", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.settings?.logo_url) setLogoUrl(data.settings.logo_url);
+          if (data.settings?.favicon_url) setIconUrl(data.settings.favicon_url);
+          if (data.settings?.site_name) setSiteName(data.settings.site_name);
+        }
+      } catch (err) {
+        console.error("Failed to load branding in signup page:", err);
+      }
+    }
+    loadBranding();
+  }, []);
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -60,27 +78,29 @@ function SignupPageInner() {
 
     setLoading(true);
 
-    // If we have an invite token, point Supabase's verification
-    // email back at the join page so the user can accept after
-    // verifying. Without a token, Supabase uses its default
-    // redirect (the app root).
-    const emailRedirectTo = inviteToken
-      ? `${window.location.origin}/join/${encodeURIComponent(inviteToken)}`
-      : undefined;
+    // Server-side signup: sends branded email via our SMTP instead
+    // of Supabase's default "powered by Supabase" email.
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+          fullName,
+          inviteToken: inviteToken || undefined,
+        }),
+      });
 
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: fullName,
-        },
-        ...(emailRedirectTo ? { emailRedirectTo } : {}),
-      },
-    });
+      const data = await res.json();
 
-    if (error) {
-      setError(error.message);
+      if (!res.ok) {
+        setError(data.error || 'Failed to create account');
+        setLoading(false);
+        return;
+      }
+    } catch {
+      setError('Network error. Please try again.');
       setLoading(false);
       return;
     }
@@ -102,7 +122,7 @@ function SignupPageInner() {
           <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
           
           <div className="relative z-10 max-w-lg px-8 text-center flex flex-col items-center">
-            <img src="/Replai-logo.png" alt="Replai Logo" className="h-10 w-auto mb-8" />
+            <img src={logoUrl} alt={siteName} suppressHydrationWarning className="h-24 w-auto max-w-[360px] object-contain mb-8" />
             <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Check your email</h2>
             <p className="text-lg text-slate-600 leading-relaxed">
               We&apos;ve sent a confirmation link to verify your account.
@@ -160,10 +180,10 @@ function SignupPageInner() {
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
         
         <div className="relative z-10 max-w-lg px-8 text-center flex flex-col items-center">
-          <img src="/Replai-logo.png" alt="Replai Logo" className="h-10 w-auto mb-8" />
+          <img src={logoUrl} alt={siteName} suppressHydrationWarning className="h-24 w-auto max-w-[360px] object-contain mb-8" />
           <h2 className="text-3xl font-bold text-slate-900 mb-4 tracking-tight">Scale your customer communication</h2>
           <p className="text-lg text-slate-600 leading-relaxed">
-            Join thousands of businesses using Replai to automate WhatsApp support, sales, and marketing.
+            Join thousands of businesses using {siteName} to automate WhatsApp support, sales, and marketing.
           </p>
         </div>
       </div>
@@ -172,11 +192,11 @@ function SignupPageInner() {
       <div className="flex w-full lg:w-1/2 items-center justify-center px-4 sm:px-8 bg-white">
         <Card className="w-full max-w-md border-0 sm:border border-slate-200 sm:bg-white shadow-none sm:shadow-xl sm:shadow-slate-200/50">
         <CardHeader className="items-center text-center">
-          <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#25D366]/10 border border-[#25D366]/20 shadow-inner">
+          <div className="mb-2 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#25D366]/10 border border-[#25D366]/20 shadow-inner">
             {inviteToken ? (
-              <UsersRound className="h-7 w-7 text-[#25D366]" />
+              <UsersRound className="h-8 w-8 text-[#25D366]" />
             ) : (
-              <img src="/logo-icon.png" alt="Replai" className="h-8 w-8 object-contain" />
+              <img src={iconUrl} alt={siteName} suppressHydrationWarning className="h-10 w-10 object-contain" />
             )}
           </div>
           <CardTitle className="text-2xl font-bold text-slate-900 mt-2">
@@ -185,7 +205,7 @@ function SignupPageInner() {
           <CardDescription className="text-slate-500">
             {inviteToken
               ? "Verify your email, then accept the invitation to join your team."
-              : "Get started with Replai"}
+              : `Get started with ${siteName}`}
           </CardDescription>
         </CardHeader>
         <CardContent>

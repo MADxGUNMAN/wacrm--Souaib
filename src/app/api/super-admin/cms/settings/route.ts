@@ -9,6 +9,8 @@ import { NextResponse } from 'next/server';
 import { requireSuperAdmin } from '@/lib/super-admin/guard';
 import { supabaseAdmin } from '@/lib/auth/admin-client';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   try {
     await requireSuperAdmin(request);
@@ -51,11 +53,13 @@ export async function PUT(request: Request) {
       .limit(1)
       .maybeSingle();
 
+    const updatePayload = { ...body, updated_at: new Date().toISOString() };
+
     if (!existing) {
       // Create if doesn't exist
       const { data, error } = await admin
         .from('site_settings')
-        .insert({ ...body, updated_at: new Date().toISOString() })
+        .insert(updatePayload)
         .select()
         .single();
 
@@ -68,7 +72,7 @@ export async function PUT(request: Request) {
     // Update existing
     const { data, error } = await admin
       .from('site_settings')
-      .update({ ...body, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq('id', existing.id)
       .select()
       .single();

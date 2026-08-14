@@ -9,7 +9,10 @@
 // ============================================================
 
 import { NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/super-admin/guard';
+import {
+  requireSuperAdmin,
+  superAdminErrorResponse,
+} from '@/lib/super-admin/guard';
 import { getSignupsOverTime } from '@/lib/super-admin/queries';
 
 export async function GET(request: Request) {
@@ -26,10 +29,16 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ growth: data });
   } catch (err) {
-    if (err instanceof NextResponse) return err;
+    const known = superAdminErrorResponse(err);
+    if (known) return known;
+
     console.error('[super-admin/growth] error:', err);
     return NextResponse.json(
-      { error: 'Failed to fetch growth data' },
+      {
+        error: `Failed to fetch growth data: ${
+          err instanceof Error ? err.message : 'unknown error'
+        }`,
+      },
       { status: 500 }
     );
   }

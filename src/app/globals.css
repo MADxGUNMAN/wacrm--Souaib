@@ -163,17 +163,17 @@ html[data-theme="violet"] {
 
 :root,
 html[data-theme="emerald"] {
-  --primary: oklch(0.62 0.16 162);
-  --primary-foreground: oklch(0.16 0.02 162);
-  --primary-hover: oklch(0.68 0.15 162);
-  --primary-soft: oklch(0.62 0.16 162 / 0.12);
-  --primary-soft-2: oklch(0.62 0.16 162 / 0.22);
-  --ring: oklch(0.62 0.16 162);
-  --chart-1: oklch(0.62 0.16 162);
-  --chart-2: oklch(0.7 0.14 195);
-  --sidebar-primary: oklch(0.62 0.16 162);
-  --sidebar-primary-foreground: oklch(0.16 0.02 162);
-  --sidebar-ring: oklch(0.62 0.16 162);
+  --primary: #25D366;
+  --primary-foreground: #ffffff;
+  --primary-hover: #20b958;
+  --primary-soft: #25D3661f; /* ~12% opacity */
+  --primary-soft-2: #25D36638; /* ~22% opacity */
+  --ring: #25D366;
+  --chart-1: #25D366;
+  --chart-2: #128C7E;
+  --sidebar-primary: #25D366;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-ring: #25D366;
 }
 
 html[data-theme="cobalt"] {

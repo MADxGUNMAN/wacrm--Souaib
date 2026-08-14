@@ -211,7 +211,7 @@ export function SubscribersPanel() {
                   Status
                 </TableHead>
                 <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  Plan
+                  Term
                 </TableHead>
                 <TableHead className="text-xs font-semibold text-slate-600 uppercase">
                   Ends
@@ -293,8 +293,13 @@ export function SubscribersPanel() {
                       ) : null}
                     </TableCell>
                     <TableCell>
-                      <p className="text-sm text-slate-700">{row.planName ?? '—'}</p>
-                      <p className="text-xs text-slate-400">{row.cycleLabel ?? ''}</p>
+                      {/* Shows the billing term (Monthly / Yearly), not the
+                          plan name. There is a single product now, so the
+                          name added nothing; the term is what distinguishes
+                          one subscriber from another. */}
+                      <p className="text-sm text-slate-700">
+                        {row.cycleLabel ?? '—'}
+                      </p>
                     </TableCell>
                     <TableCell>
                       <p className="text-sm text-slate-700">{formatDate(row.endsAt)}</p>
@@ -562,8 +567,8 @@ function ManageSubscriptionDialog({
                   className="border-slate-200 bg-white text-slate-900"
                 />
                 <p className="mt-1.5 text-xs text-slate-500">
-                  Labels the Plan column and the customer&apos;s billing page.
-                  Leave blank to keep whatever is already recorded.
+                  Recorded on the customer&apos;s billing page and payment
+                  history. Leave blank to keep whatever is already recorded.
                 </p>
               </div>
               <p className="flex items-start gap-1.5 text-xs text-slate-500">

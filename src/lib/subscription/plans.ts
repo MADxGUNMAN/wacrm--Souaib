@@ -42,6 +42,26 @@ export function toNullableAmount(value: unknown): number | null {
 }
 
 /**
+ * The `subscription_settings` columns that describe the Custom / enquiry
+ * card on /upgrade-plan.
+ *
+ * Named here so the two admin panels that touch this row agree on who
+ * owns what: the Plans & Pricing tab writes exactly these, and the Page
+ * & UPI tab strips exactly these before saving. Left as a convention in
+ * each file, the lists would drift and whichever tab saved last would
+ * quietly revert the other.
+ */
+export const CUSTOM_CARD_SETTING_KEYS = [
+  'show_custom_plan',
+  'custom_plan_label',
+  'custom_plan_price_text',
+  'custom_plan_body',
+  'custom_plan_cta_text',
+  'custom_plan_cta_link',
+  'custom_plan_features',
+] as const;
+
+/**
  * Widen a stored `features` JSONB blob into a uniform array.
  *
  * Accepts three shapes so hand-edited data and the seeded data both
@@ -139,6 +159,87 @@ export function perMonthAmount(
   if (cycle.duration_days) return null;
   if (!cycle.months || cycle.months <= 1) return null;
   return amount / cycle.months;
+}
+
+/**
+ * The headline per-day rate for a priced cycle.
+ *
+ * DERIVED from the real total by default, so the big number on the card
+ * can never contradict what the customer is actually charged — the two
+ * are the same fact expressed differently. `perDayOverride` exists only
+ * for the case where the true division is a recurring decimal (950 / 30 =
+ * 31.666…) and the operator wants a round headline; it changes the
+ * DISPLAY only, never the amount charged.
+ *
+ * Returns null for a cycle with no day-based term, because a daily rate
+ * derived from a calendar month would drift with February.
+ */
+export function perDayAmount(params: {
+  amount: number;
+  cycle: Pick<BillingCycle, 'duration_days'>;
+  perDayOverride?: number | null;
+}): number | null {
+  const { amount, cycle, perDayOverride } = params;
+
+  if (perDayOverride && perDayOverride > 0) return perDayOverride;
+
+  const days = cycle.duration_days ?? 0;
+  if (days <= 0) return null;
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+
+  return amount / days;
+}
+
+/**
+ * Total saved over the term versus the most expensive daily rate on offer.
+ *
+ * Day-based cycles need their own savings calculation: {@link deriveSavings}
+ * reasons in whole months, which a 360-day term is not. Comparing daily
+ * rates instead is both exact and the comparison the customer is already
+ * making, since the daily rate is the headline.
+ *
+ *   (30/day - 25/day) x 360 days = 1,800 saved
+ *
+ * Returns null when there is nothing to boast about, so the UI can simply
+ * omit the pill rather than render "Save ₹0".
+ */
+export function deriveDaySavings(params: {
+  /** This cycle's per-day rate. */
+  perDay: number;
+  /** The highest per-day rate across all visible cycles (the baseline). */
+  baselinePerDay: number | null;
+  /** This cycle's term length. */
+  days: number;
+}): number | null {
+  const { perDay, baselinePerDay, days } = params;
+
+  if (!baselinePerDay || baselinePerDay <= perDay) return null;
+  if (!Number.isFinite(days) || days <= 0) return null;
+
+  const saving = Math.round((baselinePerDay - perDay) * days);
+  return saving > 0 ? saving : null;
+}
+
+/**
+ * Fill `{total}` and `{days}` in the admin-authored equals line.
+ *
+ * Deliberately forgiving, matching `fillTemplate` in copy.ts: the input
+ * is typed into a CMS field, and a typo must not be able to blank the
+ * line or leak a raw brace into a customer's view. An unrecognised
+ * placeholder is left visible so whoever made the typo can see it.
+ */
+export function formatPriceEquals(
+  template: string | null | undefined,
+  values: { total: string; days: number },
+): string {
+  const fallback = `= ${values.total} for ${values.days} days`;
+  if (!template || !template.trim()) return fallback;
+
+  return template
+    .replace(/\{total\}/g, values.total)
+    .replace(/\{days\}/g, String(values.days))
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 /**

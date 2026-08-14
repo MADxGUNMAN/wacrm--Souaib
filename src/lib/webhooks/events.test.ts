@@ -9,7 +9,12 @@ import {
 describe('isWebhookEvent', () => {
   it('accepts every declared event and rejects others', () => {
     for (const e of WEBHOOK_EVENTS) expect(isWebhookEvent(e)).toBe(true);
-    expect(isWebhookEvent('message.deleted')).toBe(false);
+    // A name that is deliberately NOT plausible as a future event. This
+    // assertion used to use 'message.deleted', which stopped being a
+    // rejection case the moment that event was actually added for
+    // Coexistence — a test that fails because the product grew is a
+    // maintenance tax, not a safety net.
+    expect(isWebhookEvent('message.definitely_not_an_event')).toBe(false);
     expect(isWebhookEvent(42)).toBe(false);
   });
 });

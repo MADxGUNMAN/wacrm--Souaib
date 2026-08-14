@@ -9,8 +9,7 @@
  * instead of a runtime rejection from Meta.
  */
 
-const META_API_VERSION = 'v21.0'
-const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`
+import { META_API_BASE } from './graph-version'
 
 export interface MetaSendResult {
   messageId: string
@@ -396,13 +395,17 @@ export async function sendTemplateMessage(
 
   if (template) {
     const components = buildSendComponents(template, {
+      // Spread rather than copying field by field. The previous version
+      // listed five fields explicitly and therefore SILENTLY DROPPED
+      // `offerExpiresAtMs` and `cards` when they were added to
+      // SendTimeParams — a limited-time offer would have been sent with
+      // no expiry and a carousel with no per-card values, no matter what
+      // the caller supplied. Spreading means a new field reaches the
+      // builder without needing an edit here.
+      ...messageParams,
       // Legacy callers pass body values in `params`; fold them into
       // `messageParams.body` so the new path covers them too.
       body: messageParams?.body ?? params,
-      headerText: messageParams?.headerText,
-      headerMediaUrl: messageParams?.headerMediaUrl,
-      headerMediaId: messageParams?.headerMediaId,
-      buttonParams: messageParams?.buttonParams,
     })
     if (components.length > 0) {
       templatePayload.components = components
@@ -578,6 +581,349 @@ export async function submitMessageTemplate(
   }
 }
 
+// ============================================================
+// Template Library (Meta's pre-written templates)
+// ============================================================
+//
+// Meta maintains a library of ready-made UTILITY and AUTHENTICATION
+// templates for common cases — delivery updates, payment reminders and so
+// on. They are PRE-CATEGORISED, which is the real draw: a template you
+// write yourself can be re-categorised as Marketing by Meta's classifier
+// and cost more to send, while a library template's category is settled.
+//
+// The content is FIXED and cannot be edited. All you supply is your own
+// template name, the language, and the button details (your URL, your
+// phone number). Anything else means writing a normal template instead.
+//
+// https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-message-templates/utility-templates
+
+export interface LibraryTemplateButton {
+  /** URL, PHONE_NUMBER, QUICK_REPLY, FLOW, … */
+  type: string
+  text?: string
+  url?: string
+  phone_number?: string
+}
+
+export interface LibraryTemplate {
+  id: string
+  /** The library's own name — this is what `library_template_name` takes. */
+  name: string
+  language: string
+  category: string
+  topic?: string
+  usecase?: string
+  industry?: string[]
+  /** Fixed wording, with {{n}} where your values go. */
+  body?: string
+  /** Meta's own sample values, one per {{n}}. */
+  body_params?: string[]
+  /** TEXT | ADDRESS | AMOUNT | DATE | PHONE_NUMBER | EMAIL | NUMBER. */
+  body_param_types?: string[]
+  header?: string
+  footer?: string
+  buttons?: LibraryTemplateButton[]
+}
+
+export interface ListTemplateLibraryArgs {
+  wabaId: string
+  accessToken: string
+  /** Substring match across the library template's content and name. */
+  search?: string
+  /** ACCOUNT_UPDATE | CUSTOMER_FEEDBACK | ORDER_MANAGEMENT | PAYMENTS. */
+  topic?: string
+  usecase?: string
+  /** E_COMMERCE | FINANCIAL_SERVICES. */
+  industry?: string
+  language?: string
+}
+
+/**
+ * Browse Meta's Template Library.
+ *
+ * Filters are passed straight through as query parameters; an unknown or
+ * misspelled enum returns an empty list rather than an error, so the UI
+ * says "nothing matched" rather than inventing a reason.
+ */
+export async function listTemplateLibrary(
+  args: ListTemplateLibraryArgs
+): Promise<LibraryTemplate[]> {
+  const { wabaId, accessToken, search, topic, usecase, industry, language } =
+    args
+
+  const query = new URLSearchParams()
+  if (search?.trim()) query.set('search', search.trim())
+  if (topic) query.set('topic', topic)
+  if (usecase) query.set('usecase', usecase)
+  if (industry) query.set('industry', industry)
+  if (language) query.set('language', language)
+  query.set('limit', '200')
+
+  const url = `${META_API_BASE}/${wabaId}/message_template_library?${query.toString()}`
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  const rows = Array.isArray(data?.data) ? data.data : []
+
+  return rows
+    .filter((t: unknown): t is Record<string, unknown> => Boolean(t))
+    .map((t: Record<string, unknown>) => ({
+      id: String(t.id ?? ''),
+      name: typeof t.name === 'string' ? t.name : '',
+      language: typeof t.language === 'string' ? t.language : '',
+      category: typeof t.category === 'string' ? t.category : 'UTILITY',
+      topic: typeof t.topic === 'string' ? t.topic : undefined,
+      usecase: typeof t.usecase === 'string' ? t.usecase : undefined,
+      industry: Array.isArray(t.industry) ? (t.industry as string[]) : undefined,
+      body: typeof t.body === 'string' ? t.body : undefined,
+      body_params: Array.isArray(t.body_params)
+        ? (t.body_params as string[])
+        : undefined,
+      body_param_types: Array.isArray(t.body_param_types)
+        ? (t.body_param_types as string[])
+        : undefined,
+      header: typeof t.header === 'string' ? t.header : undefined,
+      footer: typeof t.footer === 'string' ? t.footer : undefined,
+      buttons: Array.isArray(t.buttons)
+        ? (t.buttons as LibraryTemplateButton[])
+        : undefined,
+    }))
+    .filter((t: LibraryTemplate) => t.name !== '')
+}
+
+/**
+ * One button's details, supplied by the business at creation.
+ *
+ * A URL button takes a base URL plus an example of the filled-in form,
+ * because the library template's URL carries a `{{1}}` suffix.
+ */
+export type LibraryButtonInput =
+  | {
+      type: 'URL'
+      url: { base_url: string; url_suffix_example: string }
+    }
+  | { type: 'PHONE_NUMBER'; phone_number: string }
+
+export interface SubmitLibraryTemplateArgs {
+  wabaId: string
+  accessToken: string
+  /** Your name for the new template. */
+  name: string
+  language: string
+  /** The library template's own name, from listTemplateLibrary. */
+  libraryTemplateName: string
+  category?: 'UTILITY' | 'AUTHENTICATION'
+  buttonInputs?: LibraryButtonInput[]
+}
+
+/**
+ * Create a template from the Template Library.
+ *
+ * Same endpoint as a normal create, but the body carries
+ * `library_template_name` INSTEAD of components — Meta supplies those.
+ * Sending components alongside it is what makes this fail confusingly, so
+ * this helper does not accept any.
+ *
+ * `library_template_button_inputs` is sent as a real ARRAY. Meta's
+ * documentation types it as an array of objects but its own example shows
+ * a quoted string containing single-quoted JSON, which is not valid JSON
+ * at all; the array form is what the Graph API parses. Noted because the
+ * example is the first thing anyone debugging this will find.
+ */
+export async function submitLibraryTemplate(
+  args: SubmitLibraryTemplateArgs
+): Promise<SubmitMessageTemplateResult> {
+  const {
+    wabaId,
+    accessToken,
+    name,
+    language,
+    libraryTemplateName,
+    category = 'UTILITY',
+    buttonInputs,
+  } = args
+
+  const body: Record<string, unknown> = {
+    name,
+    language,
+    category,
+    library_template_name: libraryTemplateName,
+  }
+  if (buttonInputs && buttonInputs.length > 0) {
+    body.library_template_button_inputs = buttonInputs
+  }
+
+  const response = await fetch(
+    `${META_API_BASE}/${wabaId}/message_templates`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(body),
+    }
+  )
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  if (!data?.id) {
+    throw new Error('Meta accepted the template but returned no id.')
+  }
+  return {
+    id: String(data.id),
+    // Library templates are frequently APPROVED immediately, since the
+    // wording is already reviewed. Do not assume PENDING.
+    status: typeof data.status === 'string' ? data.status : 'PENDING',
+    category: typeof data.category === 'string' ? data.category : undefined,
+  }
+}
+
+export interface FetchMessageTemplateArgs {
+  wabaId: string
+  accessToken: string
+  name: string
+  language?: string
+}
+
+export interface FetchedMessageTemplate {
+  id: string
+  name: string
+  language: string
+  status: string
+  category: string
+  components: unknown[]
+  library_template_name?: string
+}
+
+/**
+ * Read one template back from Meta by name.
+ *
+ * Used after creating from the Template Library, where the create response
+ * carries only an id: the components are Meta's, so the only way to store
+ * what was actually created — rather than a local guess at the library
+ * wording — is to ask for it. Guessing would leave the preview and the
+ * broadcast body showing something Meta never approved.
+ */
+export async function fetchMessageTemplateByName(
+  args: FetchMessageTemplateArgs
+): Promise<FetchedMessageTemplate | null> {
+  const { wabaId, accessToken, name, language } = args
+  const url = `${META_API_BASE}/${wabaId}/message_templates?name=${encodeURIComponent(
+    name
+  )}&fields=id,name,language,status,category,components,library_template_name&limit=50`
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  const rows: Record<string, unknown>[] = Array.isArray(data?.data)
+    ? data.data
+    : []
+
+  // `name=` is a filter, not an exact lookup — Meta returns every language
+  // variant, and can return near-matches. Pick the exact pair.
+  const hit =
+    rows.find(
+      (r) =>
+        r.name === name && (language ? r.language === language : true)
+    ) ?? null
+  if (!hit) return null
+
+  return {
+    id: String(hit.id ?? ''),
+    name: String(hit.name ?? ''),
+    language: String(hit.language ?? ''),
+    status: typeof hit.status === 'string' ? hit.status : 'PENDING',
+    category: typeof hit.category === 'string' ? hit.category : 'UTILITY',
+    components: Array.isArray(hit.components) ? hit.components : [],
+    library_template_name:
+      typeof hit.library_template_name === 'string'
+        ? hit.library_template_name
+        : undefined,
+  }
+}
+
+// ============================================================
+// WhatsApp Flows (WABA assets)
+// ============================================================
+//
+// IMPORTANT, because the naming collides with this app's own feature:
+// these are META's WhatsApp Flows — multi-screen forms that open inside
+// WhatsApp, built in Meta's Flow Builder and living on the WABA. They are
+// NOT the `flows` table behind /flows in this app, which is an in-house
+// chatbot graph driven by ordinary interactive messages.
+//
+// A template FLOW button can only reference a Meta Flow, by its Flow ID.
+// There is no way to point one at an internal automation, which is why
+// the operator picks from this list rather than from /flows.
+//
+// https://developers.facebook.com/docs/whatsapp/flows/reference/flowsapi
+
+export interface MetaFlowSummary {
+  id: string
+  name: string
+  /**
+   * DRAFT | PUBLISHED | DEPRECATED | BLOCKED | THROTTLED.
+   *
+   * Only PUBLISHED can be sent to customers. A DRAFT Flow is sendable
+   * only in test mode, which templates do not use — so offering one for
+   * a template would produce an approved template that fails on send.
+   */
+  status: string
+  categories?: string[]
+  validation_errors?: unknown[]
+}
+
+export interface ListWhatsAppFlowsArgs {
+  wabaId: string
+  accessToken: string
+}
+
+/**
+ * List the Flows on a WhatsApp Business Account.
+ *
+ * Returns every status, not just PUBLISHED — the picker shows the
+ * unpublishable ones greyed out with the reason. Hiding them would look
+ * like the Flow the operator just built in Meta's builder had not
+ * appeared, sending them to look for a sync problem that does not exist.
+ */
+export async function listWhatsAppFlows(
+  args: ListWhatsAppFlowsArgs
+): Promise<MetaFlowSummary[]> {
+  const { wabaId, accessToken } = args
+  const url = `${META_API_BASE}/${wabaId}/flows?fields=id,name,status,categories,validation_errors&limit=200`
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  const rows = Array.isArray(data?.data) ? data.data : []
+  return rows
+    .filter((f: unknown): f is Record<string, unknown> => Boolean(f))
+    .map((f: Record<string, unknown>) => ({
+      id: String(f.id ?? ''),
+      name: typeof f.name === 'string' ? f.name : '',
+      status: typeof f.status === 'string' ? f.status : 'UNKNOWN',
+      categories: Array.isArray(f.categories)
+        ? (f.categories as string[])
+        : undefined,
+      validation_errors: Array.isArray(f.validation_errors)
+        ? f.validation_errors
+        : undefined,
+    }))
+    .filter((f: MetaFlowSummary) => f.id !== '')
+}
+
 export interface EditMessageTemplateArgs {
   /** Meta's template id (stored locally as `meta_template_id`). */
   metaTemplateId: string
@@ -644,18 +990,52 @@ export async function deleteMessageTemplate(
   args: DeleteMessageTemplateArgs
 ): Promise<void> {
   const { wabaId, accessToken, name, metaTemplateId } = args
-  const params = new URLSearchParams({ name })
-  if (metaTemplateId) params.set('hsm_id', metaTemplateId)
-  const url = `${META_API_BASE}/${wabaId}/message_templates?${params.toString()}`
-  const response = await fetch(url, {
+
+  // First attempt: try with hsm_id to scope deletion to one variant.
+  if (metaTemplateId) {
+    const params = new URLSearchParams({ name, hsm_id: metaTemplateId })
+    const url = `${META_API_BASE}/${wabaId}/message_templates?${params.toString()}`
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })
+    if (response.status === 404) return
+    if (response.ok) return
+
+    // If Meta rejected the hsm_id (e.g. "Invalid parameter"), fall
+    // through and retry by name only. This deletes ALL language
+    // variants, but is better than failing the entire operation.
+    //
+    // The body is read exactly once and the message reused for both
+    // decisions. A Response body can only be consumed once, so the
+    // earlier shape here — parse to test for "invalid param", then hand
+    // the same Response to throwMetaError — meant every non-404 delete
+    // failure surfaced as a bare "Meta API error: 500" with Meta's
+    // actual explanation already thrown away.
+    let metaMessage = ''
+    try {
+      const data = (await response.json()) as { error?: { message?: string } }
+      metaMessage = data.error?.message ?? ''
+    } catch {
+      /* body wasn't JSON — fall back to the status code below */
+    }
+    if (!/invalid param/i.test(metaMessage)) {
+      // Some other error — surface it immediately, with Meta's wording
+      // when we have it.
+      throw new Error(metaMessage || `Meta API error: ${response.status}`)
+    }
+  }
+
+  // Fallback (or no hsm_id): delete by name.
+  const fallbackParams = new URLSearchParams({ name })
+  const fallbackUrl = `${META_API_BASE}/${wabaId}/message_templates?${fallbackParams.toString()}`
+  const fallbackRes = await fetch(fallbackUrl, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${accessToken}` },
   })
-  // Treat a 404 as a no-op — the template is already gone on Meta's
-  // side, and we still want the local row removed.
-  if (response.status === 404) return
-  if (!response.ok) {
-    await throwMetaError(response, `Meta API error: ${response.status}`)
+  if (fallbackRes.status === 404) return
+  if (!fallbackRes.ok) {
+    await throwMetaError(fallbackRes, `Meta API error: ${fallbackRes.status}`)
   }
 }
 
