@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 // ============================================================
 // Wizard step 2, AUTHENTICATION variant.
@@ -10,7 +10,7 @@
 // it stays valid.
 //
 // Showing the normal body/header/footer editor here and then discarding
-// what was typed would be the worst option — so this form only offers
+// what was typed would be the worst option â€” so this form only offers
 // what Meta actually accepts, and says so up front.
 // ============================================================
 
@@ -19,6 +19,7 @@ import { AlertCircle, Info } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { RequiredMark } from '@/components/templates/required-mark';
 import {
   Select,
   SelectContent,
@@ -27,14 +28,38 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { AUTH_LIMITS } from '@/lib/whatsapp/template-limits';
-import type { AuthDraft, WizardDraft } from '@/components/templates/wizard-draft';
+import type {
+  AuthDraft,
+  WizardDraft,
+} from '@/components/templates/wizard-draft';
 import { definitionFromDraft } from '@/components/templates/wizard-draft';
 import { WhatsAppPreview } from '@/components/templates/whatsapp-preview';
 import { cn } from '@/lib/utils';
 
 const LANGUAGES = [
-  'en_US', 'en_GB', 'en', 'hi', 'bn', 'mr', 'ta', 'te', 'gu', 'kn', 'ml',
-  'pa', 'ur', 'es', 'fr', 'de', 'it', 'pt_BR', 'ar', 'id', 'ja', 'ko', 'zh_CN',
+  'en_US',
+  'en_GB',
+  'en',
+  'hi',
+  'bn',
+  'mr',
+  'ta',
+  'te',
+  'gu',
+  'kn',
+  'ml',
+  'pa',
+  'ur',
+  'es',
+  'fr',
+  'de',
+  'it',
+  'pt_BR',
+  'ar',
+  'id',
+  'ja',
+  'ko',
+  'zh_CN',
 ];
 
 const OTP_TYPES: {
@@ -74,7 +99,11 @@ export function WizardStepAuth({
     onChange({ auth: { ...auth, ...fields } });
 
   const needsHandshake = auth.otpType !== 'COPY_CODE';
-  const definition = definitionFromDraft(draft, 'Authentication', 'authentication');
+  const definition = definitionFromDraft(
+    draft,
+    'Authentication',
+    'authentication'
+  );
 
   const expiryNumber = Number.parseInt(auth.codeExpirationMinutes, 10);
   const expiryInvalid =
@@ -94,14 +123,14 @@ export function WizardStepAuth({
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="min-w-0 space-y-5">
         {/* Set expectations before the form, not after it. */}
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
-          <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <div className="text-sm text-muted-foreground">
+        <div className="border-border bg-muted/40 flex items-start gap-3 rounded-lg border p-3">
+          <Info className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+          <div className="text-muted-foreground text-sm">
             <p>
               WhatsApp writes the message for authentication templates. You
               cannot change the wording, add a header, or add your own buttons
-              — that restriction is why these are the cheapest messages to send
-              and the least likely to be paused.
+              â€” that restriction is why these are the cheapest messages to
+              send and the least likely to be paused.
             </p>
             <p className="mt-1.5">
               Meta also requires business verification and a messaging limit of
@@ -112,14 +141,17 @@ export function WizardStepAuth({
         </div>
 
         {/* ---- Name + language ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Template name and language
           </h2>
 
           <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_200px]">
             <div className="space-y-1.5">
-              <Label htmlFor="auth-name">Name your template</Label>
+              <Label htmlFor="auth-name">
+                Name your template
+                <RequiredMark />
+              </Label>
               <Input
                 id="auth-name"
                 value={draft.name}
@@ -133,13 +165,16 @@ export function WizardStepAuth({
                 }
                 placeholder="verification_code"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-muted-foreground text-xs">
                 Lowercase letters, numbers and underscores.
               </p>
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="auth-lang">Select language</Label>
+              <Label htmlFor="auth-lang">
+                Select language
+                <RequiredMark />
+              </Label>
               <Select
                 value={draft.language}
                 onValueChange={(v) => onChange({ language: v || 'en_US' })}
@@ -160,15 +195,15 @@ export function WizardStepAuth({
         </section>
 
         {/* ---- Code delivery ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             How the customer gets the code
           </h2>
 
           <div
             role="radiogroup"
             aria-label="One-time password button type"
-            className="mt-4 divide-y divide-border overflow-hidden rounded-lg border border-border"
+            className="divide-border border-border mt-4 divide-y overflow-hidden rounded-lg border"
           >
             {OTP_TYPES.map((option) => {
               const active = auth.otpType === option.value;
@@ -181,25 +216,25 @@ export function WizardStepAuth({
                   onClick={() => patchAuth({ otpType: option.value })}
                   className={cn(
                     'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors',
-                    active ? 'bg-primary/[0.07]' : 'hover:bg-muted',
+                    active ? 'bg-primary/[0.07]' : 'hover:bg-muted'
                   )}
                 >
                   <span
                     aria-hidden
                     className={cn(
                       'mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-2',
-                      active ? 'border-primary' : 'border-muted-foreground/40',
+                      active ? 'border-primary' : 'border-muted-foreground/40'
                     )}
                   >
                     {active ? (
-                      <span className="size-2 rounded-full bg-primary" />
+                      <span className="bg-primary size-2 rounded-full" />
                     ) : null}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-semibold text-foreground">
+                    <span className="text-foreground block text-sm font-semibold">
                       {option.title}
                     </span>
-                    <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+                    <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">
                       {option.description}
                     </span>
                   </span>
@@ -211,7 +246,7 @@ export function WizardStepAuth({
           <div className="mt-4 space-y-1.5">
             <Label htmlFor="auth-btn-text">
               Button label{' '}
-              <span className="text-muted-foreground">· optional</span>
+              <span className="text-muted-foreground">Â· optional</span>
             </Label>
             <Input
               id="auth-btn-text"
@@ -220,7 +255,7 @@ export function WizardStepAuth({
               maxLength={AUTH_LIMITS.buttonTextMaxLength}
               placeholder="Copy code"
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-xs">
               Leave blank and WhatsApp uses its own wording, translated to the
               template language. Max {AUTH_LIMITS.buttonTextMaxLength}{' '}
               characters.
@@ -228,19 +263,24 @@ export function WizardStepAuth({
           </div>
 
           {needsHandshake ? (
-            <div className="mt-4 space-y-4 rounded-lg border border-border bg-muted/40 p-4">
+            <div className="border-border bg-muted/40 mt-4 space-y-4 rounded-lg border p-4">
               <div className="flex items-start gap-2">
                 <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-500" />
-                <p className="text-xs leading-relaxed text-muted-foreground">
+                <p className="text-muted-foreground text-xs leading-relaxed">
                   {auth.otpType} works on Android only, and needs your app to
-                  complete a handshake with Meta. On iOS — or if the handshake
-                  fails — WhatsApp shows a copy-code button instead, using the
+                  complete a handshake with Meta. On iOS â€” or if the handshake
+                  fails â€” WhatsApp shows a copy-code button instead, using the
                   label above. That fallback is why the label matters even here.
                 </p>
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="auth-package">Android package name</Label>
+                {/* Required by the validator for ONE_TAP / ZERO_TAP, which
+                    is the only branch this field renders in. */}
+                <Label htmlFor="auth-package">
+                  Android package name
+                  <RequiredMark />
+                </Label>
                 <Input
                   id="auth-package"
                   value={auth.packageName}
@@ -251,7 +291,10 @@ export function WizardStepAuth({
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="auth-hash">App signing key hash</Label>
+                <Label htmlFor="auth-hash">
+                  App signing key hash
+                  <RequiredMark />
+                </Label>
                 <Input
                   id="auth-hash"
                   value={auth.signatureHash}
@@ -264,7 +307,7 @@ export function WizardStepAuth({
               <div className="space-y-1.5">
                 <Label htmlFor="auth-autofill">
                   Autofill label{' '}
-                  <span className="text-muted-foreground">· optional</span>
+                  <span className="text-muted-foreground">Â· optional</span>
                 </Label>
                 <Input
                   id="auth-autofill"
@@ -279,22 +322,22 @@ export function WizardStepAuth({
         </section>
 
         {/* ---- Wording add-ons + validity ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Security and expiry
           </h2>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="text-muted-foreground mt-1 text-sm">
             The only parts of the wording you control.
           </p>
 
-          <label className="mt-4 flex cursor-pointer items-start justify-between gap-4 rounded-lg border border-border p-3">
+          <label className="border-border mt-4 flex cursor-pointer items-start justify-between gap-4 rounded-lg border p-3">
             <span>
-              <span className="block text-sm font-medium text-foreground">
+              <span className="text-foreground block text-sm font-medium">
                 Add the security disclaimer
               </span>
-              <span className="mt-0.5 block text-xs text-muted-foreground">
-                Appends &ldquo;For your security, do not share this
-                code.&rdquo; Meta recommends it.
+              <span className="text-muted-foreground mt-0.5 block text-xs">
+                Appends &ldquo;For your security, do not share this code.&rdquo;
+                Meta recommends it.
               </span>
             </span>
             <Switch
@@ -324,14 +367,12 @@ export function WizardStepAuth({
               <p
                 className={cn(
                   'text-xs',
-                  expiryInvalid
-                    ? 'text-destructive'
-                    : 'text-muted-foreground',
+                  expiryInvalid ? 'text-destructive' : 'text-muted-foreground'
                 )}
               >
                 {expiryInvalid
                   ? `Must be between ${AUTH_LIMITS.minExpiryMinutes} and ${AUTH_LIMITS.maxExpiryMinutes}.`
-                  : 'Adds an expiry line to the message and disables the button after this long. Blank shows no warning — the button still stops working after 10 minutes.'}
+                  : 'Adds an expiry line to the message and disables the button after this long. Blank shows no warning â€” the button still stops working after 10 minutes.'}
               </p>
             </div>
 
@@ -353,7 +394,7 @@ export function WizardStepAuth({
               <p
                 className={cn(
                   'text-xs',
-                  ttlInvalid ? 'text-destructive' : 'text-muted-foreground',
+                  ttlInvalid ? 'text-destructive' : 'text-muted-foreground'
                 )}
               >
                 {ttlInvalid
@@ -367,26 +408,26 @@ export function WizardStepAuth({
 
       {/* ---- Preview ---- */}
       <aside className="lg:sticky lg:top-4 lg:self-start">
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground">
+        <div className="border-border bg-card rounded-xl border p-5">
+          <h3 className="text-foreground text-sm font-semibold">
             Template preview
           </h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <p className="text-muted-foreground mt-0.5 text-xs">
             WhatsApp&apos;s fixed wording, with your choices applied.
           </p>
 
           <WhatsAppPreview definition={definition} className="mt-3" />
 
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
             The{' '}
-            <span className="rounded bg-primary/15 px-1 font-medium text-primary">
+            <span className="bg-primary/15 text-primary rounded px-1 font-medium">
               {'{{1}}'}
             </span>{' '}
             is the code, filled in when you send.
             {draft.language !== 'en_US' && draft.language !== 'en' ? (
               <>
                 {' '}
-                Shown in English here — WhatsApp translates this wording into{' '}
+                Shown in English here â€” WhatsApp translates this wording into{' '}
                 {draft.language} on delivery.
               </>
             ) : null}

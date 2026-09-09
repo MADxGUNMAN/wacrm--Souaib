@@ -1,9 +1,9 @@
-"use client";
+﻿'use client';
 
 // ============================================================
 // Wizard step 2, FLOWS variant.
 //
-// ─── The thing to understand before reading this ──────────────
+// â”€â”€â”€ The thing to understand before reading this â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // A Flow button opens one of META'S WhatsApp Flows: a multi-screen form
 // that runs inside WhatsApp, built in Meta's Flow Builder and stored on
@@ -13,7 +13,7 @@
 // which replies with ordinary interactive messages, and a template button
 // has no way to reference it. So this step lists Flows fetched live from
 // the WABA rather than from our own `flows` table, and the note at the top
-// of the form says so — the alternative is an operator hunting for the
+// of the form says so â€” the alternative is an operator hunting for the
 // automation they built here and concluding the picker is broken.
 //
 // Two rules that produce unhelpful rejections or dead sends when broken,
@@ -31,6 +31,8 @@ import { AlertTriangle, Info, Loader2, Workflow } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { RequiredMark } from '@/components/templates/required-mark';
+import { MediaUploadField } from '@/components/media/media-upload-field';
 import {
   Select,
   SelectContent,
@@ -91,7 +93,7 @@ export function WizardStepFlow({
       } catch (e) {
         if (!cancelled) {
           setLoadError(
-            e instanceof Error ? e.message : 'Could not load Flows.',
+            e instanceof Error ? e.message : 'Could not load Flows.'
           );
         }
       } finally {
@@ -106,7 +108,7 @@ export function WizardStepFlow({
   const bodyVarCount = extractVariableIndices(draft.bodyText).length;
   const bodySamples = Array.from(
     { length: bodyVarCount },
-    (_, i) => draft.bodySamples[i] ?? '',
+    (_, i) => draft.bodySamples[i] ?? ''
   );
 
   const selected = flows.find((f) => f.id === flow.flowId);
@@ -121,24 +123,27 @@ export function WizardStepFlow({
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="min-w-0 space-y-5">
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
-          <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
+        <div className="border-border bg-muted/40 flex items-start gap-3 rounded-lg border p-3">
+          <Info className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+          <p className="text-muted-foreground text-sm">
             These are the WhatsApp Flows on your WhatsApp Business account,
             built in Meta&apos;s Flow Builder. They are a different thing from
-            the automations under <strong>Flows</strong> in this app — a
+            the automations under <strong>Flows</strong> in this app â€” a
             template button can only open a Meta Flow.
           </p>
         </div>
 
         {/* ---- Name + language ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Template name and language
           </h2>
           <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_200px]">
             <div className="space-y-1.5">
-              <Label htmlFor="flow-name">Name your template</Label>
+              <Label htmlFor="flow-name">
+                Name your template
+                <RequiredMark />
+              </Label>
               <Input
                 id="flow-name"
                 value={draft.name}
@@ -154,7 +159,10 @@ export function WizardStepFlow({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="flow-lang">Select language</Label>
+              <Label htmlFor="flow-lang">
+                Select language
+                <RequiredMark />
+              </Label>
               <Input
                 id="flow-lang"
                 value={draft.language}
@@ -165,20 +173,23 @@ export function WizardStepFlow({
         </section>
 
         {/* ---- The Flow ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
+        <section className="border-border bg-card rounded-xl border p-5">
           <div className="flex items-center gap-2">
-            <Workflow className="size-4 text-primary" />
-            <h2 className="text-base font-semibold text-foreground">
+            <Workflow className="text-primary size-4" />
+            <h2 className="text-foreground text-base font-semibold">
               The Flow this button opens
             </h2>
           </div>
 
           <div className="mt-4 space-y-2">
-            <Label htmlFor="flow-picker">Flow</Label>
+            <Label htmlFor="flow-picker">
+              Flow
+              <RequiredMark />
+            </Label>
             {loading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <div className="text-muted-foreground flex items-center gap-2 text-sm">
                 <Loader2 className="size-4 animate-spin" />
-                Loading Flows from your WhatsApp Business account…
+                Loading Flows from your WhatsApp Business accountâ€¦
               </div>
             ) : loadError ? (
               <div className="space-y-2">
@@ -202,15 +213,15 @@ export function WizardStepFlow({
               </div>
             ) : flows.length === 0 ? (
               <div className="space-y-2">
-                <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+                <p className="border-border text-muted-foreground rounded-lg border border-dashed p-4 text-sm">
                   No Flows on this WhatsApp Business account yet. Build one in
-                  Meta&apos;s Flow Builder (WhatsApp Manager → Flows), publish
+                  Meta&apos;s Flow Builder (WhatsApp Manager â†’ Flows), publish
                   it, then come back.
                 </p>
                 <Input
                   value={flow.flowId}
                   onChange={(e) => patchFlow({ flowId: e.target.value.trim() })}
-                  placeholder="…or paste a Flow ID"
+                  placeholder="â€¦or paste a Flow ID"
                   aria-label="Flow ID"
                 />
               </div>
@@ -237,7 +248,7 @@ export function WizardStepFlow({
                       <SelectItem key={f.id} value={f.id}>
                         {f.name}
                         {f.status !== FLOW_LIMITS.sendableStatus
-                          ? ` · ${f.status.toLowerCase()}`
+                          ? ` Â· ${f.status.toLowerCase()}`
                           : ''}
                       </SelectItem>
                     ))}
@@ -259,7 +270,10 @@ export function WizardStepFlow({
 
           <div className="mt-5 grid gap-4 sm:grid-cols-[200px_1fr]">
             <div className="space-y-1.5">
-              <Label htmlFor="flow-btn-text">Button label</Label>
+              <Label htmlFor="flow-btn-text">
+                Button label
+                <RequiredMark />
+              </Label>
               <Input
                 id="flow-btn-text"
                 value={flow.buttonText}
@@ -267,7 +281,7 @@ export function WizardStepFlow({
                 maxLength={FLOW_LIMITS.buttonTextMaxLength}
                 placeholder="Book now"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-muted-foreground text-xs">
                 {flow.buttonText.length}/{FLOW_LIMITS.buttonTextMaxLength}
               </p>
             </div>
@@ -277,7 +291,8 @@ export function WizardStepFlow({
                 value={flow.action}
                 onValueChange={(val) =>
                   patchFlow({
-                    action: val === 'data_exchange' ? 'data_exchange' : 'navigate',
+                    action:
+                      val === 'data_exchange' ? 'data_exchange' : 'navigate',
                     // Meta rejects a screen name on data_exchange, so clear
                     // it rather than carrying a value that will be refused.
                     ...(val === 'data_exchange' ? { navigateScreen: '' } : {}),
@@ -296,25 +311,28 @@ export function WizardStepFlow({
                   </SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-muted-foreground text-xs">
                 {flow.action === 'navigate'
                   ? 'Simplest option, and works without a Flow endpoint.'
-                  : 'Requires a published Flow endpoint that answers Meta’s request.'}
+                  : 'Requires a published Flow endpoint that answers Metaâ€™s request.'}
               </p>
             </div>
           </div>
 
           {flow.action === 'navigate' ? (
             <div className="mt-4 space-y-1.5">
-              <Label htmlFor="flow-screen">First screen</Label>
+              <Label htmlFor="flow-screen">
+                First screen
+                <RequiredMark />
+              </Label>
               <Input
                 id="flow-screen"
                 value={flow.navigateScreen}
                 onChange={(e) => patchFlow({ navigateScreen: e.target.value })}
                 placeholder="WELCOME_SCREEN"
               />
-              <p className="text-xs text-muted-foreground">
-                The screen id from your Flow JSON — not the Flow name. Meta
+              <p className="text-muted-foreground text-xs">
+                The screen id from your Flow JSON â€” not the Flow name. Meta
                 rejects the template without it.
               </p>
             </div>
@@ -322,19 +340,18 @@ export function WizardStepFlow({
         </section>
 
         {/* ---- Message content ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Message content
           </h2>
 
           <div className="mt-4 space-y-2">
-            <Label htmlFor="flow-header-format">Header · optional</Label>
+            <Label htmlFor="flow-header-format">Header Â· optional</Label>
             <Select
               value={draft.headerFormat}
               onValueChange={(val) =>
                 onChange({
-                  headerFormat: (val ??
-                    'none') as WizardDraft['headerFormat'],
+                  headerFormat: (val ?? 'none') as WizardDraft['headerFormat'],
                 })
               }
             >
@@ -361,17 +378,22 @@ export function WizardStepFlow({
             {draft.headerFormat === 'image' ||
             draft.headerFormat === 'video' ||
             draft.headerFormat === 'document' ? (
-              <Input
+              <MediaUploadField
+                kind={draft.headerFormat}
+                purpose="review"
+                compact
                 value={draft.headerMediaUrl}
-                onChange={(e) => onChange({ headerMediaUrl: e.target.value })}
-                placeholder={`https://example.com/sample.${draft.headerFormat === 'video' ? 'mp4' : draft.headerFormat === 'document' ? 'pdf' : 'jpg'}`}
-                aria-label="Header media sample URL"
+                onChange={(url) => onChange({ headerMediaUrl: url })}
+                urlPlaceholder={`https://example.com/sample.${draft.headerFormat === 'video' ? 'mp4' : draft.headerFormat === 'document' ? 'pdf' : 'jpg'}`}
               />
             ) : null}
           </div>
 
           <div className="mt-5 space-y-2">
-            <Label htmlFor="flow-body">Body</Label>
+            <Label htmlFor="flow-body">
+              Body
+              <RequiredMark />
+            </Label>
             <Textarea
               id="flow-body"
               rows={4}
@@ -381,13 +403,13 @@ export function WizardStepFlow({
               placeholder="Hi {{1}}, tap below to pick a time that suits you."
               className="resize-none"
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-xs">
               {draft.bodyText.length}/{TEMPLATE_LIMITS.bodyMaxLength}
             </p>
 
             {bodyVarCount > 0 ? (
-              <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
-                <p className="text-xs font-medium text-foreground">
+              <div className="border-border bg-muted/40 space-y-2 rounded-lg border p-3">
+                <p className="text-foreground text-xs font-medium">
                   Example values
                 </p>
                 {bodySamples.map((val, i) => (
@@ -408,7 +430,7 @@ export function WizardStepFlow({
           </div>
 
           <div className="mt-5 space-y-1.5">
-            <Label htmlFor="flow-footer">Footer · optional</Label>
+            <Label htmlFor="flow-footer">Footer Â· optional</Label>
             <Input
               id="flow-footer"
               value={draft.footerText}
@@ -418,8 +440,8 @@ export function WizardStepFlow({
             />
           </div>
 
-          <p className="mt-4 text-xs text-muted-foreground">
-            The Flow button is the only button on this template — Meta allows
+          <p className="text-muted-foreground mt-4 text-xs">
+            The Flow button is the only button on this template â€” Meta allows
             one, and no others alongside it.
           </p>
         </section>
@@ -427,8 +449,8 @@ export function WizardStepFlow({
 
       {/* ---- Preview ---- */}
       <aside className="lg:sticky lg:top-4 lg:self-start">
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground">
+        <div className="border-border bg-card rounded-xl border p-5">
+          <h3 className="text-foreground text-sm font-semibold">
             Template preview
           </h3>
           <WhatsAppPreview
@@ -436,7 +458,7 @@ export function WizardStepFlow({
             values={draftBodyValues({ ...draft, bodySamples })}
             className="mt-3"
           />
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
             Tapping the button opens the Flow inside WhatsApp. The form itself
             is designed in Meta&apos;s Flow Builder, so it is not previewed
             here.

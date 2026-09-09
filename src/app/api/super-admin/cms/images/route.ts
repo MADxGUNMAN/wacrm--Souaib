@@ -2,15 +2,16 @@
 // /api/super-admin/cms/images
 //
 // GET    — List all landing images from landing_images table
-// POST   — Upload an image to Supabase Storage + save reference
-// DELETE — Remove an image from Storage + table
+// POST   — Upload an image to AWS S3 + save reference
+// DELETE — Remove an image from S3 + table
 //
-// Super admin only. Uses the 'landing-assets' Supabase Storage bucket.
+// Super admin only. Uses the 'landing-assets' folder in S3.
 // ============================================================
 
 import { NextResponse } from 'next/server';
 import { requireSuperAdmin } from '@/lib/super-admin/guard';
 import { supabaseAdmin } from '@/lib/auth/admin-client';
+import { uploadToS3, deleteFromS3, getS3PublicUrl, extractS3Key } from '@/lib/storage/s3-client';
 
 export async function GET(request: Request) {
   try {
@@ -64,29 +65,13 @@ export async function POST(request: Request) {
     const ext = file.name.split('.').pop() || 'png';
     const filePath = `${imageKey}-${Date.now()}.${ext}`;
 
-    // Upload to Supabase Storage
+    // Upload to AWS S3
     const buffer = Buffer.from(await file.arrayBuffer());
-    const { error: uploadError } = await admin.storage
-      .from('landing-assets')
-      .upload(filePath, buffer, {
-        contentType: file.type,
-        upsert: true,
-      });
-
-    if (uploadError) {
-      console.error('[cms/images] upload error:', uploadError);
-      return NextResponse.json(
-        { error: `Upload failed: ${uploadError.message}` },
-        { status: 500 }
-      );
-    }
+    const s3Key = `landing-assets/${filePath}`;
+    await uploadToS3(s3Key, buffer, file.type);
 
     // Get public URL
-    const { data: urlData } = admin.storage
-      .from('landing-assets')
-      .getPublicUrl(filePath);
-
-    const publicUrl = urlData.publicUrl;
+    const publicUrl = getS3PublicUrl(s3Key);
 
     // Upsert into landing_images table
     const { data, error: dbError } = await admin
@@ -148,12 +133,24 @@ export async function DELETE(request: Request) {
     const { data: image } = await query.maybeSingle();
 
     if (image?.url) {
-      // Extract the file path from the URL
-      const urlParts = image.url.split('/landing-assets/');
-      if (urlParts[1]) {
-        await admin.storage
-          .from('landing-assets')
-          .remove([urlParts[1]]);
+      // Try to extract S3 key from the URL and delete from S3
+      const s3Key = extractS3Key(image.url);
+      if (s3Key) {
+        try {
+          await deleteFromS3(s3Key);
+        } catch (delErr) {
+          console.error('[cms/images] S3 delete error (non-fatal):', delErr);
+        }
+      } else {
+        // Legacy Supabase URL — extract path from old format
+        const urlParts = image.url.split('/landing-assets/');
+        if (urlParts[1]) {
+          try {
+            await deleteFromS3(`landing-assets/${urlParts[1]}`);
+          } catch (delErr) {
+            console.error('[cms/images] Legacy delete error (non-fatal):', delErr);
+          }
+        }
       }
     }
 

@@ -224,7 +224,10 @@ export async function proxy(request: NextRequest) {
       if (!isSuperAdmin && profileRow?.account_id) {
         const { data: accountRow } = await supabase
           .from('accounts')
-          .select('is_banned, subscription_status, trial_ends_at, subscription_ends_at')
+          // The selection columns ride along free — this row is already
+          // being fetched for the ban check, so plan-selection routing
+          // costs no extra round trip.
+          .select('is_banned, subscription_status, trial_ends_at, subscription_ends_at, selected_plan_id, selected_cycle_id, plan_selection_required')
           .eq('id', profileRow.account_id)
           .maybeSingle()
 
@@ -252,6 +255,46 @@ export async function proxy(request: NextRequest) {
         const gate = await getCachedGateConfig()
         const state = resolveSubscriptionState(accountRow, gate)
 
+        // ── Plan selection comes BEFORE the CRM ─────────────────
+        //
+        // A new signup picks a term first, then chooses to pay now or
+        // start the free trial. Until they have chosen, the CRM is not
+        // where they should be.
+        //
+        // Gated on the flag rather than on "has no selection", because
+        // every account that existed before the plan-selection migration
+        // was grandfathered to FALSE. Deriving this from the absence of a
+        // selection would instead bounce every current customer —
+        // including paying ones — to a pricing page on their next click.
+        //
+        // Pages only. A gated API deliberately keeps working: the flag
+        // means "has not chosen a plan", not "has no access", and the
+        // account is still inside its trial. Returning 403 here would
+        // break the dashboard's own fetches for a user we are about to
+        // redirect anyway.
+        //
+        // `billingDisabled` short-circuits it entirely — with billing off
+        // platform-wide there is nothing to choose.
+        if (
+          !state.billingDisabled &&
+          accountRow?.plan_selection_required === true &&
+          isCrmPath
+        ) {
+          const url = request.nextUrl.clone()
+          // Members cannot buy, so sending them to a pricing page would
+          // be a dead end. Only the owner is asked to choose.
+          url.pathname =
+            profileRow.account_role === 'owner'
+              ? '/upgrade-plan'
+              : '/dashboard'
+          url.search = ''
+          // A member on /dashboard is already where we would send them —
+          // redirecting would loop. Fall through instead.
+          if (url.pathname !== request.nextUrl.pathname) {
+            return withRefreshedCookies(NextResponse.redirect(url))
+          }
+        }
+
         if (state.isBlocked) {
           if (isGatedApiPath) {
             return withRefreshedCookies(
@@ -267,11 +310,33 @@ export async function proxy(request: NextRequest) {
 
           if (isCrmPath) {
             const url = request.nextUrl.clone()
-            url.pathname =
-              profileRow.account_role === 'owner'
-                ? '/upgrade-plan'
-                : '/subscription-required'
             url.search = ''
+
+            if (profileRow.account_role === 'owner') {
+              // ── Straight to the plan they already chose ──
+              //
+              // A customer who picked "Yearly" on day one should not be
+              // handed a fresh price list the morning their trial lapses;
+              // they should land on the Yearly QR. Both ids are required
+              // because the payment screen cannot price a half-selection
+              // and would bounce back to the chooser.
+              //
+              // Safe from redirect loops: /upgrade-plan and
+              // /upgrade-plan/payment are excluded from `crmPaths`, so
+              // neither destination re-enters this branch.
+              const planId = accountRow?.selected_plan_id
+              const cycleId = accountRow?.selected_cycle_id
+              if (planId && cycleId) {
+                url.pathname = '/upgrade-plan/payment'
+                url.searchParams.set('plan', String(planId))
+                url.searchParams.set('cycle', String(cycleId))
+              } else {
+                url.pathname = '/upgrade-plan'
+              }
+            } else {
+              url.pathname = '/subscription-required'
+            }
+
             return withRefreshedCookies(NextResponse.redirect(url))
           }
         }

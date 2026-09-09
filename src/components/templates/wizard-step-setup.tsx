@@ -48,11 +48,11 @@ export function WizardStepSetup({
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       {/* ---- Left: category + type ---- */}
-      <div className="rounded-xl border border-border bg-card p-5">
-        <h2 className="text-base font-semibold text-foreground">
+      <div className="border-border bg-card rounded-xl border p-5">
+        <h2 className="text-foreground text-base font-semibold">
           Set up your template
         </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="text-muted-foreground mt-1 text-sm">
           Choose the category that best describes your message template. Then
           select the type of message you want to send.
         </p>
@@ -62,7 +62,7 @@ export function WizardStepSetup({
         <div
           role="tablist"
           aria-label="Template category"
-          className="mt-4 grid grid-cols-3 overflow-hidden rounded-lg border border-border"
+          className="border-border mt-4 grid grid-cols-3 overflow-hidden rounded-lg border"
         >
           {CATEGORY_ORDER.map((cat, i) => {
             const Icon = CATEGORY_ICON[cat];
@@ -76,10 +76,10 @@ export function WizardStepSetup({
                 onClick={() => onCategoryChange(cat)}
                 className={cn(
                   'flex items-center justify-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors',
-                  i > 0 && 'border-l border-border',
+                  i > 0 && 'border-border border-l',
                   active
                     ? 'bg-primary/10 text-primary'
-                    : 'bg-card text-muted-foreground hover:bg-muted',
+                    : 'bg-card text-muted-foreground hover:bg-muted'
                 )}
               >
                 <Icon className="size-4 shrink-0" />
@@ -88,7 +88,7 @@ export function WizardStepSetup({
             );
           })}
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="text-muted-foreground mt-2 text-xs">
           {CATEGORY_DESCRIPTIONS[category]}
         </p>
 
@@ -96,7 +96,7 @@ export function WizardStepSetup({
           <div
             role="radiogroup"
             aria-label="Template type"
-            className="mt-5 divide-y divide-border overflow-hidden rounded-lg border border-border"
+            className="divide-border border-border mt-5 divide-y overflow-hidden rounded-lg border"
           >
             {options.map((option) => {
               const active = option.type === templateType;
@@ -114,7 +114,7 @@ export function WizardStepSetup({
                     active && !disabled && 'bg-primary/[0.07]',
                     disabled
                       ? 'cursor-not-allowed opacity-60'
-                      : 'hover:bg-muted',
+                      : 'hover:bg-muted'
                   )}
                 >
                   <span
@@ -123,27 +123,27 @@ export function WizardStepSetup({
                       'mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-2',
                       active && !disabled
                         ? 'border-primary'
-                        : 'border-muted-foreground/40',
+                        : 'border-muted-foreground/40'
                     )}
                   >
                     {active && !disabled ? (
-                      <span className="size-2 rounded-full bg-primary" />
+                      <span className="bg-primary size-2 rounded-full" />
                     ) : null}
                   </span>
 
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-semibold text-foreground">
+                      <span className="text-foreground text-sm font-semibold">
                         {option.title}
                       </span>
                       {disabled ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                        <span className="bg-muted text-muted-foreground inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase">
                           <Lock className="size-2.5" />
                           Coming soon
                         </span>
                       ) : null}
                     </span>
-                    <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+                    <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">
                       {option.description}
                     </span>
                     {/* Say WHY it is unavailable. A disabled row with no
@@ -159,11 +159,11 @@ export function WizardStepSetup({
             })}
           </div>
         ) : (
-          <div className="mt-5 rounded-lg border border-border bg-muted/40 p-4">
-            <p className="text-sm font-semibold text-foreground">
+          <div className="border-border bg-muted/40 mt-5 rounded-lg border p-4">
+            <p className="text-foreground text-sm font-semibold">
               {options[0].title}
             </p>
-            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
               {options[0].description}
             </p>
             {options[0].unavailableReason ? (
@@ -176,8 +176,8 @@ export function WizardStepSetup({
       </div>
 
       {/* ---- Right: preview rail ---- */}
-      <aside className="rounded-xl border border-border bg-card p-5 lg:sticky lg:top-4 lg:self-start">
-        <h3 className="text-sm font-semibold text-foreground">
+      <aside className="border-border bg-card rounded-xl border p-5 lg:sticky lg:top-4 lg:self-start">
+        <h3 className="text-foreground text-sm font-semibold">
           Template preview
         </h3>
 
@@ -201,18 +201,18 @@ export function WizardStepSetup({
 
         <dl className="mt-4 space-y-3">
           <div>
-            <dt className="text-xs font-semibold text-foreground">
+            <dt className="text-foreground text-xs font-semibold">
               This template is good for
             </dt>
-            <dd className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            <dd className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
               {selected.goodFor}
             </dd>
           </div>
           <div>
-            <dt className="text-xs font-semibold text-foreground">
+            <dt className="text-foreground text-xs font-semibold">
               Template areas that you can customise
             </dt>
-            <dd className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            <dd className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
               {selected.customisable}
             </dd>
           </div>

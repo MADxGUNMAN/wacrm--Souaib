@@ -61,6 +61,18 @@ const TEXT_FIELDS = [
   'custom_plan_body',
   'custom_plan_cta_text',
   'custom_plan_cta_link',
+  // ---- Plan-selection-first onboarding ----
+  // `trial_badge_template` carries a `{days}` placeholder filled from
+  // `trial_days` at render, so the badge can never advertise a trial
+  // length the trigger does not actually grant.
+  'trial_badge_template',
+  'no_card_label',
+  'trial_cta_label',
+  'trial_cta_note',
+  'upcoming_plan_label',
+  'upcoming_unpaid_label',
+  'pay_now_label',
+  'change_plan_label',
 ] as const;
 
 /** Columns with a NOT NULL constraint — reject an attempt to clear them. */
@@ -80,12 +92,23 @@ const REQUIRED_TEXT_FIELDS = new Set<string>([
   'free_plan_subtitle',
   'member_blocked_heading',
   'member_blocked_contact_label',
+  // Onboarding copy. `trial_cta_note` is the one omission — it is
+  // nullable small print, and forcing a value would mean an operator who
+  // wants no footnote has to invent one.
+  'trial_badge_template',
+  'no_card_label',
+  'trial_cta_label',
+  'upcoming_plan_label',
+  'upcoming_unpaid_label',
+  'pay_now_label',
+  'change_plan_label',
 ]);
 
 const BOOLEAN_FIELDS = [
   'is_enabled',
   'member_blocked_show_owner_contact',
   'show_custom_plan',
+  'show_trial_badges',
 ] as const;
 const INTEGER_FIELDS = ['trial_days', 'grace_days'] as const;
 

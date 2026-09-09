@@ -16,7 +16,20 @@ function Checkbox({
     <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        "peer size-4 shrink-0 cursor-pointer rounded-[4px] border border-input bg-card shadow-sm transition-colors",
+        // `inline-flex` is load-bearing, not decoration.
+        //
+        // Base UI 1.6's Checkbox.Root renders a <span>, and width/height are
+        // ignored on inline elements — so `size-4` did nothing and the box
+        // collapsed to a 1px-wide vertical line. It LOOKED fine anywhere the
+        // parent was a flex container (the tag filter dropdown, the staged
+        // contact list), because a flex item gets blockified and the size
+        // then applies. Inside a plain <td> there is no such rescue, which
+        // is why the contacts table appeared to have no checkboxes at all.
+        //
+        // Setting the display here means the component never depends on what
+        // its parent happens to be.
+        "peer inline-flex size-4 shrink-0 items-center justify-center",
+        "cursor-pointer rounded-[4px] border border-input bg-card shadow-sm transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         "disabled:cursor-not-allowed disabled:opacity-50",
         "data-[checked]:border-primary data-[checked]:bg-primary data-[checked]:text-primary-foreground",

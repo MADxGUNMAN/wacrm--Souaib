@@ -1,0 +1,72 @@
+# ============================================================
+# Kong declarative config — the single entry point.
+#
+# This is the piece that makes ONE origin behave like *.supabase.co.
+# `NEXT_PUBLIC_SUPABASE_URL` points here, and supabase-js appends the
+# paths below itself:
+#
+#   supabase.auth.*        -> /auth/v1/...      -> GoTrue
+#   supabase.from(...)     -> /rest/v1/...      -> PostgREST
+#   supabase.channel(...)  -> /realtime/v1/...  -> Realtime (websocket)
+#
+# Without this, the app would need three different URLs and every
+# `createClient()` call in the codebase would have to change. Routing
+# them under one host is what keeps the app's code byte-identical
+# between local Docker and hosted Supabase.
+#
+# NOTE: no key-auth or acl plugins here, unlike Supabase's own
+# self-host config. Those exist to enforce the anon/service_role split at
+# the gateway. Locally the JWT itself is still verified by PostgREST and
+# GoTrue, so the security model is unchanged for the app — we just skip a
+# layer that needs consumer bookkeeping to configure. Do NOT expose this
+# gateway to the internet.
+# ============================================================
+_format_version: '2.1'
+_transform: true
+
+services:
+  # ---- GoTrue: login, signup, password reset, session refresh ----
+  - name: auth-v1
+    url: http://auth:9999/
+    routes:
+      - name: auth-v1-route
+        strip_path: true
+        paths:
+          - /auth/v1/
+    plugins:
+      - name: cors
+
+  # ---- PostgREST: every .from() query in the app ----
+  - name: rest-v1
+    url: http://rest:3000/
+    routes:
+      - name: rest-v1-route
+        strip_path: true
+        paths:
+          - /rest/v1/
+    plugins:
+      - name: cors
+
+  # ---- Realtime: the 6 postgres_changes channels ----
+  #
+  # Two non-obvious details here:
+  #
+  # 1. The host is `realtime-dev.replai-realtime`, a docker network alias
+  #    for the realtime container -- NOT `realtime`. Realtime is
+  #    multi-tenant and reads the tenant id from the first label of the
+  #    Host header. With `Host: realtime` there is no matching tenant and
+  #    the upgrade fails with an unexplained `403 Forbidden`.
+  #
+  # 2. strip_path is TRUE and the upstream url ends in `/socket`. The
+  #    client asks for /realtime/v1/websocket; Kong strips
+  #    /realtime/v1/ and appends the remainder, giving
+  #    http://.../socket/websocket -- which is what Realtime serves.
+  - name: realtime-v1
+    url: http://realtime-dev.replai-realtime:4000/socket/
+    routes:
+      - name: realtime-v1-route
+        strip_path: true
+        paths:
+          - /realtime/v1/
+    plugins:
+      - name: cors

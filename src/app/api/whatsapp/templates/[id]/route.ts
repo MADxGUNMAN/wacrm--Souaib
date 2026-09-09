@@ -1,19 +1,23 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
+import { decrypt } from '@/lib/whatsapp/encryption';
 import {
   deleteMessageTemplate,
   editMessageTemplate,
-} from '@/lib/whatsapp/meta-api'
+} from '@/lib/whatsapp/meta-api';
 import {
   validateTemplatePayload,
   type TemplatePayload,
-} from '@/lib/whatsapp/template-validators'
-import { buildMetaTemplatePayload } from '@/lib/whatsapp/template-components'
+} from '@/lib/whatsapp/template-validators';
+import { buildMetaTemplatePayload } from '@/lib/whatsapp/template-components';
 import {
   ensureCarouselCardHandles,
   ensureMediaHeaderHandle,
-} from '@/lib/whatsapp/template-header-handle'
+} from '@/lib/whatsapp/template-header-handle';
+import {
+  describeTemplateFailure,
+  templateFailureBody,
+} from '@/lib/whatsapp/template-error';
 
 /**
  * Per-template lifecycle endpoint.
@@ -32,40 +36,40 @@ import {
  * already-submitted templates.
  */
 
-const EDITABLE_STATUSES = new Set(['APPROVED', 'REJECTED', 'PAUSED'])
+const EDITABLE_STATUSES = new Set(['APPROVED', 'REJECTED', 'PAUSED']);
 
 // uuid v4 plus the looser shape Postgres gen_random_uuid emits.
 // We don't need exhaustive RFC parsing — just enough to reject
 // "../etc/passwd"-style payloads before they hit Supabase.
 const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function isDryRun(): boolean {
   return (
     process.env.WHATSAPP_TEMPLATES_DRY_RUN === 'true' ||
     process.env.WHATSAPP_TEMPLATES_DRY_RUN === '1'
-  )
+  );
 }
 
 export async function PATCH(
   request: Request,
-  context: { params: Promise<{ id: string }> },
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await context.params
+    const { id } = await context.params;
     if (!UUID_RE.test(id)) {
       return NextResponse.json(
         { error: 'Invalid template id.' },
-        { status: 400 },
-      )
+        { status: 400 }
+      );
     }
-    const supabase = await createClient()
+    const supabase = await createClient();
     const {
       data: { user },
       error: authError,
-    } = await supabase.auth.getUser()
+    } = await supabase.auth.getUser();
     if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Resolve the caller's account_id so template + whatsapp_config
@@ -74,20 +78,23 @@ export async function PATCH(
       .from('profiles')
       .select('account_id')
       .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
+      .maybeSingle();
+    const accountId = profile?.account_id as string | undefined;
     if (!accountId) {
       return NextResponse.json(
         { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
+        { status: 403 }
+      );
     }
 
-    let payload: TemplatePayload
+    let payload: TemplatePayload;
     try {
-      payload = (await request.json()) as TemplatePayload
+      payload = (await request.json()) as TemplatePayload;
     } catch {
-      return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 })
+      return NextResponse.json(
+        { error: 'Invalid JSON body.' },
+        { status: 400 }
+      );
     }
 
     // RLS handles ownership, but we need the existing row to read
@@ -97,9 +104,12 @@ export async function PATCH(
       .select('id, name, status, meta_template_id, language')
       .eq('id', id)
       .eq('account_id', accountId)
-      .maybeSingle()
+      .maybeSingle();
     if (lookupErr || !existing) {
-      return NextResponse.json({ error: 'Template not found.' }, { status: 404 })
+      return NextResponse.json(
+        { error: 'Template not found.' },
+        { status: 404 }
+      );
     }
 
     if (!existing.meta_template_id) {
@@ -108,8 +118,8 @@ export async function PATCH(
           error:
             'This template was never submitted to Meta — use New Template to submit it instead.',
         },
-        { status: 400 },
-      )
+        { status: 400 }
+      );
     }
 
     if (!EDITABLE_STATUSES.has(existing.status)) {
@@ -117,17 +127,17 @@ export async function PATCH(
         {
           error: `Templates in status ${existing.status} cannot be edited. Allowed: APPROVED, REJECTED, PAUSED.`,
         },
-        { status: 400 },
-      )
+        { status: 400 }
+      );
     }
 
     try {
-      validateTemplatePayload(payload)
+      validateTemplatePayload(payload);
     } catch (e) {
       return NextResponse.json(
         { error: e instanceof Error ? e.message : 'Validation failed.' },
-        { status: 400 },
-      )
+        { status: 400 }
+      );
     }
 
     if (!isDryRun()) {
@@ -135,48 +145,63 @@ export async function PATCH(
         .from('whatsapp_config')
         .select('*')
         .eq('account_id', accountId)
-        .single()
+        .single();
       if (configError || !config) {
         return NextResponse.json(
           { error: 'WhatsApp not configured.' },
-          { status: 400 },
-        )
+          { status: 400 }
+        );
       }
-      const accessToken = decrypt(config.access_token)
+      const accessToken = decrypt(config.access_token);
 
       // Media headers need a fresh Resumable-Upload handle on every edit
       // (Meta replaces components wholesale). Derive from header_media_url.
       try {
-        await ensureMediaHeaderHandle(payload, accessToken)
+        await ensureMediaHeaderHandle(payload, accessToken);
         // Carousel card media must be re-uploaded on every edit: Meta
         // replaces components wholesale, and a creation handle is not
         // reusable. Without this an edited carousel would submit with no
         // card media at all.
-        await ensureCarouselCardHandles(payload, accessToken)
+        await ensureCarouselCardHandles(payload, accessToken);
       } catch (e) {
         return NextResponse.json(
-          { error: e instanceof Error ? e.message : 'Header media upload failed.' },
-          { status: 400 },
-        )
+          {
+            error:
+              e instanceof Error ? e.message : 'Header media upload failed.',
+          },
+          { status: 400 }
+        );
       }
 
-      const metaPayload = buildMetaTemplatePayload(payload)
+      const metaPayload = buildMetaTemplatePayload(payload);
       try {
         await editMessageTemplate({
           metaTemplateId: existing.meta_template_id,
           accessToken,
           components: metaPayload.components,
-        })
+          // Taken from the payload the builder just produced, so the edit
+          // declares the same format as the create did. Omitting it made
+          // Meta default the request to POSITIONAL and reject every named
+          // template — see EditMessageTemplateArgs.parameterFormat.
+          parameterFormat: metaPayload.parameter_format,
+        });
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Meta edit failed.'
+        // Same reasoning as the submit route: use Meta's specific fields
+        // rather than the generic `e.message`, and answer with the status
+        // the failure actually warrants — this returned a blanket 400,
+        // which told the user their content was wrong even when the real
+        // cause was an expired token or a Meta outage.
+        const failure = describeTemplateFailure(e, 'edit');
         await supabase
           .from('message_templates')
           .update({
-            submission_error: message,
+            submission_error: failure.message,
             last_submitted_at: new Date().toISOString(),
           })
-          .eq('id', id)
-        return NextResponse.json({ error: message }, { status: 400 })
+          .eq('id', id);
+        return NextResponse.json(templateFailureBody(failure), {
+          status: failure.httpStatus,
+        });
       }
     }
 
@@ -186,7 +211,7 @@ export async function PATCH(
     // above because the dry-run path needs them too — and because
     // ensureMediaHeaderHandle has by now mutated `payload` with the
     // fresh header handle, which must be part of what we store.
-    const storedComponents = buildMetaTemplatePayload(payload).components
+    const storedComponents = buildMetaTemplatePayload(payload).components;
 
     // Meta accepted the edit — status flips back to PENDING for review.
     const { data: row, error: updErr } = await supabase
@@ -195,6 +220,16 @@ export async function PATCH(
         category: payload.category,
         // Source of truth (migration 061).
         components: storedComponents,
+        // Written on edit, not just on create.
+        //
+        // This column was previously left untouched here, so switching a
+        // template between numbered {{1}} and named {{order_id}} variables
+        // updated `components` while leaving `parameter_format` on its old
+        // value. The row then disagreed with itself, and since
+        // template-send-builder.ts branches on this column, the next send
+        // built the wrong parameter shape and Meta rejected it.
+        parameter_format:
+          payload.parameter_format === 'NAMED' ? 'NAMED' : 'POSITIONAL',
         // ---- Derived cache of the above (see template-definition.ts).
         header_type: payload.header_type ?? null,
         header_content: payload.header_content ?? null,
@@ -211,53 +246,53 @@ export async function PATCH(
       })
       .eq('id', id)
       .select()
-      .single()
+      .single();
 
     if (updErr) {
       return NextResponse.json(
         {
           error: `Edited on Meta but failed to save locally: ${updErr.message}. Run "Sync from Meta" to recover.`,
         },
-        { status: 500 },
-      )
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({
       success: true,
       template: row,
       dry_run: isDryRun(),
-    })
+    });
   } catch (error) {
-    console.error('Error editing template:', error)
+    console.error('Error editing template:', error);
     return NextResponse.json(
       {
         error:
           error instanceof Error ? error.message : 'Failed to edit template.',
       },
-      { status: 500 },
-    )
+      { status: 500 }
+    );
   }
 }
 
 export async function DELETE(
   _request: Request,
-  context: { params: Promise<{ id: string }> },
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await context.params
+    const { id } = await context.params;
     if (!UUID_RE.test(id)) {
       return NextResponse.json(
         { error: 'Invalid template id.' },
-        { status: 400 },
-      )
+        { status: 400 }
+      );
     }
-    const supabase = await createClient()
+    const supabase = await createClient();
     const {
       data: { user },
       error: authError,
-    } = await supabase.auth.getUser()
+    } = await supabase.auth.getUser();
     if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Same account-scoping rationale as the PATCH handler above —
@@ -267,13 +302,13 @@ export async function DELETE(
       .from('profiles')
       .select('account_id')
       .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
+      .maybeSingle();
+    const accountId = profile?.account_id as string | undefined;
     if (!accountId) {
       return NextResponse.json(
         { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
+        { status: 403 }
+      );
     }
 
     const { data: existing, error: lookupErr } = await supabase
@@ -281,9 +316,12 @@ export async function DELETE(
       .select('id, name, meta_template_id')
       .eq('id', id)
       .eq('account_id', accountId)
-      .maybeSingle()
+      .maybeSingle();
     if (lookupErr || !existing) {
-      return NextResponse.json({ error: 'Template not found.' }, { status: 404 })
+      return NextResponse.json(
+        { error: 'Template not found.' },
+        { status: 404 }
+      );
     }
 
     if (existing.meta_template_id && !isDryRun()) {
@@ -291,30 +329,30 @@ export async function DELETE(
         .from('whatsapp_config')
         .select('*')
         .eq('account_id', accountId)
-        .single()
+        .single();
       if (configError || !config || !config.waba_id) {
         return NextResponse.json(
           { error: 'WhatsApp not configured — cannot delete on Meta.' },
-          { status: 400 },
-        )
+          { status: 400 }
+        );
       }
-      const accessToken = decrypt(config.access_token)
+      const accessToken = decrypt(config.access_token);
       console.error('[TEMPLATE DELETE DEBUG]', {
         wabaId: config.waba_id,
         name: existing.name,
         metaTemplateId: existing.meta_template_id,
         accessTokenLength: accessToken?.length,
-      })
+      });
       try {
         await deleteMessageTemplate({
           wabaId: config.waba_id,
           accessToken,
           name: existing.name,
           metaTemplateId: existing.meta_template_id,
-        })
+        });
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Meta delete failed.'
-        console.error('[TEMPLATE DELETE ERROR]', message)
+        const message = e instanceof Error ? e.message : 'Meta delete failed.';
+        console.error('[TEMPLATE DELETE ERROR]', message);
         // "Invalid parameter" typically means this is a Meta sample/system
         // template that cannot be deleted via the API. In that case, proceed
         // to remove the local row so it disappears from the UI — the
@@ -322,34 +360,36 @@ export async function DELETE(
         // back if the user wants it. For any OTHER Meta error (permissions,
         // network, etc.) we still block.
         if (!/invalid param/i.test(message)) {
-          return NextResponse.json({ error: message }, { status: 400 })
+          return NextResponse.json({ error: message }, { status: 400 });
         }
-        console.warn('[TEMPLATE DELETE] Meta rejected delete (sample template?) — removing local row only.')
+        console.warn(
+          '[TEMPLATE DELETE] Meta rejected delete (sample template?) — removing local row only.'
+        );
       }
     }
 
     const { error: delErr } = await supabase
       .from('message_templates')
       .delete()
-      .eq('id', id)
+      .eq('id', id);
     if (delErr) {
       return NextResponse.json(
         {
           error: `Deleted on Meta but failed to delete locally: ${delErr.message}.`,
         },
-        { status: 500 },
-      )
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ success: true, dry_run: isDryRun() })
+    return NextResponse.json({ success: true, dry_run: isDryRun() });
   } catch (error) {
-    console.error('Error deleting template:', error)
+    console.error('Error deleting template:', error);
     return NextResponse.json(
       {
         error:
           error instanceof Error ? error.message : 'Failed to delete template.',
       },
-      { status: 500 },
-    )
+      { status: 500 }
+    );
   }
 }

@@ -37,6 +37,7 @@ import {
   AlertTriangle,
   Tag,
   Download,
+  Sparkles,
 } from 'lucide-react';
 import { downloadSampleCsv } from '@/lib/contacts/sample-csv';
 import { useTranslations } from 'next-intl';
@@ -137,6 +138,7 @@ export function ImportModal({
   const [parsedRows, setParsedRows] = useState<ParsedContactRow[]>([]);
   const [hasTagsColumn, setHasTagsColumn] = useState(false);
   const [hasCompanyColumn, setHasCompanyColumn] = useState(false);
+  const [customFieldColumns, setCustomFieldColumns] = useState<string[]>([]);
   const [tagColorByKey, setTagColorByKey] = useState<Map<string, string>>(
     new Map()
   );
@@ -146,6 +148,8 @@ export function ImportModal({
     skipped: number;
     failed: number;
     tagsAssigned: number;
+    customFieldsCreated: number;
+    customValuesAssigned: number;
   } | null>(null);
 
   function reset() {
@@ -153,6 +157,7 @@ export function ImportModal({
     setParsedRows([]);
     setHasTagsColumn(false);
     setHasCompanyColumn(false);
+    setCustomFieldColumns([]);
     setTagColorByKey(new Map());
     setResult(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -175,6 +180,7 @@ export function ImportModal({
       rows,
       hasTagsColumn: csvHasTags,
       hasCompanyColumn: csvHasCompany,
+      customFieldColumns: detectedCustomCols,
     } = parseContactCsv(text);
 
     if (rows.length === 0) {
@@ -182,6 +188,7 @@ export function ImportModal({
       setParsedRows([]);
       setHasTagsColumn(false);
       setHasCompanyColumn(false);
+      setCustomFieldColumns([]);
       setTagColorByKey(new Map());
       return;
     }
@@ -189,6 +196,7 @@ export function ImportModal({
     setParsedRows(rows);
     setHasTagsColumn(csvHasTags);
     setHasCompanyColumn(csvHasCompany);
+    setCustomFieldColumns(detectedCustomCols);
 
     if (csvHasTags && accountId) {
       const { data: tags } = await supabase
@@ -264,7 +272,66 @@ export function ImportModal({
         }));
       }
 
+      // 3.5) Resolve custom field names → ids (auto-create missing custom_fields).
+      const allCustomFieldNames = Array.from(
+        new Set(
+          toInsert.flatMap((row) =>
+            row.customFields ? Object.keys(row.customFields) : []
+          )
+        )
+      );
+
+      const customFieldIdByName = new Map<string, string>();
+      let customFieldsCreated = 0;
+
+      if (allCustomFieldNames.length > 0) {
+        const { data: existingFields } = await supabase
+          .from('custom_fields')
+          .select('id, field_name')
+          .eq('account_id', accountId);
+
+        const existingMap = new Map<string, string>();
+        for (const f of existingFields ?? []) {
+          existingMap.set(f.field_name.trim().toLowerCase(), f.id);
+        }
+
+        const missing = allCustomFieldNames.filter(
+          (name) => !existingMap.has(name.trim().toLowerCase())
+        );
+
+        if (missing.length > 0) {
+          const toCreate = missing.map((name) => ({
+            account_id: accountId,
+            user_id: user.id,
+            field_name: name.trim(),
+            field_type: 'text',
+          }));
+
+          const { data: createdFields } = await supabase
+            .from('custom_fields')
+            .insert(toCreate)
+            .select('id, field_name');
+
+          for (const f of createdFields ?? []) {
+            existingMap.set(f.field_name.trim().toLowerCase(), f.id);
+            customFieldsCreated++;
+          }
+        }
+
+        for (const name of allCustomFieldNames) {
+          const id = existingMap.get(name.trim().toLowerCase());
+          if (id) {
+            customFieldIdByName.set(name.trim().toLowerCase(), id);
+          }
+        }
+      }
+
       const tagAssignments: ContactTagAssignment[] = [];
+      const customValueAssignments: {
+        contact_id: string;
+        custom_field_id: string;
+        value: string;
+      }[] = [];
 
       // 4) Batch insert the genuinely-new rows in chunks of 50. The DB
       //    unique index is the backstop: a 23505 (race, or a format
@@ -307,6 +374,20 @@ export function ImportModal({
                   tagNames: source.tagNames,
                 });
               }
+              if (source.customFields) {
+                for (const [name, val] of Object.entries(source.customFields)) {
+                  const fieldId = customFieldIdByName.get(
+                    name.trim().toLowerCase()
+                  );
+                  if (fieldId && val) {
+                    customValueAssignments.push({
+                      contact_id: singleData.id,
+                      custom_field_id: fieldId,
+                      value: val,
+                    });
+                  }
+                }
+              }
             } else if (isUniqueViolation(singleErr)) {
               skipped++;
             } else {
@@ -317,21 +398,35 @@ export function ImportModal({
           const inserted = data ?? [];
           imported += inserted.length;
           // inserted[j] ↔ chunk[j] only holds because a single INSERT
-          // preserves RETURNING order. If this path is ever split into
-          // parallel inserts, zip by phone or returned id instead.
+          // preserves RETURNING order.
           for (let j = 0; j < inserted.length; j++) {
             const source = chunk[j];
-            if (!source || source.tagNames.length === 0) continue;
-            tagAssignments.push({
-              contactId: inserted[j].id,
-              tagNames: source.tagNames,
-            });
+            if (!source) continue;
+            if (source.tagNames.length > 0) {
+              tagAssignments.push({
+                contactId: inserted[j].id,
+                tagNames: source.tagNames,
+              });
+            }
+            if (source.customFields) {
+              for (const [name, val] of Object.entries(source.customFields)) {
+                const fieldId = customFieldIdByName.get(
+                  name.trim().toLowerCase()
+                );
+                if (fieldId && val) {
+                  customValueAssignments.push({
+                    contact_id: inserted[j].id,
+                    custom_field_id: fieldId,
+                    value: val,
+                  });
+                }
+              }
+            }
           }
         }
       }
 
-      // 5) Wire tags onto the contacts we just created. Failure here must
-      //    not mask a successful contact import.
+      // 5) Wire tags onto the contacts we just created.
       let tagsAssigned = 0;
       try {
         tagsAssigned = await assignImportedContactTags(
@@ -343,13 +438,40 @@ export function ImportModal({
         toast.warning(t('toastTagsWarning'));
       }
 
-      setResult({ imported, skipped, failed, tagsAssigned });
+      // 5.5) Insert custom field values in chunks of 100.
+      let customValuesAssigned = 0;
+      if (customValueAssignments.length > 0) {
+        for (let i = 0; i < customValueAssignments.length; i += 100) {
+          const chunk = customValueAssignments.slice(i, i + 100);
+          const { error: cvErr } = await supabase
+            .from('contact_custom_values')
+            .insert(chunk);
+          if (!cvErr) {
+            customValuesAssigned += chunk.length;
+          }
+        }
+      }
+
+      setResult({
+        imported,
+        skipped,
+        failed,
+        tagsAssigned,
+        customFieldsCreated,
+        customValuesAssigned,
+      });
+
       if (imported > 0) {
         toast.success(t('toastImported', { count: imported }));
         onImported();
       }
       if (tagsAssigned > 0) {
         toast.success(t('toastTagsAssigned', { count: tagsAssigned }));
+      }
+      if (customValuesAssigned > 0) {
+        toast.success(
+          t('resultCustomValues', { count: customValuesAssigned })
+        );
       }
       if (skippedNames.length > 0) {
         const sample = skippedNames.slice(0, 3).join(', ');
@@ -372,12 +494,10 @@ export function ImportModal({
   }
 
   const preview = parsedRows.slice(0, PREVIEW_LIMIT);
-  // Tags: OR — show when the CSV declares a column or preview rows carry
-  // values, so an all-empty tags column still renders for validation.
+  // Tags: OR — show when the CSV declares a column or preview rows carry values.
   const previewHasTags =
     hasTagsColumn || preview.some((row) => row.tagNames.length > 0);
-  // Company: AND — hide unless the CSV declares it and preview has data,
-  // avoiding an all-dash column that wastes horizontal space.
+  // Company: AND — hide unless the CSV declares it and preview has data.
   const previewHasCompany =
     hasCompanyColumn && preview.some((row) => row.company?.trim());
 
@@ -394,21 +514,31 @@ export function ImportModal({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="flex max-h-[min(90vh,720px)] flex-col gap-0 overflow-hidden border-border/80 bg-popover p-0 text-popover-foreground sm:max-w-2xl">
-        <div className="shrink-0 space-y-4 border-b border-border/80 px-6 pt-6 pb-5">
-          <DialogHeader className="gap-1.5">
+      <DialogContent
+        className="border-border bg-popover text-popover-foreground flex max-h-[90vh] w-full max-w-4xl flex-col gap-0 p-0 sm:max-w-4xl"
+        aria-describedby="import-modal-desc"
+      >
+        <div className="shrink-0 space-y-4 border-b border-border/80 p-6 pb-4">
+          <DialogHeader className="gap-1">
             <DialogTitle className="text-lg text-popover-foreground">
               {t('title')}
             </DialogTitle>
-            <DialogDescription className="leading-relaxed text-muted-foreground"
+            <DialogDescription
+              id="import-modal-desc"
+              className="leading-relaxed text-muted-foreground"
               dangerouslySetInnerHTML={{
                 __html: t.markup('desc', {
-                  phoneCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                  nameCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                  emailCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                  companyCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                  tagsCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                })
+                  phoneCode: (chunks) =>
+                    `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
+                  nameCode: (chunks) =>
+                    `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
+                  emailCode: (chunks) =>
+                    `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
+                  companyCode: (chunks) =>
+                    `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
+                  tagsCode: (chunks) =>
+                    `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
+                }),
               }}
             />
           </DialogHeader>
@@ -490,7 +620,17 @@ export function ImportModal({
                   {tagStats.rowsWithTags > 0 && (
                     <span className="inline-flex items-center gap-1 rounded-md bg-muted/90 px-2 py-0.5 text-[11px] text-muted-foreground">
                       <Tag className="text-primary/80 size-3" />
-                      {t('previewTags', { tags: tagStats.unique, contacts: tagStats.rowsWithTags })}
+                      {t('previewTags', {
+                        tags: tagStats.unique,
+                        contacts: tagStats.rowsWithTags,
+                      })}
+                    </span>
+                  )}
+                  {customFieldColumns.length > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                      <Sparkles className="size-3" />
+                      {customFieldColumns.length} custom field
+                      {customFieldColumns.length > 1 ? 's' : ''} detected
                     </span>
                   )}
                 </div>
@@ -520,6 +660,14 @@ export function ImportModal({
                             {t('columns.tags')}
                           </th>
                         )}
+                        {customFieldColumns.map((col) => (
+                          <th
+                            key={col}
+                            className="px-3 py-2 text-left font-medium whitespace-nowrap text-primary"
+                          >
+                            {col}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/70">
@@ -563,6 +711,17 @@ export function ImportModal({
                               />
                             </td>
                           )}
+                          {customFieldColumns.map((col) => (
+                            <td
+                              key={col}
+                              className="px-3 py-2 text-popover-foreground"
+                            >
+                              <PreviewCell
+                                value={row.customFields?.[col] || '—'}
+                                maxWidth="max-w-[8rem]"
+                              />
+                            </td>
+                          ))}
                         </tr>
                       ))}
                     </tbody>
@@ -580,7 +739,9 @@ export function ImportModal({
 
           {result && (
             <div className="rounded-xl border border-border bg-background/50 p-4">
-              <p className="text-sm font-medium text-popover-foreground">{t('importComplete')}</p>
+              <p className="text-sm font-medium text-popover-foreground">
+                {t('importComplete')}
+              </p>
               <div className="mt-3 flex flex-wrap gap-3">
                 {result.imported > 0 && (
                   <div className="text-primary flex items-center gap-1.5 text-sm">
@@ -592,6 +753,22 @@ export function ImportModal({
                   <div className="flex items-center gap-1.5 text-sm text-cyan-400">
                     <CheckCircle className="size-4 shrink-0" />
                     {t('resultTags', { count: result.tagsAssigned })}
+                  </div>
+                )}
+                {result.customValuesAssigned > 0 && (
+                  <div className="flex items-center gap-1.5 text-sm text-emerald-400">
+                    <CheckCircle className="size-4 shrink-0" />
+                    {t('resultCustomValues', {
+                      count: result.customValuesAssigned,
+                    })}
+                  </div>
+                )}
+                {result.customFieldsCreated > 0 && (
+                  <div className="flex items-center gap-1.5 text-sm text-purple-400">
+                    <CheckCircle className="size-4 shrink-0" />
+                    {t('resultCustomFields', {
+                      count: result.customFieldsCreated,
+                    })}
                   </div>
                 )}
                 {result.skipped > 0 && (
@@ -628,7 +805,9 @@ export function ImportModal({
               className="bg-primary hover:bg-primary/90 text-primary-foreground"
             >
               {importing && <Loader2 className="size-4 animate-spin" />}
-              {parsedRows.length > 0 ? t('importBtn', { count: parsedRows.length }) : t('importBtn', { count: 0 })}
+              {parsedRows.length > 0
+                ? t('importBtn', { count: parsedRows.length })
+                : t('importBtn', { count: 0 })}
             </Button>
           )}
         </DialogFooter>

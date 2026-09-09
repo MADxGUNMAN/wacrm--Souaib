@@ -22,7 +22,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertCircle, ArrowLeft, Check, Loader2, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Check, Copy, Loader2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -56,6 +56,8 @@ import {
   type WizardDraft,
 } from '@/components/templates/wizard-draft';
 import type { MessageTemplate } from '@/types';
+import { RequiredLegend } from '@/components/templates/required-mark';
+import { readApiResponse } from '@/lib/http/read-api-response';
 import { cn } from '@/lib/utils';
 
 const STEPS = [
@@ -101,7 +103,7 @@ export function TemplateWizard({
 
   const initial = useMemo(
     () => (existing ? draftFromRow(existing) : null),
-    [existing],
+    [existing]
   );
   // EDIT mode is decided by `existing` alone. A starter-library prefill must
   // NOT flip this: edit mode hides step 1 and locks the name and language,
@@ -120,14 +122,28 @@ export function TemplateWizard({
 
   const [step, setStep] = useState<1 | 2 | 3>(isEdit || isFromLibrary ? 2 : 1);
   const [category, setCategory] = useState<TemplateCategory>(
-    seed?.category ?? 'Marketing',
+    seed?.category ?? 'Marketing'
   );
   const [templateType, setTemplateType] = useState<TemplateType>(
-    seed?.templateType ?? 'default',
+    seed?.templateType ?? 'default'
   );
   const [draft, setDraft] = useState<WizardDraft>(seed?.draft ?? EMPTY_DRAFT);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Guidance shown under the error.
+   *
+   * Kept separate from `error` rather than concatenated, because the two
+   * have different authors: `error` is Meta's own wording (or the HTTP
+   * reality), and this is our advice about what to do next. Merging them
+   * into one sentence makes it impossible for the user to tell which part
+   * is a rule they must obey and which is a suggestion.
+   */
+  const [errorHint, setErrorHint] = useState<string | null>(null);
+  /** Meta refused the edit outright — offer "start a copy" instead. */
+  const [offerCopy, setOfferCopy] = useState(false);
+  /** Meta's code / subcode / fbtrace_id, for support tickets. */
+  const [errorTrace, setErrorTrace] = useState<string | null>(null);
 
   const typeOption = findTypeOption(category, templateType);
 
@@ -144,7 +160,7 @@ export function TemplateWizard({
   const patch = useCallback(
     (fields: Partial<WizardDraft>) =>
       setDraft((prev) => ({ ...prev, ...fields })),
-    [],
+    []
   );
 
   /** Step 1 gates on a buildable type — never let step 2 open blind. */
@@ -168,7 +184,7 @@ export function TemplateWizard({
     if (!draft.name.trim()) problems.push('Give the template a name.');
     if (!/^[a-z0-9_]{1,512}$/.test(draft.name.trim()) && draft.name.trim()) {
       problems.push(
-        'The name can only use lowercase letters, numbers and underscores.',
+        'The name can only use lowercase letters, numbers and underscores.'
       );
     }
 
@@ -200,7 +216,7 @@ export function TemplateWizard({
           category === 'Marketing' ? TTL_LIMITS.Marketing : TTL_LIMITS.Utility;
         if (ttl < window.min || ttl > window.max) {
           problems.push(
-            `A ${category} template's validity period must be ${window.min}–${window.max} seconds, or -1 for 30 days.`,
+            `A ${category} template's validity period must be ${window.min}–${window.max} seconds, or -1 for 30 days.`
           );
         }
       }
@@ -212,13 +228,13 @@ export function TemplateWizard({
       const positional = extractVariableIndices(draft.bodyText);
       if (positional.length > 0) {
         problems.push(
-          'This template uses named variables, so remove the numbered ones.',
+          'This template uses named variables, so remove the numbered ones.'
         );
       }
       for (const name of extractNamedParams(draft.bodyText)) {
         if (!isValidNamedParam(name)) {
           problems.push(
-            `"${name}" is not a valid variable name — lowercase letters, numbers and underscores only.`,
+            `"${name}" is not a valid variable name — lowercase letters, numbers and underscores only.`
           );
         } else if (!draft.namedSamples[name]?.trim()) {
           problems.push(`Add an example value for {{${name}}}.`);
@@ -226,7 +242,7 @@ export function TemplateWizard({
       }
     } else if (extractNamedParams(draft.bodyText).length > 0) {
       problems.push(
-        'Named variables found — switch the variable style to Named, or use {{1}}.',
+        'Named variables found — switch the variable style to Named, or use {{1}}.'
       );
     }
 
@@ -256,7 +272,9 @@ export function TemplateWizard({
         commerceKind === 'multi_product' &&
         (draft.headerFormat !== 'text' || !draft.headerContent.trim())
       ) {
-        problems.push('Add the header text — a multi-product template needs one.');
+        problems.push(
+          'Add the header text — a multi-product template needs one.'
+        );
       }
       if (
         commerceKind === 'order_details' &&
@@ -335,6 +353,9 @@ export function TemplateWizard({
   const submit = async () => {
     setSubmitting(true);
     setError(null);
+    setErrorHint(null);
+    setOfferCopy(false);
+    setErrorTrace(null);
     try {
       const sample_values: { body?: string[]; header?: string[] } = {};
       if (draft.bodySamples.some((v) => v.trim())) {
@@ -533,7 +554,8 @@ export function TemplateWizard({
       const callPermissionBody = isCallPermission
         ? {
             ...standardBody,
-            header_type: draft.headerFormat === 'text' ? ('text' as const) : undefined,
+            header_type:
+              draft.headerFormat === 'text' ? ('text' as const) : undefined,
             header_media_url: undefined,
             buttons: undefined,
             sub_category: 'CALL_PERMISSION_REQUEST' as const,
@@ -555,28 +577,83 @@ export function TemplateWizard({
               offerBody ??
               carouselBody ??
               flowBody ??
-              standardBody,
+              standardBody
           ),
-        },
+        }
       );
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(
-          data?.error ||
-            `${isEdit ? 'Save' : 'Submit'} failed (HTTP ${res.status})`,
+      // `readApiResponse` instead of a bare `res.json()`. The bare call
+      // threw `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`
+      // whenever anything in front of the route answered with an HTML
+      // page — a dev-server compile screen, a proxy/tunnel 502, a 413 —
+      // and that parser message became what the user was shown. It named
+      // no cause, suggested nothing to do, and read like a fault in the
+      // template they had just typed.
+      const result = await readApiResponse<{
+        dry_run?: boolean;
+        hint?: string | null;
+        meta?: {
+          code?: number | null;
+          subcode?: number | null;
+          fbtrace_id?: string | null;
+        } | null;
+      }>(res, isEdit ? 'saved' : 'submitted');
+
+      if (!result.ok) {
+        setError(result.error);
+        setErrorHint(result.hint);
+        // Meta's diagnostics, surfaced rather than logged server-side only.
+        // `fbtrace_id` is the first thing Meta asks for on a support
+        // ticket, and code/subcode are what distinguish one code-100
+        // rejection from another — none of it was reachable without server
+        // log access, which the person hitting the error rarely has.
+        const meta = result.data?.meta;
+        setErrorTrace(
+          meta
+            ? [
+                meta.code != null ? `code ${meta.code}` : null,
+                meta.subcode != null ? `subcode ${meta.subcode}` : null,
+                meta.fbtrace_id ? `trace ${meta.fbtrace_id}` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ') || null
+            : null
         );
+        // A 409 on an EDIT means Meta refused the edit itself rather than
+        // objecting to anything typed above (see describeTemplateFailure).
+        // The only way forward is a new template, so offer that as a
+        // one-click action — telling someone to "create a new template"
+        // while they are staring at a completed form they cannot save is
+        // the moment they would otherwise retype the whole thing by hand.
+        setOfferCopy(isEdit && res.status === 409);
+        return;
       }
+      const data = result.data ?? {};
 
       toast.success(
         data.dry_run
           ? 'Template saved locally (dry-run mode — nothing sent to Meta).'
           : isEdit
             ? 'Changes sent to Meta for review.'
-            : 'Submitted to Meta for review.',
+            : 'Submitted to Meta for review.'
       );
       router.push('/templates');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not submit the template.');
+      // Only genuine client-side faults reach here now — `fetch` itself
+      // rejecting (offline, DNS, CORS, aborted). `readApiResponse` never
+      // throws, so a server response can no longer land in this branch
+      // and surface as a raw internal message.
+      setError(
+        e instanceof TypeError
+          ? 'Could not reach the server.'
+          : e instanceof Error
+            ? e.message
+            : 'Could not submit the template.'
+      );
+      setErrorHint(
+        e instanceof TypeError
+          ? `Check your internet connection and try again — nothing was ${isEdit ? 'saved' : 'submitted'}.`
+          : null
+      );
     } finally {
       setSubmitting(false);
     }
@@ -596,13 +673,17 @@ export function TemplateWizard({
             <ArrowLeft className="size-4" />
           </Button>
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-foreground">
+            <h1 className="text-foreground text-xl font-bold tracking-tight">
               {isEdit ? `Edit ${existing!.name}` : 'Create template'}
             </h1>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-muted-foreground text-sm">
               {category}
               {typeOption ? ` · ${typeOption.title}` : ''}
             </p>
+            {/* The asterisk needs its meaning stated somewhere, or it is
+                just a symbol (WCAG 3.3.2). Once, here, rather than on
+                every field. */}
+            <RequiredLegend className="mt-0.5" />
           </div>
         </div>
       </div>
@@ -611,13 +692,13 @@ export function TemplateWizard({
           rate-limits edits. Both are worth knowing BEFORE typing, not
           after clicking save. */}
       {isEdit ? (
-        <div className="mt-5 flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
-          <AlertCircle className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
+        <div className="border-border bg-muted/40 mt-5 flex items-start gap-3 rounded-lg border p-3">
+          <AlertCircle className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+          <p className="text-muted-foreground text-sm">
             Saving sends this template back to Meta for review — it returns to
             Pending and cannot be used until approved again. Meta allows about
-            10 edits per month, and only one a day for an approved template.
-            The name and language cannot be changed at all.
+            10 edits per month, and only one a day for an approved template. The
+            name and language cannot be changed at all.
           </p>
         </div>
       ) : null}
@@ -628,8 +709,8 @@ export function TemplateWizard({
         <div className="mt-5 flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
           <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-600" />
           <p className="text-sm text-amber-700 dark:text-amber-400">
-            That starter template could not be loaded, so this form is blank.
-            It may have been removed or hidden.{' '}
+            That starter template could not be loaded, so this form is blank. It
+            may have been removed or hidden.{' '}
             <Link href="/templates/library" className="font-medium underline">
               Browse the library again
             </Link>
@@ -641,9 +722,9 @@ export function TemplateWizard({
       {/* The draft is a copy, not a link back to the library — worth saying
           before someone hesitates to change the wording. */}
       {isFromLibrary ? (
-        <div className="mt-5 flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
-          <Check className="mt-0.5 size-4 shrink-0 text-primary" />
-          <p className="text-sm text-muted-foreground">
+        <div className="border-border bg-muted/40 mt-5 flex items-start gap-3 rounded-lg border p-3">
+          <Check className="text-primary mt-0.5 size-4 shrink-0" />
+          <p className="text-muted-foreground text-sm">
             Pre-filled from the starter library, including example values.
             Everything here is yours to edit — change the wording, samples and
             buttons freely before submitting.
@@ -665,8 +746,8 @@ export function TemplateWizard({
                   done
                     ? 'bg-primary text-primary-foreground'
                     : active
-                      ? 'border-2 border-primary text-primary'
-                      : 'border-2 border-muted-foreground/30 text-muted-foreground',
+                      ? 'border-primary text-primary border-2'
+                      : 'border-muted-foreground/30 text-muted-foreground border-2'
                 )}
               >
                 {done ? <Check className="size-3" strokeWidth={3} /> : n}
@@ -675,10 +756,10 @@ export function TemplateWizard({
                 className={cn(
                   'text-sm',
                   active
-                    ? 'font-semibold text-foreground'
+                    ? 'text-foreground font-semibold'
                     : done
                       ? 'text-foreground'
-                      : 'text-muted-foreground',
+                      : 'text-muted-foreground'
                 )}
                 aria-current={active ? 'step' : undefined}
               >
@@ -744,13 +825,48 @@ export function TemplateWizard({
       </div>
 
       {error ? (
-        <div className="mt-4 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/[0.07] p-3">
-          <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
-          <p className="text-sm text-destructive">{error}</p>
+        <div className="border-destructive/30 bg-destructive/[0.07] mt-4 flex items-start gap-2 rounded-lg border p-3">
+          <AlertCircle className="text-destructive mt-0.5 size-4 shrink-0" />
+          <div className="min-w-0 flex-1">
+            {/* Meta's wording (or the HTTP reality) on top… */}
+            <p className="text-destructive text-sm">{error}</p>
+            {/* …and what to do about it underneath, visually subordinate so
+                it reads as advice rather than as part of the rule. */}
+            {errorHint ? (
+              <p className="text-muted-foreground mt-1 text-xs">{errorHint}</p>
+            ) : null}
+            {/* Selectable so it can be pasted into a support ticket. */}
+            {errorTrace ? (
+              <p className="text-muted-foreground/80 mt-1.5 font-mono text-[11px] select-all">
+                {errorTrace}
+              </p>
+            ) : null}
+            {/* Carries this template's content into a fresh CREATE form
+                with the name blanked, so nobody retypes a long body, its
+                buttons and its example values by hand. */}
+            {offerCopy && existing ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-2.5"
+                onClick={() =>
+                  router.push(`/templates/new?copyFrom=${existing.id}`)
+                }
+              >
+                <Copy className="size-3.5" />
+                Start a new template from this one
+              </Button>
+            ) : null}
+          </div>
           <button
             type="button"
-            onClick={() => setError(null)}
-            className="ml-auto text-destructive/60 hover:text-destructive"
+            onClick={() => {
+              setError(null);
+              setErrorHint(null);
+              setOfferCopy(false);
+              setErrorTrace(null);
+            }}
+            className="text-destructive/60 hover:text-destructive shrink-0"
             aria-label="Dismiss"
           >
             <X className="size-4" />
@@ -759,7 +875,7 @@ export function TemplateWizard({
       ) : null}
 
       {/* ---- Footer nav ---- */}
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+      <div className="border-border mt-6 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
         <Button
           variant="outline"
           onClick={() =>
@@ -778,12 +894,12 @@ export function TemplateWizard({
         <div className="flex items-center gap-3">
           {/* Explain a blocked Next rather than leaving a dead button. */}
           {step === 1 && !canLeaveSetup ? (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-xs">
               Pick a template type that is available to continue.
             </p>
           ) : null}
           {step === 2 && contentProblems.length > 0 ? (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-xs">
               {contentProblems[0]}
             </p>
           ) : null}

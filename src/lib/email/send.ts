@@ -22,17 +22,13 @@
 // to submit and approve payments.
 // ============================================================
 
-import { access } from 'node:fs/promises';
-import path from 'node:path';
-
-/**
- * Content id the layout references as `cid:${EMAIL_LOGO_CID}`. Inline
- * CID attachment rather than a hosted URL because many clients block
- * remote images by default, which would leave the header blank.
- */
-export const EMAIL_LOGO_CID = 'brand-logo';
-
-const LOGO_FILE = ['public', 'logo-full.jpg'];
+export interface EmailAttachment {
+  filename: string;
+  path?: string;
+  content?: string | Buffer;
+  contentType?: string;
+  cid?: string;
+}
 
 export interface EmailMessage {
   to: string;
@@ -44,6 +40,8 @@ export interface EmailMessage {
   fromName: string;
   /** Defaults to the SMTP user so replies reach a real inbox. */
   replyTo?: string | null;
+  /** Optional attachments (e.g. invoice PDFs). Logos are hosted images to prevent attachment badges. */
+  attachments?: EmailAttachment[];
 }
 
 export type EmailResult =
@@ -63,28 +61,6 @@ export type EmailResult =
 export function isEmailConfigured(): boolean {
   const { SMTP_HOST, SMTP_USER, SMTP_PASS } = process.env;
   return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS);
-}
-
-/**
- * Absolute path to the brand logo, or null when it isn't on disk.
- *
- * Checked rather than assumed because nodemailer REJECTS the whole send
- * when an attachment path doesn't resolve. The Dockerfile does copy
- * `public/` into the runtime image, so this should always be present —
- * but a broken header image is a far better outcome than a payment
- * confirmation that silently never sends. Clients fall back to the
- * `alt` text.
- */
-async function resolveLogoAttachment(): Promise<
-  { filename: string; path: string; cid: string } | null
-> {
-  const abs = path.join(process.cwd(), ...LOGO_FILE);
-  try {
-    await access(abs);
-    return { filename: 'logo.jpg', path: abs, cid: EMAIL_LOGO_CID };
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -123,8 +99,6 @@ export async function sendEmail(message: EmailMessage): Promise<EmailResult> {
       auth: { user: SMTP_USER, pass: SMTP_PASS },
     });
 
-    const logo = await resolveLogoAttachment();
-
     // Ensure the from address has a domain to prevent 501 errors
     // If SMTP_USER is just a username (e.g. 'apikey' for SendGrid), we must use a valid email
     const fromEmail = SMTP_USER.includes('@')
@@ -138,7 +112,7 @@ export async function sendEmail(message: EmailMessage): Promise<EmailResult> {
       html: message.html,
       text: message.text,
       replyTo: message.replyTo?.trim() || fromEmail,
-      attachments: logo ? [logo] : [],
+      attachments: message.attachments || [],
     });
 
     return { ok: true };
@@ -158,7 +132,7 @@ export async function sendEmail(message: EmailMessage): Promise<EmailResult> {
  */
 export async function sendEmailQuietly(
   label: string,
-  message: EmailMessage,
+  message: EmailMessage
 ): Promise<void> {
   const result = await sendEmail(message);
 

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 // ============================================================
 // Wizard step 2, LIMITED-TIME OFFER variant.
@@ -21,7 +21,9 @@ import { Clock, Info } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { MediaUploadField } from '@/components/media/media-upload-field';
 import { Textarea } from '@/components/ui/textarea';
+import { RequiredMark } from '@/components/templates/required-mark';
 import {
   Select,
   SelectContent,
@@ -54,7 +56,7 @@ export function WizardStepOffer({
   const bodyVarCount = extractVariableIndices(draft.bodyText).length;
   const bodySamples = Array.from(
     { length: bodyVarCount },
-    (_, i) => draft.bodySamples[i] ?? '',
+    (_, i) => draft.bodySamples[i] ?? ''
   );
   const bodyTooLong = draft.bodyText.length > LTO_LIMITS.bodyMaxLength;
   const urlVars = extractVariableIndices(offer.url).length;
@@ -62,29 +64,32 @@ export function WizardStepOffer({
   const definition = definitionFromDraft(
     draft,
     'Marketing',
-    'limited_time_offer',
+    'limited_time_offer'
   );
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="min-w-0 space-y-5">
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
-          <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
+        <div className="border-border bg-muted/40 flex items-start gap-3 rounded-lg border p-3">
+          <Info className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+          <p className="text-muted-foreground text-sm">
             WhatsApp Web and Desktop cannot show these. Those recipients get a
-            note saying a message arrived that they cannot view — so use this
+            note saying a message arrived that they cannot view â€” so use this
             for audiences you expect to be on a phone.
           </p>
         </div>
 
         {/* ---- Name + language ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Template name and language
           </h2>
           <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_200px]">
             <div className="space-y-1.5">
-              <Label htmlFor="lto-name">Name your template</Label>
+              <Label htmlFor="lto-name">
+                Name your template
+                <RequiredMark />
+              </Label>
               <Input
                 id="lto-name"
                 value={draft.name}
@@ -100,7 +105,10 @@ export function WizardStepOffer({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="lto-lang">Select language</Label>
+              <Label htmlFor="lto-lang">
+                Select language
+                <RequiredMark />
+              </Label>
               <Input
                 id="lto-lang"
                 value={draft.language}
@@ -111,12 +119,15 @@ export function WizardStepOffer({
         </section>
 
         {/* ---- The offer ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">The offer</h2>
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">The offer</h2>
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="lto-label">Offer label</Label>
+              <Label htmlFor="lto-label">
+                Offer label
+                <RequiredMark />
+              </Label>
               <Input
                 id="lto-label"
                 value={offer.text}
@@ -124,14 +135,17 @@ export function WizardStepOffer({
                 maxLength={LTO_LIMITS.offerTextMaxLength}
                 placeholder="Expiring offer!"
               />
-              <p className="text-xs text-muted-foreground">
-                {offer.text.length}/{LTO_LIMITS.offerTextMaxLength} — very
+              <p className="text-muted-foreground text-xs">
+                {offer.text.length}/{LTO_LIMITS.offerTextMaxLength} â€” very
                 short, it sits above the message.
               </p>
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="lto-code">Example offer code</Label>
+              <Label htmlFor="lto-code">
+                Example offer code
+                <RequiredMark />
+              </Label>
               <Input
                 id="lto-code"
                 value={offer.code}
@@ -142,7 +156,7 @@ export function WizardStepOffer({
                 placeholder="DIWALI25"
                 className="font-mono"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-muted-foreground text-xs">
                 {offer.code.length}/{LTO_LIMITS.offerCodeMaxLength}. The real
                 code is set when you send, so this is only for Meta&apos;s
                 reviewer.
@@ -150,13 +164,13 @@ export function WizardStepOffer({
             </div>
           </div>
 
-          <label className="mt-4 flex cursor-pointer items-start justify-between gap-4 rounded-lg border border-border p-3">
+          <label className="border-border mt-4 flex cursor-pointer items-start justify-between gap-4 rounded-lg border p-3">
             <span>
-              <span className="block text-sm font-medium text-foreground">
+              <span className="text-foreground block text-sm font-medium">
                 Show a countdown timer
               </span>
-              <span className="mt-0.5 block text-xs text-muted-foreground">
-                Displays how long is left. Without it this is just a coupon —
+              <span className="text-muted-foreground mt-0.5 block text-xs">
+                Displays how long is left. Without it this is just a coupon â€”
                 the countdown is the reason to use this template type.
               </span>
             </span>
@@ -166,10 +180,10 @@ export function WizardStepOffer({
             />
           </label>
 
-          <div className="mt-3 flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
-            <Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              The actual expiry date is set per message, not here — every
+          <div className="border-border bg-muted/40 mt-3 flex items-start gap-3 rounded-lg border p-3">
+            <Clock className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+            <p className="text-muted-foreground text-xs leading-relaxed">
+              The actual expiry date is set per message, not here â€” every
               recipient can have a different deadline. That is also why these
               cannot be sent from the broadcast or inbox pickers yet: neither
               has a field for it.
@@ -178,15 +192,21 @@ export function WizardStepOffer({
         </section>
 
         {/* ---- Content ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">Content</h2>
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">Content</h2>
 
           <div className="mt-4 space-y-2">
             <Label htmlFor="lto-header">
-              Header <span className="text-muted-foreground">· optional</span>
+              Header <span className="text-muted-foreground">Â· optional</span>
             </Label>
             <Select
-              value={draft.headerFormat === 'video' ? 'video' : draft.headerFormat === 'image' ? 'image' : 'none'}
+              value={
+                draft.headerFormat === 'video'
+                  ? 'video'
+                  : draft.headerFormat === 'image'
+                    ? 'image'
+                    : 'none'
+              }
               onValueChange={(v) =>
                 onChange({
                   headerFormat: (v || 'none') as WizardDraft['headerFormat'],
@@ -202,22 +222,28 @@ export function WizardStepOffer({
                 <SelectItem value="video">Video</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              Image or video only — a limited-time offer cannot use a text or
+            <p className="text-muted-foreground text-xs">
+              Image or video only â€” a limited-time offer cannot use a text or
               document header.
             </p>
-            {draft.headerFormat === 'image' || draft.headerFormat === 'video' ? (
-              <Input
+            {draft.headerFormat === 'image' ||
+            draft.headerFormat === 'video' ? (
+              <MediaUploadField
+                kind={draft.headerFormat}
+                purpose="review"
+                compact
                 value={draft.headerMediaUrl}
-                onChange={(e) => onChange({ headerMediaUrl: e.target.value })}
-                placeholder={`https://example.com/offer.${draft.headerFormat === 'video' ? 'mp4' : 'jpg'}`}
-                aria-label="Header media sample URL"
+                onChange={(url) => onChange({ headerMediaUrl: url })}
+                urlPlaceholder={`https://example.com/offer.${draft.headerFormat === 'video' ? 'mp4' : 'jpg'}`}
               />
             ) : null}
           </div>
 
           <div className="mt-5 space-y-2">
-            <Label htmlFor="lto-body">Body</Label>
+            <Label htmlFor="lto-body">
+              Body
+              <RequiredMark />
+            </Label>
             <Textarea
               id="lto-body"
               rows={4}
@@ -230,16 +256,16 @@ export function WizardStepOffer({
             <p
               className={cn(
                 'text-xs',
-                bodyTooLong ? 'text-destructive' : 'text-muted-foreground',
+                bodyTooLong ? 'text-destructive' : 'text-muted-foreground'
               )}
             >
-              {draft.bodyText.length}/{LTO_LIMITS.bodyMaxLength} — note this is
-              shorter than a normal template&apos;s 1024.
+              {draft.bodyText.length}/{LTO_LIMITS.bodyMaxLength} â€” note this
+              is shorter than a normal template&apos;s 1024.
             </p>
 
             {bodyVarCount > 0 ? (
-              <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
-                <p className="text-xs font-medium text-foreground">
+              <div className="border-border bg-muted/40 space-y-2 rounded-lg border p-3">
+                <p className="text-foreground text-xs font-medium">
                   Example values
                 </p>
                 {bodySamples.map((val, i) => (
@@ -258,25 +284,25 @@ export function WizardStepOffer({
               </div>
             ) : null}
 
-            <p className="text-xs text-muted-foreground">
-              No footer — Meta does not allow one on this template type.
+            <p className="text-muted-foreground text-xs">
+              No footer â€” Meta does not allow one on this template type.
             </p>
           </div>
         </section>
 
         {/* ---- Website button ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">Buttons</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            A copy-code button is added automatically — it is what makes this a
-            limited-time offer. You can add one website button beside it.
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">Buttons</h2>
+          <p className="text-muted-foreground mt-1 text-sm">
+            A copy-code button is added automatically â€” it is what makes this
+            a limited-time offer. You can add one website button beside it.
           </p>
 
           <div className="mt-4 grid gap-4 sm:grid-cols-[200px_1fr]">
             <div className="space-y-1.5">
               <Label htmlFor="lto-btn-text">
                 Button label{' '}
-                <span className="text-muted-foreground">· optional</span>
+                <span className="text-muted-foreground">Â· optional</span>
               </Label>
               <Input
                 id="lto-btn-text"
@@ -287,14 +313,17 @@ export function WizardStepOffer({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="lto-url">Website URL</Label>
+              <Label htmlFor="lto-url">
+                Website URL
+                <RequiredMark />
+              </Label>
               <Input
                 id="lto-url"
                 value={offer.url}
                 onChange={(e) => patchOffer({ url: e.target.value })}
                 placeholder="https://example.com/sale?code={{1}}"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-muted-foreground text-xs">
                 Leave blank for no website button. One variable allowed, at the
                 end of the URL.
               </p>
@@ -303,7 +332,10 @@ export function WizardStepOffer({
 
           {urlVars > 0 ? (
             <div className="mt-3 space-y-1.5">
-              <Label htmlFor="lto-url-example">Example for the URL variable</Label>
+              <Label htmlFor="lto-url-example">
+                Example for the URL variable
+                <RequiredMark />
+              </Label>
               <Input
                 id="lto-url-example"
                 value={offer.urlExample}
@@ -317,8 +349,8 @@ export function WizardStepOffer({
 
       {/* ---- Preview ---- */}
       <aside className="lg:sticky lg:top-4 lg:self-start">
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground">
+        <div className="border-border bg-card rounded-xl border p-5">
+          <h3 className="text-foreground text-sm font-semibold">
             Template preview
           </h3>
           <WhatsAppPreview
@@ -326,8 +358,8 @@ export function WizardStepOffer({
             values={draftBodyValues({ ...draft, bodySamples })}
             className="mt-3"
           />
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-            The countdown shown here is illustrative — the real deadline comes
+          <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
+            The countdown shown here is illustrative â€” the real deadline comes
             from the expiry you set when sending.
           </p>
         </div>

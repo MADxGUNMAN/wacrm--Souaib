@@ -550,8 +550,34 @@ describe('parseAppStateSync', () => {
         phone: '16505551234',
         fullName: 'Pablo Morales',
         firstName: 'Pablo',
+        // The verbatim contact object rides along, so a field Meta starts
+        // sending is in the data before anyone has to ask for it.
+        raw: {
+          full_name: 'Pablo Morales',
+          first_name: 'Pablo',
+          phone_number: '16505551234',
+        },
       },
     ])
+  })
+
+  it('trims a whitespace-only name to null', () => {
+    // The Business App allows a contact saved with a blank-looking name, and
+    // `' '` is truthy — so an untrimmed value would win the
+    // `full_name || first_name || phone` fallback at import time and produce
+    // a contact that renders as an empty row instead of the number.
+    const parsed = parseAppStateSync({
+      metadata: { phone_number_id: '1' },
+      state_sync: [
+        {
+          action: 'add',
+          contact: { full_name: '   ', first_name: '', phone_number: '911111111111' },
+          type: 'contact',
+        },
+      ],
+    })
+    expect(parsed!.contacts[0].fullName).toBeNull()
+    expect(parsed!.contacts[0].firstName).toBeNull()
   })
 
   it('parses a removal, where Meta sends no names', () => {
@@ -573,6 +599,7 @@ describe('parseAppStateSync', () => {
       phone: '917715078842',
       fullName: null,
       firstName: null,
+      raw: { phone_number: '917715078842' },
     })
   })
 

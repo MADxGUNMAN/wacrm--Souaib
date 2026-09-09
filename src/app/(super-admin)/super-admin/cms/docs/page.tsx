@@ -53,9 +53,12 @@ import type {
   DocsResource,
 } from "@/types/super-admin";
 
+import { useConfirm } from "@/components/ui/confirm-dialog";
+
 const API = "/api/super-admin/cms/docs";
 
 export default function CmsDocsPage() {
+  const confirm = useConfirm();
   const [settings, setSettings] = useState<DocsPageSettings | null>(null);
   const [categories, setCategories] = useState<DocsCategory[]>([]);
   const [resources, setResources] = useState<DocsResource[]>([]);
@@ -185,11 +188,17 @@ export default function CmsDocsPage() {
 
   const deleteCategory = async (category: DocsCategory) => {
     const count = resources.filter((r) => r.category_id === category.id).length;
-    const warning =
-      count > 0
-        ? `Delete “${category.title}” and its ${count} link${count === 1 ? "" : "s"}? This cannot be undone.`
-        : `Delete “${category.title}”?`;
-    if (!window.confirm(warning)) return;
+    const okConfirm = await confirm({
+      title: `Delete “${category.title}”?`,
+      description:
+        count > 0
+          ? `Its ${count} link${count === 1 ? '' : 's'} will be deleted too. This cannot be undone.`
+          : 'This category will be permanently removed.',
+      confirmText: 'Delete Category',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+    if (!okConfirm) return;
 
     const ok = await send(
       `del-cat-${category.id}`,
@@ -279,7 +288,14 @@ export default function CmsDocsPage() {
   };
 
   const deleteResource = async (resource: DocsResource) => {
-    if (!window.confirm(`Delete “${resource.title}”?`)) return;
+    const okConfirm = await confirm({
+      title: `Delete “${resource.title}”?`,
+      description: 'This guide link will be removed from the documentation page.',
+      confirmText: 'Delete Link',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+    if (!okConfirm) return;
     const ok = await send(
       `del-res-${resource.id}`,
       `${API}/resources?id=${encodeURIComponent(resource.id)}`,

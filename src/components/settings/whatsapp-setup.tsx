@@ -12,8 +12,10 @@ import {
   CreditCard,
   Building2,
   Gauge,
+  RefreshCw,
   Zap,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { useMetaSDK } from '@/components/providers/meta-sdk-provider';
@@ -31,12 +33,18 @@ import type {
   UsageTotals,
 } from '@/lib/whatsapp/limits';
 import { usagePercent, type InitiatedUsage } from '@/lib/whatsapp/usage';
+import {
+  formatDisplayPhoneNumber,
+  PHONE_UNKNOWN_LABEL,
+} from '@/lib/whatsapp/format-phone-display';
 import { SettingsPanelHead } from './settings-panel-head';
 import { CoexistencePanel } from './coexistence-panel';
 import { WhatsAppConnectModal } from './whatsapp-connect-modal';
 
 interface EmbeddedConfig {
   phone_number_id: string;
+  /** Cached real number (migration 078). Null until Meta has told us. */
+  display_phone_number: string | null;
   waba_id: string;
   connection_source: string;
   registered_at: string | null;
@@ -101,7 +109,9 @@ export function WhatsAppSetup() {
       try {
         const { data, error } = await supabase
           .from('whatsapp_config')
-          .select('phone_number_id, waba_id, connection_source, registered_at')
+          .select(
+            'phone_number_id, display_phone_number, waba_id, connection_source, registered_at'
+          )
           .eq('account_id', acctId)
           .maybeSingle();
 
@@ -113,7 +123,7 @@ export function WhatsAppSetup() {
         setLoading(false);
       }
     },
-    [supabase],
+    [supabase]
   );
 
   // Fetch live account info from Meta Graph API
@@ -150,6 +160,61 @@ export function WhatsAppSetup() {
       fetchMetaInfo();
     }
   }, [config?.phone_number_id, fetchMetaInfo]);
+
+  /**
+   * The business avatar, read from our own mirror.
+   *
+   * Separate from `fetchMetaInfo` on purpose: that call goes out to Meta
+   * live, whereas this is a cheap read of a column we already populated at
+   * connect time. Bundling them would make rendering a cached picture
+   * depend on a Graph round trip succeeding.
+   */
+  const [businessProfile, setBusinessProfile] = useState<{
+    picture_url: string | null;
+    about: string | null;
+    synced_at: string | null;
+  } | null>(null);
+  const [refreshingProfile, setRefreshingProfile] = useState(false);
+
+  const loadBusinessProfile = useCallback(async () => {
+    try {
+      const res = await fetch('/api/whatsapp/business-profile');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.connected) setBusinessProfile(data);
+    } catch {
+      // Silent. The avatar is supplementary; a failure here must not
+      // disturb a setup page whose job is the connection itself.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (config?.phone_number_id) void loadBusinessProfile();
+  }, [config?.phone_number_id, loadBusinessProfile]);
+
+  const refreshBusinessProfile = useCallback(async () => {
+    setRefreshingProfile(true);
+    try {
+      const res = await fetch('/api/whatsapp/business-profile', {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data?.error ?? 'Could not refresh the profile.');
+        return;
+      }
+      setBusinessProfile(data);
+      toast.success(
+        data.picture_url
+          ? 'Business profile updated.'
+          : 'Checked — no profile picture is set on this number.'
+      );
+    } catch {
+      toast.error('Could not reach the server.');
+    } finally {
+      setRefreshingProfile(false);
+    }
+  }, []);
 
   // ── WA_EMBEDDED_SIGNUP event listener ──────────────────────
   // This captures the waba_id and phone_number_id directly from
@@ -190,7 +255,8 @@ export function WhatsAppSetup() {
       if (host !== 'facebook.com' && !host.endsWith('.facebook.com')) return;
 
       try {
-        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        const data =
+          typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
         if (data?.type !== 'WA_EMBEDDED_SIGNUP') return;
 
         // Every FINISH* variant (FINISH, FINISH_ONLY_WABA,
@@ -208,7 +274,8 @@ export function WhatsAppSetup() {
           };
           flowErrorRef.current = null;
         } else if (data.event === 'ERROR' || data.data?.error_message) {
-          flowErrorRef.current = data.data?.error_message ?? 'Meta reported an error during setup';
+          flowErrorRef.current =
+            data.data?.error_message ?? 'Meta reported an error during setup';
           console.error('Embedded signup error:', data.data);
         } else if (data.event === 'CANCEL') {
           flowErrorRef.current = data.data?.current_step
@@ -234,7 +301,7 @@ export function WhatsAppSetup() {
     if (!ES_CONFIG_ID) {
       toast.error(
         'WhatsApp Embedded Signup is not configured. Set NEXT_PUBLIC_META_ES_CONFIG_ID to your ' +
-          'Facebook Login for Business configuration ID.',
+          'Facebook Login for Business configuration ID.'
       );
       return;
     }
@@ -335,7 +402,9 @@ export function WhatsAppSetup() {
                 if (!res.ok) {
                   toast.error(data.error || 'Failed to connect via Meta');
                 } else {
-                  toast.success('Successfully connected your WhatsApp Business Account!');
+                  toast.success(
+                    'Successfully connected your WhatsApp Business Account!'
+                  );
                   if (accountId) await fetchConfig(accountId);
                 }
               } else {
@@ -353,35 +422,38 @@ export function WhatsAppSetup() {
                 // against the requested path is the only way to see that.
                 const text = await res.text();
                 const looksLikeHtml = text.trimStart().startsWith('<');
-                console.error('[embedded-signup] non-JSON response from the API', {
-                  status: res.status,
-                  statusText: res.statusText,
-                  requested: '/api/whatsapp/embedded-signup',
-                  finalUrl: res.url,
-                  wasRedirected: res.redirected,
-                  contentType: contentType ?? '(none)',
-                  bodyStart: text.substring(0, 300),
-                });
+                console.error(
+                  '[embedded-signup] non-JSON response from the API',
+                  {
+                    status: res.status,
+                    statusText: res.statusText,
+                    requested: '/api/whatsapp/embedded-signup',
+                    finalUrl: res.url,
+                    wasRedirected: res.redirected,
+                    contentType: contentType ?? '(none)',
+                    bodyStart: text.substring(0, 300),
+                  }
+                );
 
                 if (res.redirected) {
                   toast.error(
                     `Setup was redirected to ${new URL(res.url).pathname} instead of ` +
-                      'completing. Your session has probably expired — sign in again and retry.',
+                      'completing. Your session has probably expired — sign in again and retry.'
                   );
                 } else if (res.status === 404) {
                   toast.error(
                     'The setup endpoint was not found. If this is a deployed ' +
-                      'environment, it may be running an older build.',
+                      'environment, it may be running an older build.'
                   );
                 } else if (looksLikeHtml) {
                   toast.error(
                     `The server returned a web page instead of data (HTTP ${res.status}). ` +
-                      'Check the browser console for details.',
+                      'Check the browser console for details.'
                   );
                 } else {
                   toast.error(
                     `Unexpected response from the server (HTTP ${res.status}). ` +
-                      'Check the browser console for details.',
+                      'Check the browser console for details.'
                   );
                 }
               }
@@ -397,7 +469,9 @@ export function WhatsAppSetup() {
           // No authResponse means no code. If Meta pushed a reason through
           // the message channel, show that instead of a generic "cancelled".
           console.log('Embedded signup returned no authResponse:', response);
-          toast.error(flowErrorRef.current || 'Connection cancelled or incomplete');
+          toast.error(
+            flowErrorRef.current || 'Connection cancelled or incomplete'
+          );
           setIsConnecting(false);
         }
       },
@@ -406,7 +480,7 @@ export function WhatsAppSetup() {
         response_type: 'code',
         override_default_response_type: true,
         extras,
-      },
+      }
     );
   }
 
@@ -419,12 +493,11 @@ export function WhatsAppSetup() {
           description="Connect your WhatsApp Business API account"
         />
         <div className="flex items-center justify-center py-12">
-          <Loader2 className="size-6 animate-spin text-primary" />
+          <Loader2 className="text-primary size-6 animate-spin" />
         </div>
       </section>
     );
   }
-
 
   const isConnected = Boolean(config);
 
@@ -435,7 +508,7 @@ export function WhatsAppSetup() {
   const health = metaInfo?.health ?? null;
   const readiness = health?.readiness ?? 'unknown';
   const verification = deriveVerificationState(
-    metaInfo?.waba?.business_verification_status,
+    metaInfo?.waba?.business_verification_status
   );
 
   // Only claim there is something to fix when Meta says sending is
@@ -451,10 +524,10 @@ export function WhatsAppSetup() {
   const limits = metaInfo?.limits ?? null;
   const hasLimitData = Boolean(
     limits &&
-      (limits.messaging ||
-        limits.usage ||
-        limits.throughput ||
-        (limits.nameReview && limits.nameReview.state !== 'unknown')),
+    (limits.messaging ||
+      limits.usage ||
+      limits.throughput ||
+      (limits.nameReview && limits.nameReview.state !== 'unknown'))
   );
 
   // Usage against the rolling allowance. `initiated` is OUR count of
@@ -467,7 +540,7 @@ export function WhatsAppSetup() {
   const remainingLabel =
     initiated && limits?.messaging?.perDay
       ? new Intl.NumberFormat().format(
-          Math.max(0, limits.messaging.perDay - initiated.businessInitiated),
+          Math.max(0, limits.messaging.perDay - initiated.businessInitiated)
         )
       : null;
 
@@ -476,94 +549,180 @@ export function WhatsAppSetup() {
       {/* Page Header */}
       <div className="mb-8">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-foreground">
+          <h1 className="text-foreground text-2xl font-bold">
             Setup Your WhatsApp Business API Account
           </h1>
           <svg className="size-7" viewBox="0 0 24 24" fill="#25D366">
             <path d={WA_ICON_PATH} />
           </svg>
         </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Complete the steps below to connect your WhatsApp API and start automating messages.
+        <p className="text-muted-foreground mt-1 text-sm">
+          Complete the steps below to connect your WhatsApp API and start
+          automating messages.
         </p>
       </div>
 
       {/* ─── Account Info Banner (only when connected) ─── */}
       {isConnected && config && (
-        <Card className="mb-8 border-primary/20 bg-primary/5 shadow-sm">
+        <Card className="border-primary/20 bg-primary/5 mb-8 shadow-sm">
           <CardContent className="py-5">
-            <div className="flex items-center gap-2 mb-4">
-              <svg className="size-5" viewBox="0 0 24 24" fill="#25D366">
-                <path d={WA_ICON_PATH} />
-              </svg>
-              <h2 className="font-semibold text-foreground">
-                WhatsApp Business Account Information
-              </h2>
+            <div className="mb-4 flex items-start gap-3">
+              {/* ---- The business avatar customers actually see ----
+                  This is the only WhatsApp profile picture the Cloud API
+                  exposes; there is no equivalent for customers. Shown here
+                  because an operator running several numbers cannot
+                  otherwise tell which brand identity is attached to this
+                  one, and a wrong logo is invisible from inside the CRM
+                  while being the first thing every customer sees.
+
+                  Served from our own bucket, not Meta's CDN — their URL is
+                  signed and expires within days. */}
+              {businessProfile?.picture_url ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={businessProfile.picture_url}
+                  alt="Your WhatsApp business profile picture"
+                  className="border-border size-10 shrink-0 rounded-full border object-cover"
+                />
+              ) : (
+                <span className="bg-primary/10 flex size-10 shrink-0 items-center justify-center rounded-full">
+                  <svg className="size-5" viewBox="0 0 24 24" fill="#25D366">
+                    <path d={WA_ICON_PATH} />
+                  </svg>
+                </span>
+              )}
+
+              <div className="min-w-0 flex-1">
+                <h2 className="text-foreground font-semibold">
+                  WhatsApp Business Account Information
+                </h2>
+                <p className="text-muted-foreground mt-0.5 text-xs">
+                  {businessProfile?.about ??
+                    (businessProfile?.synced_at && !businessProfile.picture_url
+                      ? 'No profile picture set on this number yet.'
+                      : 'How your business appears to customers in WhatsApp.')}
+                </p>
+              </div>
+
+              {/* Manual because Meta sends no webhook when a business
+                  changes its avatar. Without this the only way to pick up a
+                  new logo would be to re-enter credentials. */}
+              <button
+                type="button"
+                onClick={() => void refreshBusinessProfile()}
+                disabled={refreshingProfile}
+                title="Re-fetch the profile picture and tagline from WhatsApp"
+                className="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-60"
+              >
+                <RefreshCw
+                  className={cn(
+                    'size-3.5',
+                    refreshingProfile && 'animate-spin'
+                  )}
+                />
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
             </div>
-            <div className="grid gap-px grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 rounded-xl border border-border overflow-hidden bg-border">
+            <div className="border-border bg-border grid grid-cols-2 gap-px overflow-hidden rounded-xl border sm:grid-cols-3 lg:grid-cols-6">
               {/* Business */}
-              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block">
+              <div className="bg-card min-w-0 space-y-1.5 p-3.5 sm:p-4">
+                <span className="text-muted-foreground block truncate text-[11px] font-medium tracking-wider uppercase">
                   Business
                 </span>
-                <div className="flex items-center gap-1.5 font-medium text-foreground text-sm">
-                  <Building2 className="size-4 text-primary shrink-0" />
+                <div className="text-foreground flex items-center gap-1.5 text-sm font-medium">
+                  <Building2 className="text-primary size-4 shrink-0" />
                   <span className="truncate">
-                    {metaInfoLoading ? '...' : (metaInfo?.phone?.verified_name ?? metaInfo?.waba?.name ?? 'Connected')}
+                    {metaInfoLoading
+                      ? '...'
+                      : (metaInfo?.phone?.verified_name ??
+                        metaInfo?.waba?.name ??
+                        'Connected')}
                   </span>
                 </div>
               </div>
 
               {/* WhatsApp Number */}
-              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block">
+              <div className="bg-card min-w-0 space-y-1.5 p-3.5 sm:p-4">
+                <span className="text-muted-foreground block truncate text-[11px] font-medium tracking-wider uppercase">
                   WhatsApp Number
                 </span>
-                <div className="font-medium text-primary text-sm truncate">
-                  {metaInfoLoading ? '...' : (metaInfo?.phone?.display_phone_number ?? `+${config.phone_number_id}`)}
+                {/* Live value first, then the copy cached on our own row
+                    (migration 078), then an honest placeholder.
+
+                    The old fallback was `+${config.phone_number_id}`,
+                    which printed the Meta asset id with a plus in front —
+                    "+870875646113078" — and read as a real number. That
+                    was reported as a bug twice. An asset id must never
+                    stand in for a phone number. */}
+                <div className="text-primary truncate text-sm font-medium">
+                  {metaInfoLoading
+                    ? '...'
+                    : (metaInfo?.phone?.display_phone_number ??
+                      formatDisplayPhoneNumber(config.display_phone_number) ??
+                      PHONE_UNKNOWN_LABEL)}
                 </div>
               </div>
 
               {/* Message Limit */}
-              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block" title="24-Hour Message Limit">
+              <div className="bg-card min-w-0 space-y-1.5 p-3.5 sm:p-4">
+                <span
+                  className="text-muted-foreground block truncate text-[11px] font-medium tracking-wider uppercase"
+                  title="24-Hour Message Limit"
+                >
                   Message Limit
                 </span>
-                <div className="flex items-center gap-1.5 font-semibold text-foreground text-sm">
-                  <Zap className="size-3.5 text-amber-500 shrink-0 fill-amber-500/20" />
+                <div className="text-foreground flex items-center gap-1.5 text-sm font-semibold">
+                  <Zap className="size-3.5 shrink-0 fill-amber-500/20 text-amber-500" />
                   <span>
-                    {metaInfoLoading ? '...' : (limits?.messaging?.label ?? '2,000')}
+                    {metaInfoLoading
+                      ? '...'
+                      : (limits?.messaging?.label ?? '2,000')}
                   </span>
                 </div>
               </div>
 
               {/* Account Status */}
-              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block">
+              <div className="bg-card min-w-0 space-y-1.5 p-3.5 sm:p-4">
+                <span className="text-muted-foreground block truncate text-[11px] font-medium tracking-wider uppercase">
                   Account Status
                 </span>
                 {(() => {
                   const status = metaInfo?.phone?.status;
                   const isGood = status === 'CONNECTED';
-                  const isBad = status === 'FLAGGED' || status === 'RESTRICTED' || status === 'RATE_LIMITED';
+                  const isBad =
+                    status === 'FLAGGED' ||
+                    status === 'RESTRICTED' ||
+                    status === 'RATE_LIMITED';
                   return (
-                    <div className={`flex items-center gap-1.5 font-semibold text-sm ${
-                      metaInfoLoading ? 'text-muted-foreground' :
-                      isGood ? 'text-emerald-500' :
-                      isBad ? 'text-red-500' : 'text-amber-500'
-                    }`}>
-                      {isGood ? <CheckCircle2 className="size-3.5 shrink-0" /> :
-                       isBad ? <AlertTriangle className="size-3.5 shrink-0" /> :
-                       <AlertTriangle className="size-3.5 shrink-0" />}
-                      <span className="truncate">{metaInfoLoading ? '...' : (status ?? 'Unknown')}</span>
+                    <div
+                      className={`flex items-center gap-1.5 text-sm font-semibold ${
+                        metaInfoLoading
+                          ? 'text-muted-foreground'
+                          : isGood
+                            ? 'text-emerald-500'
+                            : isBad
+                              ? 'text-red-500'
+                              : 'text-amber-500'
+                      }`}
+                    >
+                      {isGood ? (
+                        <CheckCircle2 className="size-3.5 shrink-0" />
+                      ) : isBad ? (
+                        <AlertTriangle className="size-3.5 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="size-3.5 shrink-0" />
+                      )}
+                      <span className="truncate">
+                        {metaInfoLoading ? '...' : (status ?? 'Unknown')}
+                      </span>
                     </div>
                   );
                 })()}
               </div>
 
               {/* Quality Rating */}
-              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block">
+              <div className="bg-card min-w-0 space-y-1.5 p-3.5 sm:p-4">
+                <span className="text-muted-foreground block truncate text-[11px] font-medium tracking-wider uppercase">
                   Quality Rating
                 </span>
                 {(() => {
@@ -572,26 +731,41 @@ export function WhatsAppSetup() {
                   const isRed = rating === 'RED';
                   const isYellow = rating === 'YELLOW';
                   return (
-                    <div className={`flex items-center gap-1.5 font-semibold text-sm ${
-                      metaInfoLoading ? 'text-muted-foreground' :
-                      isGreen ? 'text-emerald-500' :
-                      isRed ? 'text-red-500' :
-                      isYellow ? 'text-amber-500' : 'text-muted-foreground'
-                    }`}>
-                      <Shield className={`size-3.5 shrink-0 ${
-                        isGreen ? 'text-emerald-500' :
-                        isRed ? 'text-red-500' :
-                        isYellow ? 'text-amber-500' : 'text-primary'
-                      }`} />
-                      <span className="truncate">{metaInfoLoading ? '...' : (rating ?? 'Unknown')}</span>
+                    <div
+                      className={`flex items-center gap-1.5 text-sm font-semibold ${
+                        metaInfoLoading
+                          ? 'text-muted-foreground'
+                          : isGreen
+                            ? 'text-emerald-500'
+                            : isRed
+                              ? 'text-red-500'
+                              : isYellow
+                                ? 'text-amber-500'
+                                : 'text-muted-foreground'
+                      }`}
+                    >
+                      <Shield
+                        className={`size-3.5 shrink-0 ${
+                          isGreen
+                            ? 'text-emerald-500'
+                            : isRed
+                              ? 'text-red-500'
+                              : isYellow
+                                ? 'text-amber-500'
+                                : 'text-primary'
+                        }`}
+                      />
+                      <span className="truncate">
+                        {metaInfoLoading ? '...' : (rating ?? 'Unknown')}
+                      </span>
                     </div>
                   );
                 })()}
               </div>
 
               {/* Message Usage (View Insights) */}
-              <div className="bg-card p-3.5 sm:p-4 space-y-1.5 min-w-0">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground truncate block">
+              <div className="bg-card min-w-0 space-y-1.5 p-3.5 sm:p-4">
+                <span className="text-muted-foreground block truncate text-[11px] font-medium tracking-wider uppercase">
                   Message Usage
                 </span>
                 <div className="text-sm">
@@ -603,7 +777,7 @@ export function WhatsAppSetup() {
                     }
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 font-semibold text-primary hover:underline"
+                    className="text-primary inline-flex items-center gap-1 font-semibold hover:underline"
                   >
                     <span>View Insights</span>
                     <ExternalLink className="size-3.5 shrink-0" />
@@ -624,21 +798,21 @@ export function WhatsAppSetup() {
         <Card className="mb-8 shadow-sm">
           <CardContent className="py-5">
             <div className="mb-4 flex items-center gap-2">
-              <Gauge className="size-4 text-primary" />
-              <h2 className="text-sm font-semibold text-foreground">
+              <Gauge className="text-primary size-4" />
+              <h2 className="text-foreground text-sm font-semibold">
                 Sending limits &amp; usage
               </h2>
               {metaInfoLoading ? (
-                <Loader2 className="size-3 animate-spin text-muted-foreground" />
+                <Loader2 className="text-muted-foreground size-3 animate-spin" />
               ) : null}
             </div>
 
-            <div className="grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+            <div className="border-border bg-border grid gap-px overflow-hidden rounded-xl border sm:grid-cols-2 lg:grid-cols-4">
               {/* Messaging limit. Labelled in CUSTOMERS, not messages —
                   Meta counts unique people you start a conversation with,
                   and calling it "messages per day" would be wrong. */}
-              <div className="space-y-1 bg-card p-4">
-                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+              <div className="bg-card space-y-1 p-4">
+                <span className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
                   Daily limit
                 </span>
                 {limits.messaging ? (
@@ -647,11 +821,13 @@ export function WhatsAppSetup() {
                         unique customers started in a rolling 24h, so this
                         comparison is unit-correct — unlike the 30-day
                         message count, which must never be divided by it. */}
-                    <p className="text-xl font-bold text-foreground">
+                    <p className="text-foreground text-xl font-bold">
                       {initiated ? (
                         <>
-                          {new Intl.NumberFormat().format(initiated.businessInitiated)}
-                          <span className="text-sm font-medium text-muted-foreground">
+                          {new Intl.NumberFormat().format(
+                            initiated.businessInitiated
+                          )}
+                          <span className="text-muted-foreground text-sm font-medium">
                             {' '}
                             / {limits.messaging.label}
                           </span>
@@ -660,13 +836,13 @@ export function WhatsAppSetup() {
                         limits.messaging.label
                       )}
                     </p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-muted-foreground text-xs">
                       new customers per 24 hours
                     </p>
                     {usedPercent !== null ? (
                       <div className="pt-1.5">
                         <div
-                          className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+                          className="bg-muted h-1.5 w-full overflow-hidden rounded-full"
                           role="progressbar"
                           aria-valuenow={usedPercent}
                           aria-valuemin={0}
@@ -684,14 +860,14 @@ export function WhatsAppSetup() {
                             style={{ width: `${Math.max(usedPercent, 2)}%` }}
                           />
                         </div>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
+                        <p className="text-muted-foreground mt-1 text-[11px]">
                           {usedPercent}% used · {remainingLabel} left
                         </p>
                       </div>
                     ) : null}
                   </>
                 ) : (
-                  <p className="pt-1 text-sm text-muted-foreground">
+                  <p className="text-muted-foreground pt-1 text-sm">
                     Not reported
                   </p>
                 )}
@@ -700,16 +876,16 @@ export function WhatsAppSetup() {
               {/* Volume. Deliberately NOT shown as a fraction of the limit
                   above: that counts messages, the limit counts unique
                   customers, so a progress bar would be false arithmetic. */}
-              <div className="space-y-1 bg-card p-4">
-                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+              <div className="bg-card space-y-1 p-4">
+                <span className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
                   Sent · last {limits.usage?.days ?? 30} days
                 </span>
                 {limits.usage ? (
                   <>
-                    <p className="text-xl font-bold text-foreground">
+                    <p className="text-foreground text-xl font-bold">
                       {new Intl.NumberFormat().format(limits.usage.sent)}
                     </p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-muted-foreground text-xs">
                       {new Intl.NumberFormat().format(limits.usage.delivered)}{' '}
                       delivered
                       {limits.usage.deliveryRate !== null
@@ -718,7 +894,7 @@ export function WhatsAppSetup() {
                     </p>
                   </>
                 ) : (
-                  <p className="pt-1 text-sm text-muted-foreground">
+                  <p className="text-muted-foreground pt-1 text-sm">
                     Not reported
                   </p>
                 )}
@@ -726,8 +902,8 @@ export function WhatsAppSetup() {
 
               {/* Display name — the usual reason a healthy account is
                   stuck on the lowest limit. */}
-              <div className="space-y-1 bg-card p-4">
-                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+              <div className="bg-card space-y-1 p-4">
+                <span className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
                   Display name
                 </span>
                 {limits.nameReview && limits.nameReview.state !== 'unknown' ? (
@@ -744,36 +920,36 @@ export function WhatsAppSetup() {
                       {limits.nameReview.label}
                     </p>
                     {limits.nameReview.detail ? (
-                      <p className="text-xs leading-relaxed text-muted-foreground">
+                      <p className="text-muted-foreground text-xs leading-relaxed">
                         {limits.nameReview.detail}
                       </p>
                     ) : null}
                   </>
                 ) : (
-                  <p className="pt-1 text-sm text-muted-foreground">
+                  <p className="text-muted-foreground pt-1 text-sm">
                     Not reported
                   </p>
                 )}
               </div>
 
               {/* Throughput — speed, as distinct from daily volume. */}
-              <div className="space-y-1 bg-card p-4">
-                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+              <div className="bg-card space-y-1 p-4">
+                <span className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
                   Send speed
                 </span>
                 {limits.throughput ? (
                   <>
-                    <p className="text-sm font-semibold text-foreground capitalize">
+                    <p className="text-foreground text-sm font-semibold capitalize">
                       {limits.throughput.level.toLowerCase().replace(/_/g, ' ')}
                     </p>
                     {limits.throughput.description ? (
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-muted-foreground text-xs">
                         {limits.throughput.description}
                       </p>
                     ) : null}
                   </>
                 ) : (
-                  <p className="pt-1 text-sm text-muted-foreground">
+                  <p className="text-muted-foreground pt-1 text-sm">
                     Not reported
                   </p>
                 )}
@@ -782,13 +958,13 @@ export function WhatsAppSetup() {
 
             {/* The two facts most people get wrong about this limit, said
                 once, plainly, instead of in a tooltip nobody opens. */}
-            <div className="mt-3 space-y-1.5 text-xs leading-relaxed text-muted-foreground">
+            <div className="text-muted-foreground mt-3 space-y-1.5 text-xs leading-relaxed">
               <p>
-                The daily limit counts unique customers you start a
-                conversation with, not total messages — replies inside an open
-                24-hour conversation do not count towards it. The limit itself
-                comes from Meta and applies to your whole business portfolio,
-                shared across every number in it.
+                The daily limit counts unique customers you start a conversation
+                with, not total messages — replies inside an open 24-hour
+                conversation do not count towards it. The limit itself comes
+                from Meta and applies to your whole business portfolio, shared
+                across every number in it.
               </p>
               {/* Says plainly whose number this is. Meta publishes the
                   limit but no consumption figure, so the used count is
@@ -805,7 +981,9 @@ export function WhatsAppSetup() {
                     <>
                       {' '}
                       A further {initiated.withinServiceWindow} contact
-                      {initiated.withinServiceWindow === 1 ? ' was' : 's were'}{' '}
+                      {initiated.withinServiceWindow === 1
+                        ? ' was'
+                        : 's were'}{' '}
                       messaged inside an open conversation, which is free and
                       not counted here.
                     </>
@@ -819,21 +997,22 @@ export function WhatsAppSetup() {
 
       {/* ─── Increase Messaging Limits (Meta Replica) ─── */}
       {isConnected && (
-        <Card className="mb-8 shadow-sm border border-border">
-          <CardContent className="py-6 space-y-6">
+        <Card className="border-border mb-8 border shadow-sm">
+          <CardContent className="space-y-6 py-6">
             {/* Header with Title & Meta Direct Link */}
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-4">
+            <div className="border-border flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="text-lg font-bold text-foreground">
+                  <h2 className="text-foreground text-lg font-bold">
                     Messaging limits
                   </h2>
-                  <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full font-medium">
+                  <span className="text-muted-foreground bg-muted rounded-full px-2 py-0.5 text-xs font-medium">
                     Meta Tier Progress
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Updated automatically from your Meta WhatsApp Business Portfolio
+                <p className="text-muted-foreground mt-1 text-xs">
+                  Updated automatically from your Meta WhatsApp Business
+                  Portfolio
                 </p>
               </div>
 
@@ -845,7 +1024,7 @@ export function WhatsAppSetup() {
                 }
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3.5 py-2 text-xs font-semibold text-foreground shadow-sm transition-colors hover:bg-muted hover:text-primary"
+                className="border-border bg-card text-foreground hover:bg-muted hover:text-primary inline-flex items-center justify-center gap-1.5 rounded-lg border px-3.5 py-2 text-xs font-semibold shadow-sm transition-colors"
               >
                 <span>View Limits in Meta</span>
                 <ExternalLink className="size-3.5" />
@@ -856,15 +1035,42 @@ export function WhatsAppSetup() {
             {(() => {
               const currentPerDay = limits?.messaging?.perDay ?? 2000;
               const tiers = [
-                { label: '250', value: 250, nextGoal: 125, nextTierLabel: '2,000' },
-                { label: '2,000', value: 2000, nextGoal: 1000, nextTierLabel: '10,000' },
-                { label: '10,000', value: 10000, nextGoal: 5000, nextTierLabel: '100,000' },
-                { label: '100,000', value: 100000, nextGoal: 50000, nextTierLabel: 'Unlimited' },
-                { label: 'Unlimited', value: Infinity, nextGoal: null, nextTierLabel: null },
+                {
+                  label: '250',
+                  value: 250,
+                  nextGoal: 125,
+                  nextTierLabel: '2,000',
+                },
+                {
+                  label: '2,000',
+                  value: 2000,
+                  nextGoal: 1000,
+                  nextTierLabel: '10,000',
+                },
+                {
+                  label: '10,000',
+                  value: 10000,
+                  nextGoal: 5000,
+                  nextTierLabel: '100,000',
+                },
+                {
+                  label: '100,000',
+                  value: 100000,
+                  nextGoal: 50000,
+                  nextTierLabel: 'Unlimited',
+                },
+                {
+                  label: 'Unlimited',
+                  value: Infinity,
+                  nextGoal: null,
+                  nextTierLabel: null,
+                },
               ];
 
               // Find active tier index
-              let activeIndex = tiers.findIndex((t) => t.value === currentPerDay);
+              let activeIndex = tiers.findIndex(
+                (t) => t.value === currentPerDay
+              );
               if (activeIndex === -1) {
                 if (currentPerDay <= 250) activeIndex = 0;
                 else if (currentPerDay <= 2000) activeIndex = 1;
@@ -876,12 +1082,18 @@ export function WhatsAppSetup() {
               const activeTier = tiers[activeIndex];
               const sevenDayCount = limits?.sevenDayUnique ?? 0;
               const targetCount = activeTier.nextGoal ?? 1000;
-              const progressPct = targetCount > 0 ? Math.min(100, Math.round((sevenDayCount / targetCount) * 100)) : 100;
+              const progressPct =
+                targetCount > 0
+                  ? Math.min(
+                      100,
+                      Math.round((sevenDayCount / targetCount) * 100)
+                    )
+                  : 100;
 
               return (
                 <div className="space-y-6">
                   {/* Visual Tier Grid */}
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 sm:gap-3">
+                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5 sm:gap-3">
                     {tiers.map((tier, idx) => {
                       const isCurrent = idx === activeIndex;
                       const isPassed = idx < activeIndex;
@@ -892,20 +1104,24 @@ export function WhatsAppSetup() {
                             isCurrent
                               ? 'bg-card border-2 border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
                               : isPassed
-                                ? 'bg-muted/40 border border-border text-muted-foreground'
-                                : 'bg-muted/20 border border-border/60 text-muted-foreground/70'
+                                ? 'bg-muted/40 border-border text-muted-foreground border'
+                                : 'bg-muted/20 border-border/60 text-muted-foreground/70 border'
                           }`}
                         >
                           {isCurrent ? (
-                            <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm">
+                            <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 rounded-full bg-emerald-500 px-2 py-0.5 text-[10px] font-bold tracking-wider text-white uppercase shadow-sm">
                               Current
                             </span>
                           ) : null}
-                          <p className={`text-base font-bold ${isCurrent ? 'text-foreground text-lg mt-1' : 'text-foreground/80'}`}>
+                          <p
+                            className={`text-base font-bold ${isCurrent ? 'text-foreground mt-1 text-lg' : 'text-foreground/80'}`}
+                          >
                             {tier.label}
                           </p>
-                          <p className="text-[10px] leading-tight text-muted-foreground mt-1">
-                            {isCurrent ? 'Business-initiated conversations in 24h' : 'Tier Limit'}
+                          <p className="text-muted-foreground mt-1 text-[10px] leading-tight">
+                            {isCurrent
+                              ? 'Business-initiated conversations in 24h'
+                              : 'Tier Limit'}
                           </p>
                         </div>
                       );
@@ -913,22 +1129,25 @@ export function WhatsAppSetup() {
                   </div>
 
                   {/* Increase Messaging Limit Section */}
-                  <div className="rounded-xl border border-border bg-muted/20 p-5 space-y-3">
+                  <div className="border-border bg-muted/20 space-y-3 rounded-xl border p-5">
                     <div>
-                      <h3 className="text-sm font-bold text-foreground">
+                      <h3 className="text-foreground text-sm font-bold">
                         Increase your messaging limit
                       </h3>
-                      <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                        Meta automatically evaluates your specific account requirements (such as Business Verification, Quality Rating, and conversation volume) to upgrade your messaging tier. Upgrades can take up to 24 hours.
+                      <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
+                        Meta automatically evaluates your specific account
+                        requirements (such as Business Verification, Quality
+                        Rating, and conversation volume) to upgrade your
+                        messaging tier. Upgrades can take up to 24 hours.
                       </p>
                     </div>
 
-                    <div className="pt-2 border-t border-border/40 flex flex-wrap gap-4 text-xs">
+                    <div className="border-border/40 flex flex-wrap gap-4 border-t pt-2 text-xs">
                       <a
                         href="https://www.facebook.com/business/help/687938765816627"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-primary hover:underline text-xs inline-flex items-center gap-1 font-medium"
+                        className="text-primary inline-flex items-center gap-1 text-xs font-medium hover:underline"
                       >
                         <span>What are high-quality messages?</span>
                         <ExternalLink className="size-3" />
@@ -937,7 +1156,7 @@ export function WhatsAppSetup() {
                         href="https://developers.facebook.com/documentation/business-messaging/whatsapp/messaging-limits"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-primary hover:underline text-xs inline-flex items-center gap-1 font-medium"
+                        className="text-primary inline-flex items-center gap-1 text-xs font-medium hover:underline"
                       >
                         <span>Meta Messaging Limit Rules</span>
                         <ExternalLink className="size-3" />
@@ -954,7 +1173,7 @@ export function WhatsAppSetup() {
       {/* ─── Steps ─── */}
       <div className="space-y-6">
         {/* ── Step 1: Get Your WhatsApp Business API ── */}
-        <div className="rounded-xl border border-border bg-card p-6">
+        <div className="border-border bg-card rounded-xl border p-6">
           <div className="flex items-start gap-4">
             <div
               className={`flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
@@ -963,15 +1182,11 @@ export function WhatsAppSetup() {
                   : 'bg-primary/10 text-primary'
               }`}
             >
-              {isConnected ? (
-                <CheckCircle2 className="size-5" />
-              ) : (
-                '1'
-              )}
+              {isConnected ? <CheckCircle2 className="size-5" /> : '1'}
             </div>
             <div className="flex-1 space-y-3">
-              <div className="flex items-center gap-3 flex-wrap">
-                <h3 className="text-base font-semibold text-foreground">
+              <div className="flex flex-wrap items-center gap-3">
+                <h3 className="text-foreground text-base font-semibold">
                   Get Your WhatsApp Business API
                 </h3>
                 {isConnected && (
@@ -980,7 +1195,7 @@ export function WhatsAppSetup() {
                   </span>
                 )}
               </div>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-muted-foreground text-sm">
                 {isConnected
                   ? 'Your WhatsApp Business API is successfully connected and ready to use.'
                   : 'Get instant access to the WhatsApp Business API using your Facebook account.'}
@@ -995,7 +1210,7 @@ export function WhatsAppSetup() {
                       window.open(
                         `https://business.facebook.com/wa/manage/phone-numbers/?waba_id=${config!.waba_id}`,
                         '_blank',
-                        'noopener,noreferrer',
+                        'noopener,noreferrer'
                       )
                     }
                   >
@@ -1027,7 +1242,7 @@ export function WhatsAppSetup() {
                   <Button
                     onClick={() => setShowConnectModal(true)}
                     disabled={isConnecting || !fbLoaded}
-                    className="bg-[#00A884] hover:bg-[#008f6f] text-white shadow-sm"
+                    className="bg-[#00A884] text-white shadow-sm hover:bg-[#008f6f]"
                   >
                     {isConnecting ? (
                       <>
@@ -1036,7 +1251,11 @@ export function WhatsAppSetup() {
                       </>
                     ) : (
                       <>
-                        <svg className="mr-2 size-4" viewBox="0 0 24 24" fill="currentColor">
+                        <svg
+                          className="mr-2 size-4"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                        >
                           <path d={WA_ICON_PATH} />
                         </svg>
                         Connect WhatsApp
@@ -1055,7 +1274,7 @@ export function WhatsAppSetup() {
             method exists" — there is no Graph field for the latter, and
             asserting it would be the same invention as the old permanent
             warning, only flipped. */}
-        <div className="rounded-xl border border-border bg-card p-6">
+        <div className="border-border bg-card rounded-xl border p-6">
           <div className="flex items-start gap-4">
             <div
               className={`flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
@@ -1082,13 +1301,15 @@ export function WhatsAppSetup() {
                 '2'
               )}
             </div>
-            <div className={`flex-1 space-y-3 ${!isConnected ? 'opacity-50' : ''}`}>
-              <div className="flex items-center gap-3 flex-wrap">
-                <h3 className="text-base font-semibold text-foreground">
+            <div
+              className={`flex-1 space-y-3 ${!isConnected ? 'opacity-50' : ''}`}
+            >
+              <div className="flex flex-wrap items-center gap-3">
+                <h3 className="text-foreground text-base font-semibold">
                   Payment method &amp; sending
                 </h3>
                 {isConnected && metaInfoLoading ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                  <span className="bg-muted text-muted-foreground inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium">
                     <Loader2 className="size-3 animate-spin" />
                     Checking with Meta
                   </span>
@@ -1110,7 +1331,7 @@ export function WhatsAppSetup() {
                 ) : null}
               </div>
 
-              <p className="text-sm text-muted-foreground">
+              <p className="text-muted-foreground text-sm">
                 {sendingReady
                   ? 'Meta reports your account can send messages. Nothing to do here.'
                   : sendingLimited
@@ -1135,13 +1356,15 @@ export function WhatsAppSetup() {
                         {health.blockers.map((blocker, index) => {
                           const link = resolveHealthIssueLink(
                             blocker.description,
-                            config?.waba_id,
+                            config?.waba_id
                           );
                           return (
                             <li key={blocker.code ?? index}>
-                              <p className="text-foreground">{blocker.description}</p>
+                              <p className="text-foreground">
+                                {blocker.description}
+                              </p>
                               {blocker.solution ? (
-                                <p className="mt-1 text-muted-foreground">
+                                <p className="text-muted-foreground mt-1">
                                   {blocker.solution}
                                 </p>
                               ) : null}
@@ -1149,7 +1372,7 @@ export function WhatsAppSetup() {
                                 href={link.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
+                                className="text-primary mt-2 inline-flex items-center gap-1.5 text-xs font-semibold hover:underline"
                               >
                                 {link.label}
                                 <ExternalLink className="size-3" />
@@ -1169,9 +1392,12 @@ export function WhatsAppSetup() {
                           Why your sending is limited:
                         </span>
                       </div>
-                      <ul className="space-y-3 text-sm text-muted-foreground">
+                      <ul className="text-muted-foreground space-y-3 text-sm">
                         {health.limitations.map((note) => {
-                          const link = resolveHealthIssueLink(note, config?.waba_id);
+                          const link = resolveHealthIssueLink(
+                            note,
+                            config?.waba_id
+                          );
                           return (
                             <li key={note}>
                               <p>{note}</p>
@@ -1182,7 +1408,7 @@ export function WhatsAppSetup() {
                                 href={link.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
+                                className="text-primary mt-1.5 inline-flex items-center gap-1.5 text-xs font-semibold hover:underline"
                               >
                                 {link.label}
                                 <ExternalLink className="size-3" />
@@ -1200,19 +1426,19 @@ export function WhatsAppSetup() {
                       we genuinely do not know, so we must not imply the
                       customer has forgotten something. */}
                   {readiness === 'unknown' ? (
-                    <div className="rounded-lg border border-border bg-muted/40 p-4">
-                      <p className="mb-2 text-sm text-muted-foreground">
+                    <div className="border-border bg-muted/40 rounded-lg border p-4">
+                      <p className="text-muted-foreground mb-2 text-sm">
                         We could not read your billing status from Meta, so
                         check it directly if broadcasts are not sending:
                       </p>
-                      <ol className="list-inside list-decimal space-y-2 text-sm text-muted-foreground">
+                      <ol className="text-muted-foreground list-inside list-decimal space-y-2 text-sm">
                         <li>
-                          Add a card in Facebook Business Manager, then set it as
-                          default from the three-dot menu.
+                          Add a card in Facebook Business Manager, then set it
+                          as default from the three-dot menu.
                         </li>
                         <li>
-                          Complete your business billing info. In India, add your
-                          GST number.
+                          Complete your business billing info. In India, add
+                          your GST number.
                         </li>
                       </ol>
                     </div>
@@ -1230,7 +1456,8 @@ export function WhatsAppSetup() {
                           variant="outline"
                           size="sm"
                           onClick={() => {
-                            const wabaId = metaInfo?.waba?.id || config?.waba_id;
+                            const wabaId =
+                              metaInfo?.waba?.id || config?.waba_id;
                             const url = wabaId
                               ? `https://business.facebook.com/settings/payment-methods?waba_id=${encodeURIComponent(wabaId)}`
                               : 'https://business.facebook.com/settings/payment-methods';
@@ -1262,7 +1489,7 @@ export function WhatsAppSetup() {
             `business_verification_status` was already being fetched from
             the WABA and thrown away, so this step said "Optional" to a
             business that had finished verifying. It now follows Meta. */}
-        <div className="rounded-xl border border-border bg-card p-6">
+        <div className="border-border bg-card rounded-xl border p-6">
           <div className="flex items-start gap-4">
             <div
               className={`flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
@@ -1281,13 +1508,15 @@ export function WhatsAppSetup() {
                 '3'
               )}
             </div>
-            <div className={`flex-1 space-y-3 ${!isConnected ? 'opacity-50' : ''}`}>
-              <div className="flex items-center gap-3 flex-wrap">
-                <h3 className="text-base font-semibold text-foreground">
+            <div
+              className={`flex-1 space-y-3 ${!isConnected ? 'opacity-50' : ''}`}
+            >
+              <div className="flex flex-wrap items-center gap-3">
+                <h3 className="text-foreground text-base font-semibold">
                   Facebook Business Verification
                 </h3>
                 {isConnected && metaInfoLoading ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                  <span className="bg-muted text-muted-foreground inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium">
                     <Loader2 className="size-3 animate-spin" />
                     Checking with Meta
                   </span>
@@ -1306,13 +1535,13 @@ export function WhatsAppSetup() {
                 ) : (
                   // Covers both `not_started` and `unknown` — in neither
                   // case do we have grounds to nag.
-                  <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+                  <span className="bg-muted text-muted-foreground inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium">
                     Optional
                   </span>
                 )}
               </div>
 
-              <p className="text-sm text-muted-foreground">
+              <p className="text-muted-foreground text-sm">
                 {verification === 'verified'
                   ? 'Your business is verified with Meta. Your brand name can show in place of your phone number, and your messaging limits are raised.'
                   : verification === 'pending'
@@ -1323,8 +1552,10 @@ export function WhatsAppSetup() {
               {/* Requirements are only useful to someone who still has to
                   do this. Showing them to a verified business is noise. */}
               {verification !== 'verified' && verification !== 'pending' ? (
-                <div className="text-sm text-muted-foreground">
-                  <p className="mb-1.5 font-medium text-foreground">Requirements:</p>
+                <div className="text-muted-foreground text-sm">
+                  <p className="text-foreground mb-1.5 font-medium">
+                    Requirements:
+                  </p>
                   <ul className="list-inside list-disc space-y-1">
                     <li>Legal business document with business name</li>
                     <li>Working website</li>
@@ -1341,11 +1572,13 @@ export function WhatsAppSetup() {
                       window.open(
                         'https://business.facebook.com/settings/security',
                         '_blank',
-                        'noopener,noreferrer',
+                        'noopener,noreferrer'
                       )
                     }
                   >
-                    {verification === 'pending' ? 'View status' : 'Verify Business'}
+                    {verification === 'pending'
+                      ? 'View status'
+                      : 'Verify Business'}
                     <ExternalLink className="ml-2 size-3" />
                   </Button>
                   <Button

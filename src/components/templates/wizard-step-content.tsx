@@ -1,7 +1,7 @@
-'use client';
+﻿'use client';
 
 // ============================================================
-// Wizard step 2 — "Edit template".
+// Wizard step 2 â€” "Edit template".
 //
 // The content fields for the Default template type: name, language,
 // header, body, footer, buttons. Same fields the old Settings dialog
@@ -12,7 +12,7 @@
 // with their types. Step 1 disables types whose editor does not exist,
 // so this form is never shown for a shape it cannot express.
 //
-// The live WhatsApp preview is Phase 3 — this step deliberately has no
+// The live WhatsApp preview is Phase 3 â€” this step deliberately has no
 // preview rail yet rather than a fake one.
 // ============================================================
 
@@ -23,6 +23,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { RequiredMark } from '@/components/templates/required-mark';
+import { MediaUploadField } from '@/components/media/media-upload-field';
 import {
   Select,
   SelectContent,
@@ -45,6 +47,7 @@ import {
   type WizardDraft,
 } from '@/components/templates/wizard-draft';
 import { WhatsAppPreview } from '@/components/templates/whatsapp-preview';
+import { OptOutGuidance } from '@/components/templates/opt-out-guidance';
 
 const HEADER_FORMATS = [
   { value: 'none', label: 'None' },
@@ -56,8 +59,29 @@ const HEADER_FORMATS = [
 ] as const;
 
 const LANGUAGES = [
-  'en_US', 'en_GB', 'en', 'hi', 'bn', 'mr', 'ta', 'te', 'gu', 'kn', 'ml',
-  'pa', 'ur', 'es', 'fr', 'de', 'it', 'pt_BR', 'ar', 'id', 'ja', 'ko', 'zh_CN',
+  'en_US',
+  'en_GB',
+  'en',
+  'hi',
+  'bn',
+  'mr',
+  'ta',
+  'te',
+  'gu',
+  'kn',
+  'ml',
+  'pa',
+  'ur',
+  'es',
+  'fr',
+  'de',
+  'it',
+  'pt_BR',
+  'ar',
+  'id',
+  'ja',
+  'ko',
+  'zh_CN',
 ];
 
 /**
@@ -107,14 +131,14 @@ export function WizardStepContent({
 }) {
   const bodyVarCount = useMemo(
     () => extractVariableIndices(draft.bodyText).length,
-    [draft.bodyText],
+    [draft.bodyText]
   );
   const headerVarCount = useMemo(
     () =>
       draft.headerFormat === 'text'
         ? extractVariableIndices(draft.headerContent).length
         : 0,
-    [draft.headerFormat, draft.headerContent],
+    [draft.headerFormat, draft.headerContent]
   );
 
   // Keep the sample rows exactly as long as the variable count. Meta
@@ -137,12 +161,12 @@ export function WizardStepContent({
   const isNamed = draft.parameterFormat === 'NAMED';
   const namedParams = useMemo(
     () => (isNamed ? extractNamedParams(draft.bodyText) : []),
-    [isNamed, draft.bodyText],
+    [isNamed, draft.bodyText]
   );
 
   /**
    * Meta forbids mixing `{{1}}` and `{{order_id}}` in one template, and
-   * rejects the mix with "The parameter name is required" — which points at
+   * rejects the mix with "The parameter name is required" â€” which points at
    * neither the stray placeholder nor the rule. Caught while typing.
    */
   const mixedFormatWarning = useMemo(() => {
@@ -151,7 +175,9 @@ export function WizardStepContent({
       if (positional.length > 0) {
         return `Remove ${positional
           .map((n) => `{{${n}}}`)
-          .join(', ')} — a named template cannot also use numbered variables.`;
+          .join(
+            ', '
+          )} â€” a named template cannot also use numbered variables.`;
       }
       return null;
     }
@@ -175,7 +201,7 @@ export function WizardStepContent({
     const window =
       category === 'Marketing' ? TTL_LIMITS.Marketing : TTL_LIMITS.Utility;
     if (n < window.min || n > window.max) {
-      return `A ${category} template allows ${window.min}–${window.max} seconds, or -1 for 30 days.`;
+      return `A ${category} template allows ${window.min}â€“${window.max} seconds, or -1 for 30 days.`;
     }
     return null;
   }, [draft.ttlSeconds, category]);
@@ -183,488 +209,518 @@ export function WizardStepContent({
   const updateButton = (i: number, fields: Partial<TemplateButton>) =>
     onChange({
       buttons: draft.buttons.map((b, idx) =>
-        idx === i ? ({ ...b, ...fields } as TemplateButton) : b,
+        idx === i ? ({ ...b, ...fields } as TemplateButton) : b
       ),
     });
 
   // Rebuilt on every keystroke from the same conversion the submit
   // payload uses, so the preview cannot show something Meta will not
-  // receive. Cheap enough to skip memoising — it is a handful of string
+  // receive. Cheap enough to skip memoising â€” it is a handful of string
   // operations on at most 1024 characters.
   const definition = definitionFromDraft(draft, category, templateType);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="min-w-0 space-y-5">
-      {/* ---- Name + language ---- */}
-      <section className="rounded-xl border border-border bg-card p-5">
-        <h2 className="text-base font-semibold text-foreground">
-          Template name and language
-        </h2>
+        {/* ---- Name + language ---- */}
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
+            Template name and language
+          </h2>
 
-        <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_200px]">
-          <div className="space-y-1.5">
-            <Label htmlFor="tpl-name">Name your template</Label>
-            <Input
-              id="tpl-name"
-              value={draft.name}
-              onChange={(e) =>
-                // Meta only accepts lowercase, digits and underscores, so
-                // normalise as they type rather than rejecting on submit.
+          <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_200px]">
+            <div className="space-y-1.5">
+              <Label htmlFor="tpl-name">
+                Name your template
+                <RequiredMark />
+              </Label>
+              <Input
+                id="tpl-name"
+                value={draft.name}
+                onChange={(e) =>
+                  // Meta only accepts lowercase, digits and underscores, so
+                  // normalise as they type rather than rejecting on submit.
+                  onChange({
+                    name: e.target.value
+                      .toLowerCase()
+                      .replace(/[^a-z0-9_]/g, '_')
+                      .slice(0, 512),
+                  })
+                }
+                placeholder="order_confirmation"
+                aria-describedby="tpl-name-hint"
+              />
+              <p id="tpl-name-hint" className="text-muted-foreground text-xs">
+                Lowercase letters, numbers and underscores. Spaces become
+                underscores automatically. {draft.name.length}/512
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="tpl-lang">
+                Select language
+                <RequiredMark />
+              </Label>
+              <Select
+                value={draft.language}
+                // This Select's onValueChange yields `string | null`, so
+                // every handler here coerces rather than trusting it.
+                onValueChange={(v) => onChange({ language: v || 'en_US' })}
+              >
+                <SelectTrigger id="tpl-lang" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {LANGUAGES.map((code) => (
+                    <SelectItem key={code} value={code}>
+                      {code}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </section>
+
+        {/* ---- Content ---- */}
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">Content</h2>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Add a header, body and footer. Meta reviews the wording as well as
+            the structure, so write it as the customer will read it.
+          </p>
+
+          {/* Header */}
+          <div className="mt-4 space-y-2">
+            <Label htmlFor="tpl-header-format">
+              Header <span className="text-muted-foreground">Â· optional</span>
+            </Label>
+            <Select
+              value={draft.headerFormat}
+              onValueChange={(v) =>
                 onChange({
-                  name: e.target.value
-                    .toLowerCase()
-                    .replace(/[^a-z0-9_]/g, '_')
-                    .slice(0, 512),
+                  headerFormat: (v || 'none') as WizardDraft['headerFormat'],
                 })
               }
-              placeholder="order_confirmation"
-              aria-describedby="tpl-name-hint"
-            />
-            <p id="tpl-name-hint" className="text-xs text-muted-foreground">
-              Lowercase letters, numbers and underscores. Spaces become
-              underscores automatically. {draft.name.length}/512
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="tpl-lang">Select language</Label>
-            <Select
-              value={draft.language}
-              // This Select's onValueChange yields `string | null`, so
-              // every handler here coerces rather than trusting it.
-              onValueChange={(v) => onChange({ language: v || 'en_US' })}
             >
-              <SelectTrigger id="tpl-lang" className="w-full">
+              <SelectTrigger id="tpl-header-format" className="w-full sm:w-56">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {LANGUAGES.map((code) => (
-                  <SelectItem key={code} value={code}>
-                    {code}
+                {HEADER_FORMATS.map((f) => (
+                  <SelectItem key={f.value} value={f.value}>
+                    {f.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {draft.headerFormat === 'text' ? (
+              <div className="space-y-2 pt-1">
+                <Input
+                  value={draft.headerContent}
+                  onChange={(e) => onChange({ headerContent: e.target.value })}
+                  maxLength={TEMPLATE_LIMITS.headerTextMaxLength}
+                  placeholder="Order update"
+                  aria-label="Header text"
+                />
+                <p className="text-muted-foreground text-xs">
+                  {draft.headerContent.length}/
+                  {TEMPLATE_LIMITS.headerTextMaxLength}. A text header may
+                  contain at most one variable, and it must be{' '}
+                  <code>{'{{1}}'}</code>.
+                </p>
+                {headerVarCount > 0 ? (
+                  <Input
+                    value={draft.headerSample}
+                    onChange={(e) => onChange({ headerSample: e.target.value })}
+                    placeholder="Example value for {{1}}"
+                    aria-label="Header sample value"
+                  />
+                ) : null}
+              </div>
+            ) : null}
+
+            {needsMedia ? (
+              <div className="pt-1">
+                <MediaUploadField
+                  kind={draft.headerFormat as 'image' | 'video' | 'document'}
+                  purpose="review"
+                  value={draft.headerMediaUrl}
+                  onChange={(url) => onChange({ headerMediaUrl: url })}
+                  urlPlaceholder={`https://example.com/sample.${
+                    draft.headerFormat === 'image'
+                      ? 'jpg'
+                      : draft.headerFormat === 'video'
+                        ? 'mp4'
+                        : 'pdf'
+                  }`}
+                  hint="Meta downloads this sample during review, so it must stay reachable until the template is approved."
+                />
+              </div>
+            ) : null}
+
+            {draft.headerFormat === 'location' ? (
+              <p className="text-muted-foreground pt-1 text-xs">
+                Nothing to fill in here. The map pin â€” latitude, longitude,
+                name and address â€” is supplied for each message when you send,
+                which is what makes it useful: one template covers every branch,
+                delivery address or meeting point.
+              </p>
+            ) : null}
+
+            {/* ---- Validity period ---- */}
+            <div className="border-border space-y-2 border-t pt-4">
+              <Label htmlFor="tpl-ttl">
+                Validity period{' '}
+                <span className="text-muted-foreground">Â· optional</span>
+              </Label>
+              <Input
+                id="tpl-ttl"
+                value={draft.ttlSeconds}
+                onChange={(e) =>
+                  onChange({
+                    ttlSeconds: e.target.value.replace(/[^\d-]/g, ''),
+                  })
+                }
+                placeholder={`Blank = Meta's default`}
+                className="w-full sm:w-56"
+                inputMode="numeric"
+              />
+              <p className="text-muted-foreground text-xs">
+                How long WhatsApp keeps retrying before giving up, in seconds.{' '}
+                {category === 'Marketing'
+                  ? `Marketing allows ${TTL_LIMITS.Marketing.min}â€“${TTL_LIMITS.Marketing.max}.`
+                  : `Utility allows ${TTL_LIMITS.Utility.min}â€“${TTL_LIMITS.Utility.max}.`}{' '}
+                Use <code>-1</code> for 30 days. Useful for anything that stops
+                being true â€” a delivery slot, a one-hour discount.
+              </p>
+              {ttlProblem ? (
+                <p className="text-destructive text-xs">{ttlProblem}</p>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Body */}
+          <div className="mt-5 space-y-2">
+            <Label htmlFor="tpl-body">
+              Body
+              <RequiredMark />
+            </Label>
+            <Textarea
+              id="tpl-body"
+              rows={5}
+              value={draft.bodyText}
+              onChange={(e) => onChange({ bodyText: e.target.value })}
+              maxLength={TEMPLATE_LIMITS.bodyMaxLength}
+              placeholder="Hi {{1}}, your order {{2}} is on its way."
+              className="resize-none"
+            />
+            <p className="text-muted-foreground text-xs">
+              {draft.bodyText.length}/{TEMPLATE_LIMITS.bodyMaxLength}.{' '}
+              {isNamed ? (
+                <>
+                  Use <code>{'{{order_id}}'}</code> style names for values you
+                  fill in when sending. Lowercase letters, numbers and
+                  underscores.
+                </>
+              ) : (
+                <>
+                  Use <code>{'{{1}}'}</code>, <code>{'{{2}}'}</code> for values
+                  you fill in when sending. They must run in order with no gaps.
+                </>
+              )}
+            </p>
+
+            {/* ---- Variable format ---- */}
+            <div className="border-border bg-muted/40 flex flex-wrap items-center gap-3 rounded-lg border p-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-foreground text-xs font-medium">
+                  Variable style
+                </p>
+                <p className="text-muted-foreground mt-0.5 text-xs">
+                  Named variables read better in long messages. Meta does not
+                  allow both styles in one template, so switching means
+                  rewriting the placeholders.
+                </p>
+              </div>
+              <Select
+                value={draft.parameterFormat}
+                onValueChange={(v) =>
+                  onChange({
+                    parameterFormat: v === 'NAMED' ? 'NAMED' : 'POSITIONAL',
+                  })
+                }
+              >
+                <SelectTrigger className="w-44" aria-label="Variable style">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="POSITIONAL">{'Numbered {{1}}'}</SelectItem>
+                  <SelectItem value="NAMED">{'Named {{order_id}}'}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {mixedFormatWarning ? (
+              <p className="text-destructive text-xs">{mixedFormatWarning}</p>
+            ) : null}
+
+            {isNamed && namedParams.length > 0 ? (
+              <div className="border-border bg-muted/40 space-y-2 rounded-lg border p-3">
+                <p className="text-foreground text-xs font-medium">
+                  Example values
+                  <RequiredMark />
+                </p>
+                <p className="text-muted-foreground text-xs">
+                  Meta&apos;s reviewers read these. One per variable is
+                  required.
+                </p>
+                {namedParams.map((name) => (
+                  <div key={name} className="space-y-1">
+                    <Label className="text-muted-foreground text-xs">
+                      {`{{${name}}}`}
+                    </Label>
+                    <Input
+                      value={draft.namedSamples[name] ?? ''}
+                      onChange={(e) =>
+                        onChange({
+                          namedSamples: {
+                            ...draft.namedSamples,
+                            [name]: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder={`Example for {{${name}}}`}
+                      aria-label={`Example value for ${name}`}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {!isNamed && bodyVarCount > 0 ? (
+              <div className="border-border bg-muted/40 space-y-2 rounded-lg border p-3">
+                <p className="text-foreground text-xs font-medium">
+                  Example values
+                  <RequiredMark />
+                </p>
+                <p className="text-muted-foreground text-xs">
+                  Meta&apos;s reviewers read these to understand the message. A
+                  template with vague samples is a common rejection reason. Meta
+                  rejects a variable with no example.
+                </p>
+                {draft.bodySamples.map((val, i) => (
+                  <Input
+                    key={i}
+                    value={val}
+                    onChange={(e) => {
+                      const next = [...draft.bodySamples];
+                      next[i] = e.target.value;
+                      onChange({ bodySamples: next });
+                    }}
+                    placeholder={`Example for {{${i + 1}}}`}
+                    aria-label={`Example value for variable ${i + 1}`}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          {/* Footer */}
+          <div className="mt-5 space-y-2">
+            <Label htmlFor="tpl-footer">
+              Footer <span className="text-muted-foreground">Â· optional</span>
+            </Label>
+            <Input
+              id="tpl-footer"
+              value={draft.footerText}
+              onChange={(e) => onChange({ footerText: e.target.value })}
+              maxLength={TEMPLATE_LIMITS.footerMaxLength}
+              placeholder="Reply STOP to opt out"
+            />
+            <p className="text-muted-foreground text-xs">
+              {draft.footerText.length}/{TEMPLATE_LIMITS.footerMaxLength}.
+              Footers cannot contain variables.
+              {category === 'Marketing' &&
+                ' Marketing templates should tell people how to opt out.'}
+            </p>
+          </div>
+        </section>
+
+        {/* ---- Buttons ---- */}
+        <section className="border-border bg-card rounded-xl border p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-foreground text-base font-semibold">
+                Buttons{' '}
+                <span className="text-muted-foreground">Â· optional</span>
+              </h2>
+              {/* Meta's rule is CONTIGUITY, not ordering: quick replies must
+                form one unbroken group, which may sit before or after the
+                link/call/copy-code group. This line used to claim quick
+                replies had to come first, which is not true and would have
+                talked an operator out of a valid layout. */}
+              <p className="text-muted-foreground mt-1 text-sm">
+                Up to {TEMPLATE_LIMITS.maxButtonsTotal}. Keep quick replies
+                together as one group — before or after the link, call and
+                copy-code buttons.
+              </p>
+            </div>
+            <Select
+              value=""
+              onValueChange={(v) => {
+                if (!v) return;
+                onChange({
+                  buttons: [
+                    ...draft.buttons,
+                    emptyButton(v as TemplateButton['type']),
+                  ],
+                });
+              }}
+            >
+              <SelectTrigger
+                className="w-auto gap-2"
+                aria-label="Add a button"
+                disabled={
+                  draft.buttons.length >= TEMPLATE_LIMITS.maxButtonsTotal
+                }
+              >
+                <Plus className="size-4" />
+                Add button
+              </SelectTrigger>
+              <SelectContent>
+                {BUTTON_TYPE_LABELS.map(({ value, label }) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-        </div>
-      </section>
 
-      {/* ---- Content ---- */}
-      <section className="rounded-xl border border-border bg-card p-5">
-        <h2 className="text-base font-semibold text-foreground">Content</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Add a header, body and footer. Meta reviews the wording as well as
-          the structure, so write it as the customer will read it.
-        </p>
-
-        {/* Header */}
-        <div className="mt-4 space-y-2">
-          <Label htmlFor="tpl-header-format">
-            Header <span className="text-muted-foreground">· optional</span>
-          </Label>
-          <Select
-            value={draft.headerFormat}
-            onValueChange={(v) =>
-              onChange({
-                headerFormat: (v || 'none') as WizardDraft['headerFormat'],
-              })
-            }
-          >
-            <SelectTrigger id="tpl-header-format" className="w-full sm:w-56">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {HEADER_FORMATS.map((f) => (
-                <SelectItem key={f.value} value={f.value}>
-                  {f.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {draft.headerFormat === 'text' ? (
-            <div className="space-y-2 pt-1">
-              <Input
-                value={draft.headerContent}
-                onChange={(e) => onChange({ headerContent: e.target.value })}
-                maxLength={TEMPLATE_LIMITS.headerTextMaxLength}
-                placeholder="Order update"
-                aria-label="Header text"
-              />
-              <p className="text-xs text-muted-foreground">
-                {draft.headerContent.length}/
-                {TEMPLATE_LIMITS.headerTextMaxLength}. A text header may
-                contain at most one variable, and it must be{' '}
-                <code>{'{{1}}'}</code>.
-              </p>
-              {headerVarCount > 0 ? (
-                <Input
-                  value={draft.headerSample}
-                  onChange={(e) => onChange({ headerSample: e.target.value })}
-                  placeholder="Example value for {{1}}"
-                  aria-label="Header sample value"
-                />
-              ) : null}
-            </div>
-          ) : null}
-
-          {needsMedia ? (
-            <div className="space-y-2 pt-1">
-              <Input
-                value={draft.headerMediaUrl}
-                onChange={(e) => onChange({ headerMediaUrl: e.target.value })}
-                placeholder={`https://example.com/sample.${
-                  draft.headerFormat === 'image'
-                    ? 'jpg'
-                    : draft.headerFormat === 'video'
-                      ? 'mp4'
-                      : 'pdf'
-                }`}
-                aria-label="Header media sample URL"
-              />
-              <p className="text-xs text-muted-foreground">
-                A publicly reachable sample file. Meta downloads it during
-                review, so it must stay online until the template is approved.
-                {draft.headerFormat === 'image' && ' JPEG or PNG, up to 5 MB.'}
-                {draft.headerFormat === 'video' && ' MP4 or 3GPP, up to 16 MB.'}
-                {draft.headerFormat === 'document' && ' PDF, up to 100 MB.'}
-              </p>
-            </div>
-          ) : null}
-
-          {draft.headerFormat === 'location' ? (
-            <p className="pt-1 text-xs text-muted-foreground">
-              Nothing to fill in here. The map pin — latitude, longitude, name
-              and address — is supplied for each message when you send, which
-              is what makes it useful: one template covers every branch,
-              delivery address or meeting point.
+          {draft.buttons.length === 0 ? (
+            <p className="border-border text-muted-foreground mt-4 rounded-lg border border-dashed px-3 py-4 text-center text-sm">
+              No buttons. The message will be text only.
             </p>
-          ) : null}
-
-          {/* ---- Validity period ---- */}
-          <div className="space-y-2 border-t border-border pt-4">
-            <Label htmlFor="tpl-ttl">
-              Validity period{' '}
-              <span className="text-muted-foreground">· optional</span>
-            </Label>
-            <Input
-              id="tpl-ttl"
-              value={draft.ttlSeconds}
-              onChange={(e) =>
-                onChange({ ttlSeconds: e.target.value.replace(/[^\d-]/g, '') })
-              }
-              placeholder={`Blank = Meta's default`}
-              className="w-full sm:w-56"
-              inputMode="numeric"
-            />
-            <p className="text-xs text-muted-foreground">
-              How long WhatsApp keeps retrying before giving up, in seconds.{' '}
-              {category === 'Marketing'
-                ? `Marketing allows ${TTL_LIMITS.Marketing.min}–${TTL_LIMITS.Marketing.max}.`
-                : `Utility allows ${TTL_LIMITS.Utility.min}–${TTL_LIMITS.Utility.max}.`}{' '}
-              Use <code>-1</code> for 30 days. Useful for anything that stops
-              being true — a delivery slot, a one-hour discount.
-            </p>
-            {ttlProblem ? (
-              <p className="text-xs text-destructive">{ttlProblem}</p>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Body */}
-        <div className="mt-5 space-y-2">
-          <Label htmlFor="tpl-body">Body</Label>
-          <Textarea
-            id="tpl-body"
-            rows={5}
-            value={draft.bodyText}
-            onChange={(e) => onChange({ bodyText: e.target.value })}
-            maxLength={TEMPLATE_LIMITS.bodyMaxLength}
-            placeholder="Hi {{1}}, your order {{2}} is on its way."
-            className="resize-none"
-          />
-          <p className="text-xs text-muted-foreground">
-            {draft.bodyText.length}/{TEMPLATE_LIMITS.bodyMaxLength}.{' '}
-            {isNamed ? (
-              <>
-                Use <code>{'{{order_id}}'}</code> style names for values you
-                fill in when sending. Lowercase letters, numbers and
-                underscores.
-              </>
-            ) : (
-              <>
-                Use <code>{'{{1}}'}</code>, <code>{'{{2}}'}</code> for values
-                you fill in when sending. They must run in order with no gaps.
-              </>
-            )}
-          </p>
-
-          {/* ---- Variable format ---- */}
-          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-muted/40 p-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-foreground">
-                Variable style
-              </p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Named variables read better in long messages. Meta does not
-                allow both styles in one template, so switching means
-                rewriting the placeholders.
-              </p>
-            </div>
-            <Select
-              value={draft.parameterFormat}
-              onValueChange={(v) =>
-                onChange({
-                  parameterFormat:
-                    v === 'NAMED' ? 'NAMED' : 'POSITIONAL',
-                })
-              }
-            >
-              <SelectTrigger className="w-44" aria-label="Variable style">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="POSITIONAL">{'Numbered {{1}}'}</SelectItem>
-                <SelectItem value="NAMED">{'Named {{order_id}}'}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {mixedFormatWarning ? (
-            <p className="text-xs text-destructive">{mixedFormatWarning}</p>
-          ) : null}
-
-          {isNamed && namedParams.length > 0 ? (
-            <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
-              <p className="text-xs font-medium text-foreground">
-                Example values
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Meta&apos;s reviewers read these. One per variable is required.
-              </p>
-              {namedParams.map((name) => (
-                <div key={name} className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">
-                    {`{{${name}}}`}
-                  </Label>
-                  <Input
-                    value={draft.namedSamples[name] ?? ''}
-                    onChange={(e) =>
-                      onChange({
-                        namedSamples: {
-                          ...draft.namedSamples,
-                          [name]: e.target.value,
-                        },
-                      })
-                    }
-                    placeholder={`Example for {{${name}}}`}
-                    aria-label={`Example value for ${name}`}
-                  />
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          {!isNamed && bodyVarCount > 0 ? (
-            <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
-              <p className="text-xs font-medium text-foreground">
-                Example values
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Meta&apos;s reviewers read these to understand the message. A
-                template with vague samples is a common rejection reason.
-              </p>
-              {draft.bodySamples.map((val, i) => (
-                <Input
+          ) : (
+            <div className="mt-4 space-y-3">
+              {draft.buttons.map((btn, i) => (
+                <div
                   key={i}
-                  value={val}
-                  onChange={(e) => {
-                    const next = [...draft.bodySamples];
-                    next[i] = e.target.value;
-                    onChange({ bodySamples: next });
-                  }}
-                  placeholder={`Example for {{${i + 1}}}`}
-                  aria-label={`Example value for variable ${i + 1}`}
-                />
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        {/* Footer */}
-        <div className="mt-5 space-y-2">
-          <Label htmlFor="tpl-footer">
-            Footer <span className="text-muted-foreground">· optional</span>
-          </Label>
-          <Input
-            id="tpl-footer"
-            value={draft.footerText}
-            onChange={(e) => onChange({ footerText: e.target.value })}
-            maxLength={TEMPLATE_LIMITS.footerMaxLength}
-            placeholder="Reply STOP to opt out"
-          />
-          <p className="text-xs text-muted-foreground">
-            {draft.footerText.length}/{TEMPLATE_LIMITS.footerMaxLength}. Footers
-            cannot contain variables.
-            {category === 'Marketing' &&
-              ' Marketing templates should tell people how to opt out.'}
-          </p>
-        </div>
-      </section>
-
-      {/* ---- Buttons ---- */}
-      <section className="rounded-xl border border-border bg-card p-5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-base font-semibold text-foreground">
-              Buttons <span className="text-muted-foreground">· optional</span>
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Up to {TEMPLATE_LIMITS.maxButtonsTotal}. Quick replies must come
-              before link, call and copy-code buttons.
-            </p>
-          </div>
-          <Select
-            value=""
-            onValueChange={(v) => {
-              if (!v) return;
-              onChange({
-                buttons: [
-                  ...draft.buttons,
-                  emptyButton(v as TemplateButton['type']),
-                ],
-              });
-            }}
-          >
-            <SelectTrigger
-              className="w-auto gap-2"
-              aria-label="Add a button"
-              disabled={draft.buttons.length >= TEMPLATE_LIMITS.maxButtonsTotal}
-            >
-              <Plus className="size-4" />
-              Add button
-            </SelectTrigger>
-            <SelectContent>
-              {BUTTON_TYPE_LABELS.map(({ value, label }) => (
-                <SelectItem key={value} value={value}>
-                  {label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {draft.buttons.length === 0 ? (
-          <p className="mt-4 rounded-lg border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
-            No buttons. The message will be text only.
-          </p>
-        ) : (
-          <div className="mt-4 space-y-3">
-            {draft.buttons.map((btn, i) => (
-              <div
-                key={i}
-                className="space-y-2 rounded-lg border border-border p-3"
-              >
-                <div className="flex items-center gap-2">
-                  {/* Read from the same list the add-menu uses. This was a
+                  className="border-border space-y-2 rounded-lg border p-3"
+                >
+                  <div className="flex items-center gap-2">
+                    {/* Read from the same list the add-menu uses. This was a
                       ternary chain whose final `else` said "Copy offer
                       code", so any button type it did not know about was
                       shown under the wrong name. */}
-                  <span className="text-xs font-semibold text-muted-foreground">
-                    {buttonTypeLabel(btn.type)}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="ml-auto size-7"
-                    onClick={() =>
-                      onChange({
-                        buttons: draft.buttons.filter((_, idx) => idx !== i),
-                      })
-                    }
-                    aria-label={`Remove button ${i + 1}`}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </Button>
-                </div>
+                    <span className="text-muted-foreground text-xs font-semibold">
+                      {buttonTypeLabel(btn.type)}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="ml-auto size-7"
+                      onClick={() =>
+                        onChange({
+                          buttons: draft.buttons.filter((_, idx) => idx !== i),
+                        })
+                      }
+                      aria-label={`Remove button ${i + 1}`}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
 
-                <Input
-                  value={btn.text}
-                  onChange={(e) => updateButton(i, { text: e.target.value })}
-                  maxLength={TEMPLATE_LIMITS.buttonTextMaxLength}
-                  placeholder="Button label"
-                  aria-label={`Button ${i + 1} label`}
-                />
+                  <Input
+                    value={btn.text}
+                    onChange={(e) => updateButton(i, { text: e.target.value })}
+                    maxLength={TEMPLATE_LIMITS.buttonTextMaxLength}
+                    placeholder="Button label"
+                    aria-label={`Button ${i + 1} label`}
+                  />
 
-                {btn.type === 'URL' ? (
-                  <>
-                    <Input
-                      value={btn.url}
-                      onChange={(e) => updateButton(i, { url: e.target.value })}
-                      placeholder="https://example.com/track/{{1}}"
-                      aria-label={`Button ${i + 1} URL`}
-                    />
-                    {extractVariableIndices(btn.url).length > 0 ? (
+                  {btn.type === 'URL' ? (
+                    <>
                       <Input
-                        value={btn.example ?? ''}
+                        value={btn.url}
                         onChange={(e) =>
-                          updateButton(i, { example: e.target.value })
+                          updateButton(i, { url: e.target.value })
                         }
-                        placeholder="Example value for the URL variable"
-                        aria-label={`Button ${i + 1} URL example`}
+                        placeholder="https://example.com/track/{{1}}"
+                        aria-label={`Button ${i + 1} URL`}
                       />
-                    ) : null}
-                  </>
-                ) : null}
+                      {extractVariableIndices(btn.url).length > 0 ? (
+                        <Input
+                          value={btn.example ?? ''}
+                          onChange={(e) =>
+                            updateButton(i, { example: e.target.value })
+                          }
+                          placeholder="Example value for the URL variable"
+                          aria-label={`Button ${i + 1} URL example`}
+                        />
+                      ) : null}
+                    </>
+                  ) : null}
 
-                {btn.type === 'PHONE_NUMBER' ? (
-                  <Input
-                    value={btn.phone_number}
-                    onChange={(e) =>
-                      updateButton(i, { phone_number: e.target.value })
-                    }
-                    placeholder="+911234567890"
-                    aria-label={`Button ${i + 1} phone number`}
-                  />
-                ) : null}
+                  {btn.type === 'PHONE_NUMBER' ? (
+                    <Input
+                      value={btn.phone_number}
+                      onChange={(e) =>
+                        updateButton(i, { phone_number: e.target.value })
+                      }
+                      placeholder="+911234567890"
+                      aria-label={`Button ${i + 1} phone number`}
+                    />
+                  ) : null}
 
-                {btn.type === 'COPY_CODE' ? (
-                  <Input
-                    value={btn.example}
-                    onChange={(e) =>
-                      updateButton(i, { example: e.target.value })
-                    }
-                    placeholder="SAVE20"
-                    aria-label={`Button ${i + 1} offer code`}
-                  />
-                ) : null}
+                  {btn.type === 'COPY_CODE' ? (
+                    <Input
+                      value={btn.example}
+                      onChange={(e) =>
+                        updateButton(i, { example: e.target.value })
+                      }
+                      placeholder="SAVE20"
+                      aria-label={`Button ${i + 1} offer code`}
+                    />
+                  ) : null}
 
-                {/* Nothing to configure — the call goes to this WABA's own
+                  {/* Nothing to configure â€” the call goes to this WABA's own
                     number. Worth saying that it needs calling switched on,
                     because Meta approves the template either way and the
                     button then silently does nothing. */}
-                {btn.type === 'VOICE_CALL' ? (
-                  <p className="text-xs text-muted-foreground">
-                    Calls your WhatsApp number — there is nothing to fill in.
-                    Needs WhatsApp calling enabled on the number in WhatsApp
-                    Manager, or the button will do nothing once approved.
-                  </p>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+                  {btn.type === 'VOICE_CALL' ? (
+                    <p className="text-muted-foreground text-xs">
+                      Calls your WhatsApp number â€” there is nothing to fill
+                      in. Needs WhatsApp calling enabled on the number in
+                      WhatsApp Manager, or the button will do nothing once
+                      approved.
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* ---- Opt-out compliance (Marketing only) ---- */}
+        <OptOutGuidance
+          category={category}
+          buttons={draft.buttons}
+          bodyText={draft.bodyText}
+          footerText={draft.footerText}
+          onButtonsChange={(next) => onChange({ buttons: next })}
+        />
       </div>
 
       {/* ---- Live preview ---- */}
       <aside className="lg:sticky lg:top-4 lg:self-start">
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground">
+        <div className="border-border bg-card rounded-xl border p-5">
+          <h3 className="text-foreground text-sm font-semibold">
             Template preview
           </h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <p className="text-muted-foreground mt-0.5 text-xs">
             How this looks in WhatsApp as you type.
           </p>
 
@@ -675,12 +731,12 @@ export function WizardStepContent({
             className="mt-3"
           />
 
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
             Highlighted values like{' '}
-            <span className="rounded bg-primary/15 px-1 font-medium text-primary">
+            <span className="bg-primary/15 text-primary rounded px-1 font-medium">
               {'{{1}}'}
             </span>{' '}
-            have no example yet — fill one in above and it will appear here.
+            have no example yet â€” fill one in above and it will appear here.
           </p>
 
           {draft.buttons.length > 3 ? (

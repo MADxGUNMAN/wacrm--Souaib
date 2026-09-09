@@ -37,12 +37,14 @@ import {
   Check,
   Loader2,
   MessageSquare,
+  ShieldCheck,
   Sparkles,
   TriangleAlert,
 } from 'lucide-react';
 
 import { UpgradeHeader } from '@/components/billing/upgrade-header';
 import { useSubscription } from '@/hooks/use-subscription';
+import { createClient } from '@/lib/supabase/client';
 import { formatCurrency } from '@/lib/currency';
 import {
   deriveDaySavings,
@@ -53,6 +55,7 @@ import {
   toAmount,
   visibleCycles,
 } from '@/lib/subscription/plans';
+import { formatTrialBadge } from '@/lib/subscription/status';
 import type { BillingCycle, PlansBundle } from '@/lib/subscription/types';
 import { cn } from '@/lib/utils';
 
@@ -68,14 +71,134 @@ interface CycleOffer {
   savings: number | null;
 }
 
+function formatCoverageDate(value: string | null): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(d);
+}
+
+/**
+ * "You already have access until X — buying now adds time on top."
+ *
+ * Renders only when there is genuinely something to reassure the
+ * customer about. Silent for a blocked account (the destructive notice
+ * above already owns that case and two stacked banners would bury the
+ * pricing) and silent when there is no window at all.
+ */
+function CurrentCoverageNotice({
+  subscription,
+}: {
+  subscription: ReturnType<typeof useSubscription>['data'];
+}) {
+  if (!subscription) return null;
+  const { state, subscription: plan } = subscription;
+  if (state.isBlocked || state.billingDisabled) return null;
+
+  // Silent on a first visit, when the customer has not chosen a plan yet.
+  // The trigger grants the trial at signup, so the account is technically
+  // already trialing the moment they arrive — but telling them "you are
+  // on a free trial, access runs to Sep 8" before they have picked
+  // anything reads as "this is settled, nothing to do here", which is the
+  // opposite of what the page is asking. It reappears on later visits,
+  // when they really are extending live coverage.
+  if (subscription.planSelectionRequired) return null;
+
+  const queued = state.pendingWindow;
+  // A queued window always outlives the current one, so it is the real
+  // end of coverage whenever it exists.
+  const accessUntil = formatCoverageDate(queued?.endsAt ?? state.endsAt);
+  if (!accessUntil) return null;
+
+  const paidQueued = queued?.type === 'active';
+  const paidLabel =
+    [plan?.planName, plan?.cycleLabel].filter(Boolean).join(' · ') ||
+    'your plan';
+
+  return (
+    <div className="mx-auto mt-6 max-w-xl rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] px-4 py-3">
+      <p className="text-foreground flex items-start justify-center gap-2 text-sm">
+        <Check className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+        <span>
+          {paidQueued ? (
+            <>
+              <span className="font-medium">{paidLabel}</span> is already paid
+              for and starts {formatCoverageDate(queued.startsAt)}.
+            </>
+          ) : state.isActive ? (
+            <>
+              You are on <span className="font-medium">{paidLabel}</span>.
+            </>
+          ) : (
+            <>You are on a free trial.</>
+          )}{' '}
+          <span className="text-muted-foreground">
+            Access runs to {accessUntil}.
+          </span>
+        </span>
+      </p>
+      {/* The point of the whole notice. Renewing early is safe, and
+          nobody should have to take that on faith. */}
+      <p className="text-muted-foreground mt-1.5 text-center text-xs">
+        Buying now does not replace it — the new term is added on top, starting{' '}
+        {accessUntil}.
+      </p>
+    </div>
+  );
+}
+
 export default function UpgradePlanPage() {
   const router = useRouter();
-  const { data: subscription } = useSubscription();
+  // `refresh` matters on the trial path: the shell shares one snapshot,
+  // and if it still says a plan choice is outstanding the dashboard will
+  // bounce straight back here.
+  const { data: subscription, refresh } = useSubscription();
 
   const [bundle, setBundle] = useState<PlansBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cycleId, setCycleId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+
+    // 1. Check session immediately on mount
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        window.location.replace('/login');
+      }
+    });
+
+    // 2. Listen to auth state transitions (e.g. sign-out in this or another tab)
+    const {
+      data: { subscription: authSub },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT' || !session) {
+        window.location.replace('/login');
+      }
+    });
+
+    // 3. Handle Back-Forward Cache (bfcache) restorations when navigating back
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        void supabase.auth.getSession().then(({ data: { session } }) => {
+          if (!session) {
+            window.location.replace('/login');
+          }
+        });
+      }
+    };
+
+    window.addEventListener('pageshow', handlePageShow);
+    return () => {
+      authSub.unsubscribe();
+      window.removeEventListener('pageshow', handlePageShow);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -84,6 +207,10 @@ export default function UpgradePlanPage() {
       try {
         const res = await fetch('/api/billing/plans', { cache: 'no-store' });
         if (!res.ok) {
+          if (res.status === 401) {
+            window.location.replace('/login');
+            return;
+          }
           const body = await res.json().catch(() => ({}));
           throw new Error(body?.error ?? 'Could not load plans');
         }
@@ -122,18 +249,85 @@ export default function UpgradePlanPage() {
   const settings = bundle?.settings;
   const currency = settings?.currency ?? 'INR';
 
+  /**
+   * Should the trial be offered on this visit?
+   *
+   * Three things all have to hold, and each rules out a case where the
+   * button would be a lie:
+   *
+   *   show_trial_badges  the operator has the trial flow switched on
+   *   trial_days > 0     there is actually a trial to give
+   *   !isBlocked         their trial (or plan) has already run out — the
+   *                      only way forward now is to pay, so offering to
+   *                      "start with trial" would be a dead end
+   *
+   * `hasPaidCoverage` is checked too: someone who already paid is
+   * extending a plan, not starting a trial.
+   */
+  const trialDays = settings?.trial_days ?? 0;
+  const hasPaidCoverage =
+    subscription?.state.isActive === true ||
+    subscription?.state.pendingWindow?.type === 'active';
+  const showTrialOffer =
+    settings?.show_trial_badges === true &&
+    trialDays > 0 &&
+    !subscription?.state.isBlocked &&
+    !subscription?.state.billingDisabled &&
+    !hasPaidCoverage;
+
+  /**
+   * Badge text, `{days}` filled from `trial_days`.
+   *
+   * Substituted here rather than stored literal so the card can never
+   * advertise a 14-day trial while the panel two tabs away grants 7.
+   */
+  const trialBadge = formatTrialBadge(
+    settings?.trial_badge_template ?? '{days} days free trial',
+    trialDays
+  );
+  const noCardLabel =
+    settings?.no_card_label ?? 'No card or payment required';
+
+  /**
+   * The escape hatch back into the CRM — or the deliberate absence of one.
+   *
+   * Withheld in two cases, both because the link would be a trap that
+   * Proxy bounces straight back here:
+   *
+   *   isBlocked              access has lapsed; there is nothing to go
+   *                          back to until they pay
+   *   planSelectionRequired  a first visit. The choice IS the gate, so
+   *                          "Back to dashboard" would sidestep the one
+   *                          thing this page exists to collect, and land
+   *                          the user in a redirect loop.
+   *
+   * Waits for `subscription` to resolve rather than defaulting to shown:
+   * on a first visit the link would be dead for exactly as long as it was
+   * visible, and flashing it then yanking it away is worse than having it
+   * arrive a beat late.
+   *
+   * "Start with trial" is the real way past this page, and it sits next
+   * to Continue where a decision belongs — not in the corner.
+   */
+  const backButton =
+    subscription &&
+    !subscription.state.isBlocked &&
+    !subscription.planSelectionRequired
+      ? { href: '/dashboard', label: 'Back to dashboard' }
+      : null;
+
   /** The product being sold. See the invariant in the file header. */
   const plan = useMemo(
     () =>
       bundle?.plans
         .filter((p) => p.is_visible)
         .sort((a, b) => a.position - b.position)[0] ?? null,
-    [bundle],
+    [bundle]
   );
 
   const features = useMemo(
     () => (plan ? normalisePlanFeatures(plan.features) : []),
-    [plan],
+    [plan]
   );
 
   /**
@@ -145,7 +339,7 @@ export default function UpgradePlanPage() {
    */
   const customFeatures = useMemo(
     () => normalisePlanFeatures(settings?.custom_plan_features),
-    [settings?.custom_plan_features],
+    [settings?.custom_plan_features]
   );
 
   /**
@@ -178,7 +372,7 @@ export default function UpgradePlanPage() {
 
     const baseline = priced.reduce<number | null>(
       (max, o) => (max === null || o.perDay > max ? o.perDay : max),
-      null,
+      null
     );
 
     return priced.map((o) => ({
@@ -204,20 +398,85 @@ export default function UpgradePlanPage() {
 
   const selected = useMemo(
     () => offers.find((o) => o.cycle.id === cycleId) ?? null,
-    [offers, cycleId],
+    [offers, cycleId]
   );
 
-  const handleContinue = useCallback(() => {
-    if (!selected || !plan) return;
-    router.push(
-      `/upgrade-plan/payment?plan=${encodeURIComponent(plan.id)}&cycle=${encodeURIComponent(selected.cycle.id)}`,
-    );
-  }, [selected, plan, router]);
+  /**
+   * Persist the choice, then go wherever the caller asked.
+   *
+   * Both CTAs route through here because in BOTH cases we now know what
+   * the customer wants, and remembering it is what makes the rest of the
+   * flow work:
+   *
+   *   - "Start with trial" needs it so that when the trial lapses we can
+   *     send them to the term they picked instead of a fresh price list.
+   *   - "Continue to payment" needs it so an abandoned checkout is
+   *     recoverable, and so Billing can show an unpaid upcoming plan.
+   *
+   * It also clears `plan_selection_required`, which is what releases a
+   * new signup into the CRM.
+   *
+   * A save failure on the PAY path is deliberately NOT fatal: the payment
+   * screen prices itself from the query params, so the customer can still
+   * pay. Blocking a purchase because a convenience column would not write
+   * is the wrong trade. On the TRIAL path it IS fatal — without the saved
+   * flag the proxy would bounce them straight back here, which would look
+   * like the button did nothing.
+   */
+  const [saving, setSaving] = useState<'pay' | 'trial' | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const choosePlan = useCallback(
+    async (intent: 'pay' | 'trial') => {
+      if (!selected || !plan || saving) return;
+      setSaving(intent);
+      setSaveError(null);
+
+      const paymentHref = `/upgrade-plan/payment?plan=${encodeURIComponent(plan.id)}&cycle=${encodeURIComponent(selected.cycle.id)}`;
+
+      let saved = false;
+      try {
+        const res = await fetch('/api/billing/select-plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ planId: plan.id, cycleId: selected.cycle.id }),
+        });
+        saved = res.ok;
+        if (!res.ok && intent === 'trial') {
+          const body = await res.json().catch(() => ({}));
+          setSaveError(
+            body?.error ?? 'Could not start your trial. Please try again.'
+          );
+          setSaving(null);
+          return;
+        }
+      } catch {
+        if (intent === 'trial') {
+          setSaveError('Could not reach the server. Please try again.');
+          setSaving(null);
+          return;
+        }
+      }
+
+      if (intent === 'pay') {
+        router.push(paymentHref);
+        return;
+      }
+
+      // Trial: straight into the CRM. `refresh()` first so the shell's
+      // shared snapshot no longer says a plan choice is outstanding —
+      // without it the dashboard would render against stale state that
+      // still wants to redirect here.
+      if (saved) await refresh();
+      router.push('/dashboard');
+    },
+    [selected, plan, saving, router, refresh]
+  );
 
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="size-7 animate-spin text-primary" />
+        <Loader2 className="text-primary size-7 animate-spin" />
       </div>
     );
   }
@@ -225,16 +484,10 @@ export default function UpgradePlanPage() {
   if (error) {
     return (
       <>
-        <UpgradeHeader 
-          backButton={
-            !subscription?.state.isBlocked 
-              ? { href: '/dashboard', label: 'Back to dashboard' } 
-              : null
-          } 
-        />
+        <UpgradeHeader backButton={backButton} />
         <div className="mx-auto max-w-md px-4 py-20 text-center">
-          <TriangleAlert className="mx-auto size-8 text-destructive" />
-          <p className="mt-4 text-sm text-destructive">{error}</p>
+          <TriangleAlert className="text-destructive mx-auto size-8" />
+          <p className="text-destructive mt-4 text-sm">{error}</p>
         </div>
       </>
     );
@@ -247,43 +500,49 @@ export default function UpgradePlanPage() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <UpgradeHeader 
-        backButton={
-          !subscription?.state.isBlocked 
-            ? { href: '/dashboard', label: 'Back to dashboard' } 
-            : null
-        } 
-      />
+      <UpgradeHeader backButton={backButton} />
 
       {/* pb-32 clears the sticky summary bar. */}
       <main className="flex-1 px-4 pb-32 sm:px-6">
         <div className="mx-auto max-w-6xl">
           {/* ---- Heading ---- */}
           <div className="pt-6 pb-10 text-center sm:pt-12">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-4xl">
+            <h1 className="text-foreground text-2xl font-bold tracking-tight sm:text-4xl">
               {settings?.page_heading ?? 'Choose your plan'}
             </h1>
             {settings?.page_subheading ? (
-              <p className="mx-auto mt-3 max-w-2xl text-sm text-muted-foreground sm:text-base">
+              <p className="text-muted-foreground mx-auto mt-3 max-w-2xl text-sm sm:text-base">
                 {settings.page_subheading}
               </p>
             ) : null}
 
             {subscription?.state.isBlocked ? (
-              <div className="mx-auto mt-6 inline-flex items-center gap-2 rounded-full border border-destructive/25 bg-destructive/[0.07] px-4 py-1.5">
-                <TriangleAlert className="size-3.5 text-destructive" />
-                <span className="text-sm font-medium text-destructive">
+              <div className="border-destructive/25 bg-destructive/[0.07] mx-auto mt-6 inline-flex items-center gap-2 rounded-full border px-4 py-1.5">
+                <TriangleAlert className="text-destructive size-3.5" />
+                <span className="text-destructive text-sm font-medium">
                   {subscription.copy.expiredHeading ??
                     'Your access has ended. Choose a plan to continue.'}
                 </span>
               </div>
             ) : null}
+
+            {/* ---- What you already have ----
+                This page previously said nothing about existing coverage,
+                which is a money problem rather than a cosmetic one: a
+                customer who had already paid saw a bare pricing grid with
+                no acknowledgement of it, and the obvious reading of that
+                is "my payment didn't register". The genuinely reassuring
+                fact — that buying again EXTENDS from the end of what they
+                already hold rather than replacing it — is what
+                `activateSubscription` actually does, and it was never
+                stated anywhere the customer could see. */}
+            <CurrentCoverageNotice subscription={subscription} />
           </div>
 
           {/* ---- Cards ---- */}
           {offers.length === 0 ? (
-            <div className="mx-auto max-w-md rounded-xl border border-border bg-card p-6 text-center">
-              <p className="text-sm text-muted-foreground">
+            <div className="border-border bg-card mx-auto max-w-md rounded-xl border p-6 text-center">
+              <p className="text-muted-foreground text-sm">
                 No plans are available right now. Please contact support.
               </p>
             </div>
@@ -292,10 +551,10 @@ export default function UpgradePlanPage() {
               role="radiogroup"
               aria-label="Billing term"
               className={cn(
-                'grid gap-5 w-full items-start',
+                'grid w-full items-start gap-5',
                 columns >= 3
                   ? 'md:grid-cols-2 lg:grid-cols-3 lg:grid-rows-[auto_1fr]'
-                  : 'sm:grid-cols-2',
+                  : 'sm:grid-cols-2'
               )}
             >
               {offers.map((offer, index) => {
@@ -311,26 +570,30 @@ export default function UpgradePlanPage() {
                     aria-checked={isSelected}
                     onClick={() => setCycleId(offer.cycle.id)}
                     className={cn(
-                      'relative flex flex-col h-full rounded-2xl border bg-card p-6 text-left transition-all',
+                      'bg-card relative flex h-full flex-col rounded-2xl border p-6 text-left transition-all',
                       isSelected
                         ? 'border-primary shadow-[0_0_0_1px_var(--color-primary)]'
                         : 'border-border hover:border-primary/40',
                       // Lift the recommended card so the eye lands on it
                       // before reading any prices.
                       offer.cycle.is_recommended ? 'sm:-mt-2 sm:pb-8' : '',
-                      columns >= 3 && index === 0 ? "lg:col-start-1 lg:row-start-1" : "",
-                      columns >= 3 && index === 1 ? "lg:col-start-2 lg:row-start-1" : ""
+                      columns >= 3 && index === 0
+                        ? 'lg:col-start-1 lg:row-start-1'
+                        : '',
+                      columns >= 3 && index === 1
+                        ? 'lg:col-start-2 lg:row-start-1'
+                        : ''
                     )}
                   >
                     {recommended ? (
-                      <span className="absolute -top-3 left-6 inline-flex items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-[11px] font-bold tracking-wide text-primary-foreground uppercase">
+                      <span className="bg-primary text-primary-foreground absolute -top-3 left-6 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide uppercase">
                         <Sparkles className="size-3" />
                         {offer.cycle.recommended_label}
                       </span>
                     ) : null}
 
                     <div className="flex items-start justify-between gap-3">
-                      <h2 className="text-lg font-bold tracking-tight text-foreground">
+                      <h2 className="text-foreground text-lg font-bold tracking-tight">
                         {offer.cycle.label}
                       </h2>
                       <span
@@ -339,12 +602,12 @@ export default function UpgradePlanPage() {
                           'mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors',
                           isSelected
                             ? 'border-primary bg-primary'
-                            : 'border-border bg-transparent',
+                            : 'border-border bg-transparent'
                         )}
                       >
                         {isSelected ? (
                           <Check
-                            className="size-3 text-primary-foreground"
+                            className="text-primary-foreground size-3"
                             strokeWidth={3}
                           />
                         ) : null}
@@ -355,14 +618,14 @@ export default function UpgradePlanPage() {
                         directly under it so nothing is obscured. */}
                     <div className="mt-5">
                       <div className="flex items-baseline gap-1.5">
-                        <span className="text-4xl font-bold tracking-tight text-foreground">
+                        <span className="text-foreground text-4xl font-bold tracking-tight">
                           {formatCurrency(offer.perDay, currency)}
                         </span>
-                        <span className="text-sm font-medium text-muted-foreground">
+                        <span className="text-muted-foreground text-sm font-medium">
                           {settings?.per_day_label ?? '/ day'}
                         </span>
                       </div>
-                      <p className="mt-1.5 text-sm text-muted-foreground">
+                      <p className="text-muted-foreground mt-1.5 text-sm">
                         {formatPriceEquals(settings?.price_equals_template, {
                           total: formatCurrency(offer.total, currency),
                           days: offer.days,
@@ -378,6 +641,29 @@ export default function UpgradePlanPage() {
                     ) : (
                       <div className="mt-4 h-6" /> // spacer to keep cards aligned
                     )}
+
+                    {/* ---- What choosing this actually commits you to ----
+                        Sits at the FOOT of the card, under the price, because
+                        that is the moment the question "am I about to be
+                        charged?" occurs. `mt-auto` pins it to the bottom so
+                        the two cards' badges line up even when one has a
+                        savings pill and the other does not.
+
+                        The trial length is substituted from `trial_days`
+                        rather than written into the copy, so this can never
+                        contradict the trial an account actually receives. */}
+                    {showTrialOffer ? (
+                      <div className="border-border/70 mt-auto space-y-1.5 border-t pt-4">
+                        <p className="text-foreground flex items-center gap-1.5 text-xs font-semibold">
+                          <Sparkles className="size-3.5 shrink-0 text-emerald-500" />
+                          {trialBadge}
+                        </p>
+                        <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+                          <ShieldCheck className="size-3.5 shrink-0" />
+                          {noCardLabel}
+                        </p>
+                      </div>
+                    ) : null}
                   </button>
                 );
               })}
@@ -389,25 +675,27 @@ export default function UpgradePlanPage() {
                 <a
                   href={settings?.custom_plan_cta_link ?? '/contact'}
                   className={cn(
-                    "group flex flex-col rounded-2xl border border-dashed border-border bg-card/60 p-6 text-left transition-colors hover:border-primary/40 h-fit self-start sticky top-24",
-                    columns >= 3 ? "lg:col-start-3 lg:row-start-1 lg:row-span-2" : ""
+                    'group border-border bg-card/60 hover:border-primary/40 sticky top-24 flex h-fit flex-col self-start rounded-2xl border border-dashed p-6 text-left transition-colors',
+                    columns >= 3
+                      ? 'lg:col-start-3 lg:row-span-2 lg:row-start-1'
+                      : ''
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <h2 className="text-lg font-bold tracking-tight text-foreground">
+                    <h2 className="text-foreground text-lg font-bold tracking-tight">
                       {settings?.custom_plan_label ?? 'Custom'}
                     </h2>
-                    <MessageSquare className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+                    <MessageSquare className="text-muted-foreground mt-0.5 size-5 shrink-0" />
                   </div>
 
                   <div className="mt-5">
-                    <span className="text-3xl font-bold tracking-tight text-foreground">
+                    <span className="text-foreground text-3xl font-bold tracking-tight">
                       {settings?.custom_plan_price_text ?? "Let's talk"}
                     </span>
                   </div>
 
                   {settings?.custom_plan_body ? (
-                    <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                    <p className="text-muted-foreground mt-3 text-sm leading-relaxed">
                       {settings.custom_plan_body}
                     </p>
                   ) : null}
@@ -416,9 +704,9 @@ export default function UpgradePlanPage() {
                     <ul className="mt-4 space-y-2">
                       {customFeatures.map((feature, i) => (
                         <li key={i} className="flex items-start gap-2.5">
-                          <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/12">
+                          <span className="bg-primary/12 mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full">
                             <Check
-                              className="size-2.5 text-primary"
+                              className="text-primary size-2.5"
                               strokeWidth={3.5}
                             />
                           </span>
@@ -426,8 +714,8 @@ export default function UpgradePlanPage() {
                             className={cn(
                               'text-sm leading-snug',
                               feature.emphasis
-                                ? 'font-semibold text-foreground'
-                                : 'text-muted-foreground',
+                                ? 'text-foreground font-semibold'
+                                : 'text-muted-foreground'
                             )}
                           >
                             {feature.label}
@@ -437,7 +725,7 @@ export default function UpgradePlanPage() {
                     </ul>
                   ) : null}
 
-                  <span className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-primary">
+                  <span className="text-primary mt-5 inline-flex items-center gap-1.5 text-sm font-semibold">
                     {settings?.custom_plan_cta_text ?? 'Talk to sales'}
                     <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
                   </span>
@@ -449,38 +737,46 @@ export default function UpgradePlanPage() {
                   includes all of it. Duplicating it per card would invite the
                   three copies to drift apart. */}
               {features.length > 0 ? (
-                <section className={cn(
-                  "rounded-2xl border border-border bg-card p-6 sm:p-8 flex flex-col h-full",
-                  columns >= 3 ? "lg:col-span-2 lg:col-start-1 lg:row-start-2 mt-0" : "mt-14 col-span-full"
-                )}>
+                <section
+                  className={cn(
+                    'border-border bg-card flex h-full flex-col rounded-2xl border p-6 sm:p-8',
+                    columns >= 3
+                      ? 'mt-0 lg:col-span-2 lg:col-start-1 lg:row-start-2'
+                      : 'col-span-full mt-14'
+                  )}
+                >
                   <div className="text-center">
-                    <h2 className="text-lg font-bold tracking-tight text-foreground sm:text-xl">
-                      {settings?.features_heading ?? 'Every plan includes everything'}
+                    <h2 className="text-foreground text-lg font-bold tracking-tight sm:text-xl">
+                      {settings?.features_heading ??
+                        'Every plan includes everything'}
                     </h2>
-                    <p className="mx-auto mt-2 max-w-2xl text-sm text-muted-foreground">
+                    <p className="text-muted-foreground mx-auto mt-2 max-w-2xl text-sm">
                       {settings?.features_subheading ??
                         'No feature gates and no add-ons. Monthly and yearly differ only in price.'}
                     </p>
                   </div>
 
-                  <ul className="mt-7 grid gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-2 flex-1">
-                {features.map((feature, i) => (
-                  <li key={i} className="flex items-start gap-2.5">
-                    <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/12">
-                      <Check className="size-2.5 text-primary" strokeWidth={3.5} />
-                    </span>
-                    <span
-                      className={cn(
-                        'text-sm leading-snug',
-                        feature.emphasis
-                          ? 'font-semibold text-foreground'
-                          : 'text-muted-foreground',
-                      )}
-                    >
-                      {feature.label}
-                    </span>
-                  </li>
-                ))}
+                  <ul className="mt-7 grid flex-1 gap-x-8 gap-y-3 sm:grid-cols-2 lg:grid-cols-2">
+                    {features.map((feature, i) => (
+                      <li key={i} className="flex items-start gap-2.5">
+                        <span className="bg-primary/12 mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full">
+                          <Check
+                            className="text-primary size-2.5"
+                            strokeWidth={3.5}
+                          />
+                        </span>
+                        <span
+                          className={cn(
+                            'text-sm leading-snug',
+                            feature.emphasis
+                              ? 'text-foreground font-semibold'
+                              : 'text-muted-foreground'
+                          )}
+                        >
+                          {feature.label}
+                        </span>
+                      </li>
+                    ))}
                   </ul>
                 </section>
               ) : null}
@@ -491,16 +787,16 @@ export default function UpgradePlanPage() {
 
       {/* ---- Sticky summary bar ---- */}
       {selected && plan ? (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card/95 backdrop-blur supports-backdrop-filter:bg-card/80">
+        <div className="border-border bg-card/95 supports-backdrop-filter:bg-card/80 fixed inset-x-0 bottom-0 z-40 border-t backdrop-blur">
           <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-4">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <div>
-                <p className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
+                <p className="text-muted-foreground text-[11px] font-semibold tracking-[0.06em] uppercase">
                   {settings?.selected_plan_label ?? 'Selected plan'}
                 </p>
-                <p className="text-sm font-semibold text-foreground">
+                <p className="text-foreground text-sm font-semibold">
                   {plan.name}
-                  <span className="font-normal text-muted-foreground">
+                  <span className="text-muted-foreground font-normal">
                     {' '}
                     · {selected.cycle.label}
                   </span>
@@ -514,25 +810,74 @@ export default function UpgradePlanPage() {
               ) : null}
             </div>
 
-            <div className="flex items-center justify-between gap-4 sm:justify-end">
+            <div className="flex flex-wrap items-center justify-between gap-3 sm:justify-end">
               <div className="text-right">
-                <p className="text-[11px] font-semibold tracking-[0.06em] text-muted-foreground uppercase">
+                <p className="text-muted-foreground text-[11px] font-semibold tracking-[0.06em] uppercase">
                   {settings?.total_label ?? 'Total'}
                 </p>
-                <p className="text-xl font-bold tracking-tight text-foreground">
+                <p className="text-foreground text-xl font-bold tracking-tight">
                   {formatCurrency(selected.total, currency)}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={handleContinue}
-                className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-              >
-                {settings?.continue_label ?? 'Continue to payment'}
-                <ArrowRight className="size-4" />
-              </button>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* ---- Take the trial instead ----
+                    Secondary styling on purpose: paying is the outcome the
+                    business wants, and a filled button next to a filled
+                    button makes neither the obvious next step.
+
+                    Hidden entirely once the trial cannot honestly be
+                    offered — see `showTrialOffer`. A button that starts a
+                    trial the account is not eligible for would be worse
+                    than no button. */}
+                {showTrialOffer ? (
+                  <button
+                    type="button"
+                    disabled={saving !== null}
+                    onClick={() => void choosePlan('trial')}
+                    className="border-border text-foreground hover:bg-muted inline-flex items-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-60"
+                  >
+                    {saving === 'trial' ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="size-4 text-emerald-500" />
+                    )}
+                    {settings?.trial_cta_label ?? 'Start with trial'}
+                  </button>
+                ) : null}
+
+                <button
+                  type="button"
+                  disabled={saving !== null}
+                  onClick={() => void choosePlan('pay')}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors disabled:opacity-60"
+                >
+                  {settings?.continue_label ?? 'Continue to payment'}
+                  {saving === 'pay' ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <ArrowRight className="size-4" />
+                  )}
+                </button>
+              </div>
             </div>
           </div>
+
+          {/* Small print + the one failure worth surfacing here.
+              A trial that could not be started must say so: the customer
+              pressed a button and would otherwise be left on the same
+              screen with no explanation. */}
+          {saveError ? (
+            <div className="mx-auto max-w-6xl px-4 pb-3 sm:px-6">
+              <p className="text-destructive text-xs">{saveError}</p>
+            </div>
+          ) : showTrialOffer && settings?.trial_cta_note ? (
+            <div className="mx-auto max-w-6xl px-4 pb-3 sm:px-6">
+              <p className="text-muted-foreground text-xs">
+                {settings.trial_cta_note}
+              </p>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

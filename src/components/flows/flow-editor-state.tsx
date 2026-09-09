@@ -53,6 +53,7 @@ import { useTranslations } from "next-intl";
 import { unlinkNodeReferences } from "@/lib/flows/edges";
 import type { FlowNodeRow, FlowRow } from "@/lib/flows/types";
 import { NODE_META, slugify, type BuilderNode, type NodeType } from "./shared";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 // ============================================================
 // State shape
@@ -406,12 +407,18 @@ export function FlowEditorProvider({
     [canActivate, save, initialFlow.id],
   );
 
+  const confirm = useConfirm();
+
   // ---- Delete ----
   const deleteFlow = useCallback(async () => {
-    const yes = window.confirm(
-      `Delete "${state.name}"? Any active runs end immediately. This can't be undone.`,
-    );
-    if (!yes) return;
+    const ok = await confirm({
+      title: `Delete "${state.name}"?`,
+      description: "Any active runs will end immediately and this cannot be undone.",
+      confirmText: "Delete Flow",
+      cancelText: "Cancel",
+      variant: "destructive",
+    });
+    if (!ok) return;
     try {
       const res = await fetch(`/api/flows/${initialFlow.id}`, {
         method: "DELETE",
@@ -422,7 +429,7 @@ export function FlowEditorProvider({
       const msg = err instanceof Error ? err.message : "Delete failed";
       toast.error(msg);
     }
-  }, [initialFlow.id, router, state.name]);
+  }, [confirm, initialFlow.id, router, state.name]);
 
   // ---- Node mutations ----
   const updateNode = useCallback(

@@ -22,7 +22,6 @@ services:
         NEXT_PUBLIC_META_APP_ID: ${NEXT_PUBLIC_META_APP_ID}
         NEXT_PUBLIC_META_ES_CONFIG_ID: ${NEXT_PUBLIC_META_ES_CONFIG_ID}
         NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
-        NEXT_PUBLIC_APP_LOCALE: ${NEXT_PUBLIC_APP_LOCALE:-en}
     image: wacrm:latest
     container_name: wacrm
     restart: unless-stopped

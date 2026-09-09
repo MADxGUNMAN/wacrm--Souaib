@@ -31,6 +31,7 @@ import {
 import { UpgradeHeader } from '@/components/billing/upgrade-header';
 import { PaymentSubmissionForm } from '@/components/billing/payment-submission-form';
 import { useSubscription } from '@/hooks/use-subscription';
+import { createClient } from '@/lib/supabase/client';
 import { formatCurrency } from '@/lib/currency';
 import type { PaymentQuote } from '@/lib/subscription/types';
 
@@ -61,7 +62,7 @@ export default function PaymentPage() {
     <Suspense
       fallback={
         <div className="flex min-h-screen items-center justify-center">
-          <Loader2 className="size-7 animate-spin text-primary" />
+          <Loader2 className="text-primary size-7 animate-spin" />
         </div>
       }
     >
@@ -102,6 +103,43 @@ function PaymentPageInner() {
   const pending = subscription?.pendingPayment ?? null;
 
   const hasIds = Boolean(planId && cycleId);
+
+  useEffect(() => {
+    const supabase = createClient();
+
+    // 1. Check session immediately on mount
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        window.location.replace('/login');
+      }
+    });
+
+    // 2. Listen to auth state transitions
+    const {
+      data: { subscription: authSub },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT' || !session) {
+        window.location.replace('/login');
+      }
+    });
+
+    // 3. Handle Back-Forward Cache (bfcache) restorations
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        void supabase.auth.getSession().then(({ data: { session } }) => {
+          if (!session) {
+            window.location.replace('/login');
+          }
+        });
+      }
+    };
+
+    window.addEventListener('pageshow', handlePageShow);
+    return () => {
+      authSub.unsubscribe();
+      window.removeEventListener('pageshow', handlePageShow);
+    };
+  }, []);
 
   // ---- Watching for a review verdict ----
   //
@@ -212,7 +250,7 @@ function PaymentPageInner() {
       try {
         const res = await fetch(
           `/api/billing/upi-qr?planId=${encodeURIComponent(planId)}&cycleId=${encodeURIComponent(cycleId)}`,
-          { cache: 'no-store' },
+          { cache: 'no-store' }
         );
         const body = await res.json().catch(() => ({}));
 
@@ -282,7 +320,7 @@ function PaymentPageInner() {
   if (loading || (!hasIds && !pending && !verdict)) {
     return (
       <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="size-7 animate-spin text-primary" />
+        <Loader2 className="text-primary size-7 animate-spin" />
       </div>
     );
   }
@@ -297,15 +335,15 @@ function PaymentPageInner() {
         <div className="flex size-12 items-center justify-center rounded-xl bg-emerald-500/12">
           <CheckCircle2 className="size-6 text-emerald-500" />
         </div>
-        <h1 className="mt-5 text-xl font-semibold tracking-tight text-foreground">
+        <h1 className="text-foreground mt-5 text-xl font-semibold tracking-tight">
           Payment verified
         </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="text-muted-foreground mt-2 text-sm">
           {lastPayment?.planName
             ? `Your ${lastPayment.planName} subscription is active. Taking you to your dashboard…`
             : 'Your subscription is active. Taking you to your dashboard…'}
         </p>
-        <Loader2 className="mt-6 size-5 animate-spin text-muted-foreground" />
+        <Loader2 className="text-muted-foreground mt-6 size-5 animate-spin" />
       </div>
     );
   }
@@ -314,19 +352,19 @@ function PaymentPageInner() {
   if (verdict === 'rejected') {
     return (
       <div className="flex min-h-screen flex-col">
-        <UpgradeHeader 
-          backButton={{ href: '/upgrade-plan', label: 'Back to plans' }} 
+        <UpgradeHeader
+          backButton={{ href: '/upgrade-plan', label: 'Back to plans' }}
         />
         <main className="flex-1 px-4 py-10 sm:px-6">
           <div className="mx-auto max-w-lg">
-            <div className="rounded-2xl border border-destructive/25 bg-card p-6 sm:p-8">
-              <div className="flex size-12 items-center justify-center rounded-xl bg-destructive/12">
-                <XCircle className="size-6 text-destructive" />
+            <div className="border-destructive/25 bg-card rounded-2xl border p-6 sm:p-8">
+              <div className="bg-destructive/12 flex size-12 items-center justify-center rounded-xl">
+                <XCircle className="text-destructive size-6" />
               </div>
-              <h1 className="mt-5 text-xl font-semibold tracking-tight text-foreground">
+              <h1 className="text-foreground mt-5 text-xl font-semibold tracking-tight">
                 We could not verify this payment
               </h1>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
                 {lastPayment?.planName
                   ? `Your ${lastPayment.planName} payment was reviewed and could not be confirmed, so the subscription has not been activated.`
                   : 'Your payment was reviewed and could not be confirmed, so the subscription has not been activated.'}
@@ -335,17 +373,17 @@ function PaymentPageInner() {
               {/* The reason is mandatory on the admin side precisely so
                   there is always something useful to show here. */}
               {lastPayment?.reviewNote ? (
-                <div className="mt-5 rounded-xl border border-destructive/20 bg-destructive/5 p-4">
-                  <p className="text-[11px] font-semibold tracking-[0.08em] text-destructive uppercase">
+                <div className="border-destructive/20 bg-destructive/5 mt-5 rounded-xl border p-4">
+                  <p className="text-destructive text-[11px] font-semibold tracking-[0.08em] uppercase">
                     Reason
                   </p>
-                  <p className="mt-1.5 text-sm leading-relaxed whitespace-pre-line text-foreground">
+                  <p className="text-foreground mt-1.5 text-sm leading-relaxed whitespace-pre-line">
                     {lastPayment.reviewNote}
                   </p>
                 </div>
               ) : null}
 
-              <p className="mt-5 text-sm leading-relaxed text-muted-foreground">
+              <p className="text-muted-foreground mt-5 text-sm leading-relaxed">
                 If your bank shows the amount as debited, please do not pay
                 again — reply to the email we sent you with the transaction
                 reference and we will trace it.
@@ -354,13 +392,13 @@ function PaymentPageInner() {
               <button
                 type="button"
                 onClick={() => router.push('/upgrade-plan')}
-                className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors"
               >
                 Submit payment details again
               </button>
 
               {subscription?.copy.supportNote ? (
-                <p className="mt-6 border-t border-border pt-5 text-xs leading-relaxed text-muted-foreground">
+                <p className="border-border text-muted-foreground mt-6 border-t pt-5 text-xs leading-relaxed">
                   {subscription.copy.supportNote}
                 </p>
               ) : null}
@@ -375,46 +413,46 @@ function PaymentPageInner() {
   if (pending || submitted) {
     return (
       <div className="flex min-h-screen flex-col">
-        <UpgradeHeader 
-          backButton={{ href: '/upgrade-plan', label: 'Back to plans' }} 
+        <UpgradeHeader
+          backButton={{ href: '/upgrade-plan', label: 'Back to plans' }}
         />
         <main className="flex-1 px-4 py-10 sm:px-6">
           <div className="mx-auto max-w-lg">
-            <div className="rounded-2xl border border-amber-500/25 bg-card p-6 sm:p-8">
+            <div className="bg-card rounded-2xl border border-amber-500/25 p-6 sm:p-8">
               <div className="flex size-12 items-center justify-center rounded-xl bg-amber-500/12">
                 <Clock className="size-6 text-amber-500" />
               </div>
-              <h1 className="mt-5 text-xl font-semibold tracking-tight text-foreground">
+              <h1 className="text-foreground mt-5 text-xl font-semibold tracking-tight">
                 Payment under review
               </h1>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
                 {subscription?.copy.pendingReviewMessage ??
                   'We are verifying your payment and will activate your subscription shortly.'}
               </p>
 
               {pending ? (
-                <dl className="mt-6 space-y-3 rounded-xl bg-muted/40 p-4 text-sm">
+                <dl className="bg-muted/40 mt-6 space-y-3 rounded-xl p-4 text-sm">
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Plan</dt>
-                    <dd className="text-right font-medium text-foreground">
+                    <dd className="text-foreground text-right font-medium">
                       {pending.planName} · {pending.cycleLabel}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Amount paid</dt>
-                    <dd className="text-right font-medium text-foreground">
+                    <dd className="text-foreground text-right font-medium">
                       {formatCurrency(pending.paidAmount, pending.currency)}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Transaction ID</dt>
-                    <dd className="text-right font-mono text-xs break-all text-foreground">
+                    <dd className="text-foreground text-right font-mono text-xs break-all">
                       {pending.transactionRef}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Submitted</dt>
-                    <dd className="text-right font-medium text-foreground">
+                    <dd className="text-foreground text-right font-medium">
                       {formatDate(pending.submittedAt)}
                     </dd>
                   </div>
@@ -429,23 +467,23 @@ function PaymentPageInner() {
                 <button
                   type="button"
                   onClick={() => void refresh()}
-                  className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  className="border-border bg-card text-muted-foreground hover:text-foreground inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors"
                 >
                   <RefreshCw className="size-3.5" />
                   Check now
                 </button>
-                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
                   <Loader2 className="size-3 animate-spin" />
                   Checking automatically
                 </p>
               </div>
-              <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-                You can safely close this page — we will email you as soon as
-                it is verified.
+              <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
+                You can safely close this page — we will email you as soon as it
+                is verified.
               </p>
 
               {subscription?.copy.supportNote ? (
-                <p className="mt-6 border-t border-border pt-5 text-xs leading-relaxed text-muted-foreground">
+                <p className="border-border text-muted-foreground mt-6 border-t pt-5 text-xs leading-relaxed">
                   {subscription.copy.supportNote}
                 </p>
               ) : null}
@@ -460,16 +498,16 @@ function PaymentPageInner() {
   if (error || !quote) {
     return (
       <div className="flex min-h-screen flex-col">
-        <UpgradeHeader 
-          backButton={{ href: '/upgrade-plan', label: 'Back to plans' }} 
+        <UpgradeHeader
+          backButton={{ href: '/upgrade-plan', label: 'Back to plans' }}
         />
         <main className="flex-1 px-4 py-10 sm:px-6">
           <div className="mx-auto max-w-lg text-center">
-            <TriangleAlert className="mx-auto size-8 text-destructive" />
-            <h1 className="mt-4 text-lg font-semibold text-foreground">
+            <TriangleAlert className="text-destructive mx-auto size-8" />
+            <h1 className="text-foreground mt-4 text-lg font-semibold">
               Payment unavailable
             </h1>
-            <p className="mt-2 text-sm text-muted-foreground">
+            <p className="text-muted-foreground mt-2 text-sm">
               {error ?? 'Could not prepare your payment.'}
             </p>
           </div>
@@ -482,18 +520,17 @@ function PaymentPageInner() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <UpgradeHeader 
-        backButton={{ href: '/upgrade-plan', label: 'Back to plans' }} 
+      <UpgradeHeader
+        backButton={{ href: '/upgrade-plan', label: 'Back to plans' }}
       />
 
       <main className="flex-1 px-4 pb-16 sm:px-6">
         <div className="mx-auto max-w-2xl">
-
           <div className="pt-4 pb-6 text-center">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+            <h1 className="text-foreground text-2xl font-bold tracking-tight sm:text-3xl">
               {quote.paymentHeading}
             </h1>
-            <p className="mt-2 text-sm text-muted-foreground">
+            <p className="text-muted-foreground mt-2 text-sm">
               {q.planName} · {q.cycleLabel}
               {quote.wouldEndAt ? (
                 <> · valid until {formatDate(quote.wouldEndAt)}</>
@@ -502,29 +539,29 @@ function PaymentPageInner() {
           </div>
 
           {/* ---- Amount + QR ---- */}
-          <div className="rounded-3xl border border-border bg-card p-6 sm:p-8 shadow-sm">
+          <div className="border-border bg-card rounded-3xl border p-6 shadow-sm sm:p-8">
             {/* Header / Amount */}
-            <div className="flex flex-col items-center justify-center gap-4 text-center sm:flex-row sm:justify-between sm:text-left sm:border-b sm:border-border sm:pb-6">
+            <div className="sm:border-border flex flex-col items-center justify-center gap-4 text-center sm:flex-row sm:justify-between sm:border-b sm:pb-6 sm:text-left">
               <div>
-                <p className="text-[11px] font-bold tracking-[0.08em] text-muted-foreground uppercase">
+                <p className="text-muted-foreground text-[11px] font-bold tracking-[0.08em] uppercase">
                   Amount to pay
                 </p>
-                <p className="mt-1 text-4xl font-black tracking-tight text-foreground">
+                <p className="text-foreground mt-1 text-4xl font-black tracking-tight">
                   {formatCurrency(q.amount, q.currency)}
                 </p>
               </div>
               {quote.instructions ? (
-                <p className="max-w-[280px] text-[13px] leading-relaxed text-muted-foreground sm:text-right">
+                <p className="text-muted-foreground max-w-[280px] text-[13px] leading-relaxed sm:text-right">
                   {quote.instructions}
                 </p>
               ) : null}
             </div>
 
             {/* Content Grid */}
-            <div className="mt-6 sm:mt-8 grid gap-8 sm:grid-cols-2 sm:items-center">
+            <div className="mt-6 grid gap-8 sm:mt-8 sm:grid-cols-2 sm:items-center">
               {/* Left: QR Code */}
               <div className="flex flex-col items-center">
-                <div className="rounded-2xl border border-border bg-white p-3 sm:p-4 shadow-sm transition-transform hover:scale-[1.02]">
+                <div className="border-border rounded-2xl border bg-white p-3 shadow-sm transition-transform hover:scale-[1.02] sm:p-4">
                   <div
                     className="size-48 sm:size-52 [&>svg]:size-full"
                     role="img"
@@ -532,30 +569,30 @@ function PaymentPageInner() {
                     dangerouslySetInnerHTML={{ __html: q.qrSvg }}
                   />
                 </div>
-                <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-[13px] font-medium text-muted-foreground">
-                  <QrCode className="size-4 text-primary" />
+                <p className="text-muted-foreground mt-4 flex items-center justify-center gap-1.5 text-center text-[13px] font-medium">
+                  <QrCode className="text-primary size-4" />
                   Scan with any UPI app
                 </p>
               </div>
 
               {/* Right: Manual Details & CTA */}
               <div className="flex flex-col gap-4">
-                <div className="rounded-2xl bg-muted/30 p-5 border border-border/50">
-                  <p className="text-[11px] font-bold tracking-[0.08em] text-muted-foreground uppercase">
+                <div className="bg-muted/30 border-border/50 rounded-2xl border p-5">
+                  <p className="text-muted-foreground text-[11px] font-bold tracking-[0.08em] uppercase">
                     Or pay this UPI ID
                   </p>
                   <div className="mt-2.5 flex items-center justify-between gap-3">
-                    <code className="min-w-0 truncate font-mono text-sm font-semibold text-foreground select-all">
+                    <code className="text-foreground min-w-0 truncate font-mono text-sm font-semibold select-all">
                       {q.upiId}
                     </code>
                     <button
                       type="button"
                       onClick={() => void handleCopy(q.upiId)}
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-muted-foreground shadow-sm transition-colors hover:text-foreground hover:border-primary/40"
+                      className="border-border bg-card text-muted-foreground hover:text-foreground hover:border-primary/40 inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold shadow-sm transition-colors"
                     >
                       {copied ? (
                         <>
-                          <Check className="size-3.5 text-primary" />
+                          <Check className="text-primary size-3.5" />
                           Copied
                         </>
                       ) : (
@@ -566,16 +603,22 @@ function PaymentPageInner() {
                       )}
                     </button>
                   </div>
-                  <div className="mt-3 text-[12px] leading-relaxed text-muted-foreground">
-                    Paying to <span className="font-semibold text-foreground">{q.payeeName}</span>.<br />
+                  <div className="text-muted-foreground mt-3 text-[12px] leading-relaxed">
+                    Paying to{' '}
+                    <span className="text-foreground font-semibold">
+                      {q.payeeName}
+                    </span>
+                    .<br />
                     Ref:{' '}
-                    <span className="font-mono bg-muted px-1 py-0.5 rounded text-[11px] font-medium text-foreground">{q.referenceNote}</span>
+                    <span className="bg-muted text-foreground rounded px-1 py-0.5 font-mono text-[11px] font-medium">
+                      {q.referenceNote}
+                    </span>
                   </div>
                 </div>
 
                 <a
                   href={q.upiUri}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-muted sm:hidden"
+                  className="border-border bg-card text-foreground hover:bg-muted inline-flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold shadow-sm transition-colors sm:hidden"
                 >
                   <Smartphone className="size-4" />
                   Open in a UPI app
@@ -585,7 +628,7 @@ function PaymentPageInner() {
                   <button
                     type="button"
                     onClick={handleOpenForm}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3.5 text-sm font-bold text-primary-foreground shadow-md transition-all hover:bg-primary/90 hover:shadow-lg hover:-translate-y-0.5"
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3.5 text-sm font-bold shadow-md transition-all hover:-translate-y-0.5 hover:shadow-lg"
                   >
                     {quote.submitButtonLabel}
                   </button>
@@ -611,7 +654,7 @@ function PaymentPageInner() {
           ) : null}
 
           {quote.supportNote ? (
-            <p className="mt-6 text-center text-xs leading-relaxed text-muted-foreground">
+            <p className="text-muted-foreground mt-6 text-center text-xs leading-relaxed">
               {quote.supportNote}
             </p>
           ) : null}

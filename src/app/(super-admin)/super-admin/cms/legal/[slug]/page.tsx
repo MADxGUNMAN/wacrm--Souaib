@@ -3,6 +3,7 @@
 import { useEffect, useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { ArrowLeft, Save, AlertCircle, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -65,9 +66,10 @@ export default function CMSLegalEditorPage({ params }: { params: Promise<{ slug:
       });
       
       if (!res.ok) throw new Error("Failed to save document");
+      toast.success("Document saved successfully!");
       router.push("/super-admin/cms/legal");
     } catch (err) {
-      alert("Error: " + (err as Error).message);
+      toast.error("Error: " + (err as Error).message);
     } finally {
       setIsSaving(false);
     }

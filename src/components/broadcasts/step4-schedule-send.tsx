@@ -21,6 +21,8 @@ interface AudienceConfig {
   type: string;
   tagIds?: string[];
   csvContacts?: { phone: string; name?: string }[];
+  excludeTagIds?: string[];
+  excludedContactIds?: string[];
 }
 
 interface Step4Props {
@@ -57,11 +59,12 @@ export function Step4ScheduleSend({
       try {
         const supabase = createClient();
 
+        let baseReach = 0;
         if (audience.type === 'all') {
           const { count } = await supabase
             .from('contacts')
             .select('*', { count: 'exact', head: true });
-          setEstimatedReach(count ?? 0);
+          baseReach = count ?? 0;
         } else if (audience.type === 'tags' && audience.tagIds && audience.tagIds.length > 0) {
           const { data: contactTags } = await supabase
             .from('contact_tags')
@@ -69,12 +72,13 @@ export function Step4ScheduleSend({
             .in('tag_id', audience.tagIds);
 
           const uniqueIds = new Set((contactTags ?? []).map((ct) => ct.contact_id));
-          setEstimatedReach(uniqueIds.size);
+          baseReach = uniqueIds.size;
         } else if (audience.type === 'csv' && audience.csvContacts) {
-          setEstimatedReach(audience.csvContacts.length);
-        } else {
-          setEstimatedReach(0);
+          baseReach = audience.csvContacts.length;
         }
+
+        const manualExcluded = audience.excludedContactIds?.length ?? 0;
+        setEstimatedReach(Math.max(0, baseReach - manualExcluded));
       } finally {
         setLoadingReach(false);
       }

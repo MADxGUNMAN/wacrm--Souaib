@@ -49,20 +49,25 @@ async function exchangeCodeForBusinessToken(args: {
 
   let payload: Record<string, unknown>;
   try {
-    const res = await fetch(`${META_API_BASE}/oauth/access_token?${qs.toString()}`, {
-      method: 'GET',
-    });
+    const res = await fetch(
+      `${META_API_BASE}/oauth/access_token?${qs.toString()}`,
+      {
+        method: 'GET',
+      }
+    );
     payload = (await res.json()) as Record<string, unknown>;
 
     if (res.ok && typeof payload.access_token === 'string') {
       return {
         ok: true,
         accessToken: payload.access_token,
-        expiresIn: typeof payload.expires_in === 'number' ? payload.expires_in : null,
+        expiresIn:
+          typeof payload.expires_in === 'number' ? payload.expires_in : null,
       };
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Network error calling Meta';
+    const message =
+      err instanceof Error ? err.message : 'Network error calling Meta';
     console.error('[embedded-signup] token exchange threw:', message);
     return { ok: false, message, subcode: null };
   }
@@ -95,7 +100,7 @@ async function exchangeCodeForBusinessToken(args: {
  */
 async function resolveAccountId(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
+  userId: string
 ): Promise<string | null> {
   const { data, error } = await supabase
     .from('profiles')
@@ -124,7 +129,7 @@ export async function POST(request: Request) {
     if (!accountId) {
       return NextResponse.json(
         { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
+        { status: 403 }
       );
     }
 
@@ -190,20 +195,32 @@ export async function POST(request: Request) {
     });
 
     if (!code) {
-      return NextResponse.json({ error: 'Authorization code is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Authorization code is required' },
+        { status: 400 }
+      );
     }
 
     const appId = process.env.NEXT_PUBLIC_META_APP_ID;
     const appSecret = process.env.META_APP_SECRET;
 
     if (!appId || !appSecret) {
-      console.error('Missing NEXT_PUBLIC_META_APP_ID or META_APP_SECRET in environment variables.');
-      return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
+      console.error(
+        'Missing NEXT_PUBLIC_META_APP_ID or META_APP_SECRET in environment variables.'
+      );
+      return NextResponse.json(
+        { error: 'Server configuration error' },
+        { status: 500 }
+      );
     }
 
     // Step 1: Exchange the Embedded Signup code for the customer's business
     // token. The code has a 30-second TTL, so this runs before anything else.
-    const exchange = await exchangeCodeForBusinessToken({ code, appId, appSecret });
+    const exchange = await exchangeCodeForBusinessToken({
+      code,
+      appId,
+      appSecret,
+    });
 
     if (!exchange.ok) {
       // Subcode 36008 is the redirect_uri comparison failure. Once the
@@ -233,27 +250,38 @@ export async function POST(request: Request) {
       const debugUrl = `${META_API_BASE}/debug_token?input_token=${accessToken}`;
       const debugRes = await fetch(debugUrl, {
         method: 'GET',
-        headers: { Authorization: `Bearer ${accessToken}` }
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
       const debugData = await debugRes.json();
 
       if (!debugRes.ok || !debugData.data) {
         console.error('Failed to debug token:', debugData);
         return NextResponse.json(
-          { error: `Meta API error: ${debugData.error?.message || 'Failed to validate token'}` },
+          {
+            error: `Meta API error: ${debugData.error?.message || 'Failed to validate token'}`,
+          },
           { status: 400 }
         );
       }
 
-      const wabaScope = debugData.data.granular_scopes?.find((s: any) => s.scope === 'whatsapp_business_management');
-      if (wabaScope && wabaScope.target_ids && wabaScope.target_ids.length > 0) {
+      const wabaScope = debugData.data.granular_scopes?.find(
+        (s: any) => s.scope === 'whatsapp_business_management'
+      );
+      if (
+        wabaScope &&
+        wabaScope.target_ids &&
+        wabaScope.target_ids.length > 0
+      ) {
         wabaId = wabaScope.target_ids[0];
       }
     }
 
     if (!wabaId) {
       return NextResponse.json(
-        { error: 'Could not determine WhatsApp Business Account ID from the granted permissions. Please ensure you selected an account during setup.' },
+        {
+          error:
+            'Could not determine WhatsApp Business Account ID from the granted permissions. Please ensure you selected an account during setup.',
+        },
         { status: 400 }
       );
     }
@@ -265,14 +293,16 @@ export async function POST(request: Request) {
       const phonesUrl = `${META_API_BASE}/${wabaId}/phone_numbers`;
       const phonesRes = await fetch(phonesUrl, {
         method: 'GET',
-        headers: { Authorization: `Bearer ${accessToken}` }
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
       const phonesData = await phonesRes.json();
 
       if (!phonesRes.ok || !phonesData.data || phonesData.data.length === 0) {
         console.error('Failed to fetch phone numbers:', phonesData);
         return NextResponse.json(
-          { error: `Meta API error: ${phonesData.error?.message || 'No phone numbers found in WABA'}` },
+          {
+            error: `Meta API error: ${phonesData.error?.message || 'No phone numbers found in WABA'}`,
+          },
           { status: 400 }
         );
       }
@@ -288,7 +318,8 @@ export async function POST(request: Request) {
         accessToken,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown Meta API error';
+      const message =
+        err instanceof Error ? err.message : 'Unknown Meta API error';
       console.error('Meta API verification failed during save:', message);
       return NextResponse.json(
         { error: `Meta API error: ${message}` },
@@ -303,7 +334,8 @@ export async function POST(request: Request) {
         accessToken,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown Meta API error';
+      const message =
+        err instanceof Error ? err.message : 'Unknown Meta API error';
       console.error('WABA webhook subscription failed:', message);
       // We don't block the whole process if this fails, but it's important
     }
@@ -315,40 +347,51 @@ export async function POST(request: Request) {
     } catch (err) {
       console.error('Encryption failed:', err);
       return NextResponse.json(
-        { error: 'Failed to encrypt token. Check ENCRYPTION_KEY environment variable.' },
+        {
+          error:
+            'Failed to encrypt token. Check ENCRYPTION_KEY environment variable.',
+        },
         { status: 500 }
       );
     }
 
     const { error: upsertError } = await supabase
       .from('whatsapp_config')
-      .upsert({
-        user_id: user.id,
-        account_id: accountId,
-        phone_number_id: phoneNumberId,
-        waba_id: wabaId,
-        access_token: encryptedAccessToken,
-        connection_source: 'embedded_signup',
-        connection_mode: connectionMode,
-        status: 'connected',
-        connected_at: new Date().toISOString(),
-        // The login configuration in use issues 60-day tokens, and
-        // `expires_in` came back from the exchange above. It used to be
-        // parsed and then discarded, which made expiry the worst class of
-        // outage: on day 61 every Meta call fails, webhooks keep arriving
-        // and silently cannot be answered, and nothing records the cause.
-        // Persisting it is what allows a warning before the deadline
-        // instead of a diagnosis after it. Null when Meta reported no
-        // expiry — see token-expiry.ts, where null is explicitly NOT
-        // treated as expired.
-        token_expires_at: expiresInToTimestamp(exchange.expiresIn),
-        // Clear any previous disconnect. Reconnecting IS the fix for most
-        // coexistence disconnect reasons, so leaving a stale reason behind
-        // would keep showing the operator a problem they just solved.
-        disconnect_event: null,
-        disconnect_reason: null,
-        disconnected_at: null,
-      }, { onConflict: 'account_id' });
+      .upsert(
+        {
+          user_id: user.id,
+          account_id: accountId,
+          phone_number_id: phoneNumberId,
+          // The number itself, from the verifyPhoneNumber call in step 4
+          // above. It was already being fetched and then dropped, which is
+          // why the panels had nothing but the asset id to display.
+          display_phone_number: phoneInfo.display_phone_number ?? null,
+          verified_name: phoneInfo.verified_name ?? null,
+          waba_id: wabaId,
+          access_token: encryptedAccessToken,
+          connection_source: 'embedded_signup',
+          connection_mode: connectionMode,
+          status: 'connected',
+          connected_at: new Date().toISOString(),
+          // The login configuration in use issues 60-day tokens, and
+          // `expires_in` came back from the exchange above. It used to be
+          // parsed and then discarded, which made expiry the worst class of
+          // outage: on day 61 every Meta call fails, webhooks keep arriving
+          // and silently cannot be answered, and nothing records the cause.
+          // Persisting it is what allows a warning before the deadline
+          // instead of a diagnosis after it. Null when Meta reported no
+          // expiry — see token-expiry.ts, where null is explicitly NOT
+          // treated as expired.
+          token_expires_at: expiresInToTimestamp(exchange.expiresIn),
+          // Clear any previous disconnect. Reconnecting IS the fix for most
+          // coexistence disconnect reasons, so leaving a stale reason behind
+          // would keep showing the operator a problem they just solved.
+          disconnect_event: null,
+          disconnect_reason: null,
+          disconnected_at: null,
+        },
+        { onConflict: 'account_id' }
+      );
 
     if (upsertError) {
       console.error('Failed to save config to DB:', upsertError);
@@ -359,9 +402,9 @@ export async function POST(request: Request) {
     }
 
     // Note: We skip the `registerPhoneNumber` step (requiring a PIN) here because
-    // Embedded Signup v4 doesn't explicitly give us the PIN. The phone number is 
-    // usually automatically registered during the embedded signup flow if the user 
-    // provided the PIN in the popup. If it isn't, the user will see the "Not registered" 
+    // Embedded Signup v4 doesn't explicitly give us the PIN. The phone number is
+    // usually automatically registered during the embedded signup flow if the user
+    // provided the PIN in the popup. If it isn't, the user will see the "Not registered"
     // banner and can enter a PIN manually later.
 
     // ── Make the connection permanent ────────────────────────
@@ -399,13 +442,16 @@ export async function POST(request: Request) {
         });
         tokenPermanent = upgrade.upgraded;
         if (!upgrade.upgraded) {
-          console.warn('[embedded-signup] token upgrade skipped:', upgrade.message);
+          console.warn(
+            '[embedded-signup] token upgrade skipped:',
+            upgrade.message
+          );
         }
       }
     } catch (err) {
       console.error(
         '[embedded-signup] token upgrade threw:',
-        err instanceof Error ? err.message : err,
+        err instanceof Error ? err.message : err
       );
     }
 
@@ -443,7 +489,7 @@ export async function POST(request: Request) {
       } catch (err) {
         console.error(
           '[embedded-signup] coexistence sync request threw:',
-          err instanceof Error ? err.message : err,
+          err instanceof Error ? err.message : err
         );
       }
     }
@@ -457,7 +503,6 @@ export async function POST(request: Request) {
       waba_id: wabaId,
       phone_number_id: phoneNumberId,
     });
-
   } catch (error) {
     console.error('Error in WhatsApp embedded-signup POST:', error);
     return NextResponse.json(

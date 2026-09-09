@@ -1,26 +1,28 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import { useAuth } from '@/hooks/use-auth';
 import {
   CONVERSATION_SELECT,
   matchesContactFilters,
   normalizeConversations,
-} from "@/lib/inbox/conversations";
-import { cn } from "@/lib/utils";
-import type { Conversation, ConversationStatus, Tag } from "@/types";
-import { Search, ChevronDown, X } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
-import { useTranslations } from "next-intl";
-import { Input } from "@/components/ui/input";
+} from '@/lib/inbox/conversations';
+import { cn } from '@/lib/utils';
+import { avatarColor, avatarInitials } from '@/lib/avatar-color';
+import type { Conversation, ConversationStatus, Tag } from '@/types';
+import { Search, ChevronDown, X } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
+import { useTranslations } from 'next-intl';
+import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
+} from '@/components/ui/dropdown-menu';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 interface ConversationListProps {
   activeConversationId: string | null;
@@ -37,14 +39,24 @@ interface ConversationListProps {
 }
 
 const STATUS_COLORS: Record<ConversationStatus, string> = {
-  open: "bg-primary",
-  pending: "bg-amber-500",
-  closed: "bg-muted-foreground",
+  open: 'bg-primary',
+  pending: 'bg-amber-500',
+  closed: 'bg-muted-foreground',
 };
 
-
-
-type InboxFilter = ConversationStatus | "all" | "unread";
+/**
+ * `starred` is per-USER, unlike every other option here.
+ *
+ * The rest of these read a column on the conversation row, so they are
+ * pure client-side predicates over `conversations`. Stars live in
+ * `message_stars(message_id, user_id)` — a different table, scoped to
+ * whoever is looking — so that one needs the set of conversation ids
+ * fetched separately. Kept in the same control anyway: from the operator's
+ * side "show me the ones I flagged" is the same kind of question as "show
+ * me the unread ones", and a second, differently-shaped filter UI for one
+ * option would be worse than one fetch.
+ */
+type InboxFilter = ConversationStatus | 'all' | 'unread' | 'starred';
 
 export function ConversationList({
   activeConversationId,
@@ -53,18 +65,23 @@ export function ConversationList({
   onConversationsLoaded,
   resyncToken = 0,
 }: ConversationListProps) {
-  const t = useTranslations("Inbox.conversationList");
-  
-  const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => [
-    { label: t("filterAll"), value: "all" },
-    { label: t("filterUnread"), value: "unread" },
-    { label: t("filterOpen"), value: "open" },
-    { label: t("filterPending"), value: "pending" },
-    { label: t("filterClosed"), value: "closed" },
-  ], [t]);
+  const t = useTranslations('Inbox.conversationList');
+  const { user } = useAuth();
 
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<InboxFilter>("all");
+  const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(
+    () => [
+      { label: t('filterAll'), value: 'all' },
+      { label: t('filterUnread'), value: 'unread' },
+      { label: t('filterStarred'), value: 'starred' },
+      { label: t('filterOpen'), value: 'open' },
+      { label: t('filterPending'), value: 'pending' },
+      { label: t('filterClosed'), value: 'closed' },
+    ],
+    [t]
+  );
+
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<InboxFilter>('all');
   const [loading, setLoading] = useState(true);
   // Contact-based filters (issue #272). Tags use OR logic (a conversation
   // matches if its contact carries any selected tag), consistent with
@@ -96,15 +113,28 @@ export function ConversationList({
 
     (async () => {
       const { data, error } = await supabase
-        .from("conversations")
+        .from('conversations')
         .select(CONVERSATION_SELECT)
-        .order("last_message_at", { ascending: false });
+        // Imported-but-unreviewed chats are deliberately excluded.
+        //
+        // Connecting a coexistence number delivers up to six months of the
+        // phone's chat history, and it used to land here directly — 69
+        // conversations and 7,533 messages appearing unannounced, personal
+        // chats included, with no way to choose. They are still stored
+        // (Meta sends history once and cannot replay it) and are approved
+        // from the review screen; they just do not appear in the inbox
+        // until then.
+        //
+        // Pre-existing rows all default to 'live', so this changes nothing
+        // for conversations that already exist.
+        .eq('import_state', 'live')
+        .order('last_message_at', { ascending: false });
 
       if (cancelled) return;
 
       if (error) {
         // Supabase errors have non-enumerable properties — log fields explicitly
-        console.error("Failed to fetch conversations:", {
+        console.error('Failed to fetch conversations:', {
           message: error.message,
           details: error.details,
           hint: error.hint,
@@ -126,13 +156,98 @@ export function ConversationList({
     // up on any events sent while the WS was disconnected or throttled.
   }, [resyncToken]);
 
+  /**
+   * Conversations containing at least one message THIS user has starred.
+   *
+   * Fetched lazily — only once the operator actually picks the Starred
+   * filter — because the overwhelming majority of inbox sessions never use
+   * it, and an extra query on every mount to support a filter nobody
+   * selected is a cost paid by everyone for the benefit of a few. Refetched
+   * on `resyncToken` and whenever the filter is re-selected, so a message
+   * starred in the thread shows up here without a reload.
+   */
+  /**
+   * Result keyed by WHICH fetch produced it.
+   *
+   * The token (user + resync counter) is what makes "loading" a derived
+   * value instead of a second piece of state: if the stored token is not
+   * the current one, the answer we hold is stale and a fetch is in flight.
+   * Storing an `isLoading` boolean instead would mean flipping it to true
+   * synchronously inside the effect, which triggers the cascading-render
+   * this codebase lints against (react-hooks/set-state-in-effect).
+   *
+   * `ids: null` is the FAILED case, kept distinct from an empty Set. An
+   * empty Set means "you have starred nothing"; null means "we do not
+   * know", and the two must not render the same way.
+   */
+  const [starred, setStarred] = useState<{
+    token: string;
+    ids: Set<string> | null;
+  } | null>(null);
+
+  const starredToken = `${user?.id ?? ''}:${resyncToken}`;
+  const starredLoading =
+    filter === 'starred' && starred?.token !== starredToken;
+  const starredConvIds = starred?.token === starredToken ? starred.ids : null;
+
+  useEffect(() => {
+    if (filter !== 'starred' || !user?.id) return;
+    // Already have the answer for this exact token — nothing to refetch.
+    if (starred?.token === starredToken) return;
+
+    const supabase = createClient();
+    let cancelled = false;
+
+    (async () => {
+      // One round trip via the message_stars → messages FK. RLS already
+      // limits stars to this user and messages to this account, so no
+      // account filter is needed (or trustworthy) here.
+      const { data, error } = await supabase
+        .from('message_stars')
+        .select('messages(conversation_id)')
+        .eq('user_id', user.id);
+
+      if (cancelled) return;
+
+      if (error) {
+        console.error('Failed to fetch starred messages:', {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code,
+        });
+        // An empty set would silently read as "you have starred nothing",
+        // which is a different and wrong answer. Null keeps the list
+        // unfiltered rather than showing a confidently empty inbox.
+        setStarred({ token: starredToken, ids: null });
+        return;
+      }
+
+      const rows = (data ?? []) as unknown as Array<{
+        messages: { conversation_id: string } | null;
+      }>;
+      setStarred({
+        token: starredToken,
+        ids: new Set(
+          rows
+            .map((r) => r.messages?.conversation_id)
+            .filter((id): id is string => Boolean(id))
+        ),
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filter, user?.id, starredToken, starred?.token]);
+
   // Tag definitions for the filter picker — loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.from("tags").select("*").order("name");
+      const { data } = await supabase.from('tags').select('*').order('name');
       if (!cancelled && data) setTags(data as Tag[]);
     })();
     return () => {
@@ -161,9 +276,16 @@ export function ConversationList({
   const filtered = useMemo(() => {
     let result = conversations;
 
-    if (filter === "unread") {
+    if (filter === 'unread') {
       result = result.filter((c) => c.unread_count > 0);
-    } else if (filter !== "all") {
+    } else if (filter === 'starred') {
+      // While the ids are still loading (or the fetch failed) leave the
+      // list alone rather than rendering an empty inbox — a momentary
+      // "no starred messages" is indistinguishable from the real answer.
+      if (starredConvIds) {
+        result = result.filter((c) => starredConvIds.has(c.id));
+      }
+    } else if (filter !== 'all') {
       result = result.filter((c) => c.status === filter);
     }
 
@@ -180,15 +302,22 @@ export function ConversationList({
     if (search.trim()) {
       const q = search.toLowerCase();
       result = result.filter((c) => {
-        const name = c.contact?.name?.toLowerCase() ?? "";
-        const phone = c.contact?.phone?.toLowerCase() ?? "";
-        const lastMsg = c.last_message_text?.toLowerCase() ?? "";
+        const name = c.contact?.name?.toLowerCase() ?? '';
+        const phone = c.contact?.phone?.toLowerCase() ?? '';
+        const lastMsg = c.last_message_text?.toLowerCase() ?? '';
         return name.includes(q) || phone.includes(q) || lastMsg.includes(q);
       });
     }
 
     return result;
-  }, [conversations, filter, search, selectedTagIds, selectedCompany]);
+  }, [
+    conversations,
+    filter,
+    search,
+    selectedTagIds,
+    selectedCompany,
+    starredConvIds,
+  ]);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -201,7 +330,8 @@ export function ConversationList({
     setSelectedCompany(null);
   }, []);
 
-  const hasContactFilters = selectedTagIds.length > 0 || selectedCompany !== null;
+  const hasContactFilters =
+    selectedTagIds.length > 0 || selectedCompany !== null;
 
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -223,24 +353,24 @@ export function ConversationList({
     // w-full on mobile so the list occupies the whole viewport when it's
     // the single pane showing; fixed 320px on desktop where it shares the
     // row with the thread + contact sidebar.
-    <div className="flex h-full w-full flex-col border-r border-border bg-card lg:w-80">
+    <div className="border-border bg-card flex h-full w-full flex-col border-r lg:w-80">
       {/* Search + Filter */}
-      <div className="space-y-2 border-b border-border p-3">
+      <div className="border-border space-y-2 border-b p-3">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
           <Input
             value={search}
             onChange={handleSearchChange}
-            placeholder={t("searchPlaceholder")}
-            className="border-border bg-muted pl-9 text-sm text-foreground placeholder-muted-foreground focus:border-primary/50"
+            placeholder={t('searchPlaceholder')}
+            className="border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 pl-9 text-sm"
           />
         </div>
 
         <div className="flex flex-wrap items-center gap-1">
           <DropdownMenu>
-            <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
-                {activeFilter?.label ?? t("filterAll")}
-                <ChevronDown className="h-3 w-3" />
+            <DropdownMenuTrigger className="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs">
+              {activeFilter?.label ?? t('filterAll')}
+              <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
@@ -251,10 +381,10 @@ export function ConversationList({
                   key={opt.value}
                   onClick={() => setFilter(opt.value)}
                   className={cn(
-                    "text-sm",
+                    'text-sm',
                     filter === opt.value
-                      ? "text-primary"
-                      : "text-popover-foreground"
+                      ? 'text-primary'
+                      : 'text-popover-foreground'
                   )}
                 >
                   {opt.label}
@@ -267,15 +397,15 @@ export function ConversationList({
             <DropdownMenu>
               <DropdownMenuTrigger
                 className={cn(
-                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                  'hover:bg-muted inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs',
                   selectedTagIds.length > 0
-                    ? "text-primary"
-                    : "text-muted-foreground hover:text-foreground"
+                    ? 'text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
                 )}
               >
-                {t("tags")}
+                {t('tags')}
                 {selectedTagIds.length > 0 && (
-                  <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                  <span className="bg-primary text-primary-foreground flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold">
                     {selectedTagIds.length}
                   </span>
                 )}
@@ -283,14 +413,14 @@ export function ConversationList({
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="start"
-                className="max-h-64 w-56 border-border bg-popover"
+                className="border-border bg-popover max-h-64 w-56"
               >
                 {tags.map((t) => (
                   <DropdownMenuCheckboxItem
                     key={t.id}
                     checked={selectedTagIds.includes(t.id)}
                     onCheckedChange={() => toggleTag(t.id)}
-                    className="text-sm text-popover-foreground"
+                    className="text-popover-foreground text-sm"
                   >
                     <span className="flex items-center gap-2">
                       <span
@@ -309,39 +439,41 @@ export function ConversationList({
             <DropdownMenu>
               <DropdownMenuTrigger
                 className={cn(
-                  "inline-flex max-w-40 items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                  'hover:bg-muted inline-flex h-7 max-w-40 items-center justify-center gap-1 rounded-md px-2 text-xs',
                   selectedCompany
-                    ? "text-primary"
-                    : "text-muted-foreground hover:text-foreground"
+                    ? 'text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
                 )}
               >
-                <span className="truncate">{selectedCompany ?? t("company")}</span>
+                <span className="truncate">
+                  {selectedCompany ?? t('company')}
+                </span>
                 <ChevronDown className="h-3 w-3 shrink-0" />
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="start"
-                className="max-h-64 w-56 border-border bg-popover"
+                className="border-border bg-popover max-h-64 w-56"
               >
                 <DropdownMenuItem
                   onClick={() => setSelectedCompany(null)}
                   className={cn(
-                    "text-sm",
+                    'text-sm',
                     selectedCompany === null
-                      ? "text-primary"
-                      : "text-popover-foreground"
+                      ? 'text-primary'
+                      : 'text-popover-foreground'
                   )}
                 >
-                  {t("allCompanies")}
+                  {t('allCompanies')}
                 </DropdownMenuItem>
                 {companies.map((co) => (
                   <DropdownMenuItem
                     key={co}
                     onClick={() => setSelectedCompany(co)}
                     className={cn(
-                      "text-sm",
+                      'text-sm',
                       selectedCompany === co
-                        ? "text-primary"
-                        : "text-popover-foreground"
+                        ? 'text-primary'
+                        : 'text-popover-foreground'
                     )}
                   >
                     <span className="truncate">{co}</span>
@@ -360,13 +492,17 @@ export function ConversationList({
                 <button
                   key={id}
                   onClick={() => toggleTag(id)}
-                  className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground hover:bg-muted/70"
+                  className="bg-muted text-foreground hover:bg-muted/70 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
                 >
                   <span
                     className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: tag?.color ?? "var(--muted-foreground)" }}
+                    style={{
+                      backgroundColor: tag?.color ?? 'var(--muted-foreground)',
+                    }}
                   />
-                  <span className="max-w-24 truncate">{tag?.name ?? t("tags")}</span>
+                  <span className="max-w-24 truncate">
+                    {tag?.name ?? t('tags')}
+                  </span>
                   <X className="h-3 w-3" />
                 </button>
               );
@@ -374,7 +510,7 @@ export function ConversationList({
             {selectedCompany && (
               <button
                 onClick={() => setSelectedCompany(null)}
-                className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground hover:bg-muted/70"
+                className="bg-muted text-foreground hover:bg-muted/70 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
               >
                 <span className="max-w-24 truncate">{selectedCompany}</span>
                 <X className="h-3 w-3" />
@@ -382,9 +518,9 @@ export function ConversationList({
             )}
             <button
               onClick={clearContactFilters}
-              className="px-1 text-[11px] text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground px-1 text-[11px]"
             >
-              {t("clearAll")}
+              {t('clearAll')}
             </button>
           </div>
         )}
@@ -399,11 +535,22 @@ export function ConversationList({
       <ScrollArea className="min-h-0 flex-1">
         {loading ? (
           <div className="flex items-center justify-center py-12">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div className="border-primary h-5 w-5 animate-spin rounded-full border-2 border-t-transparent" />
+          </div>
+        ) : starredLoading && filter === 'starred' ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="border-primary h-5 w-5 animate-spin rounded-full border-2 border-t-transparent" />
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-4 py-12 text-center">
-            <p className="text-sm text-muted-foreground">{t("noConversations")}</p>
+            {/* Naming the reason matters here: "No conversations found"
+                under the Starred filter reads as "your inbox is empty",
+                which is alarming and wrong. */}
+            <p className="text-muted-foreground text-sm">
+              {filter === 'starred'
+                ? t('noStarredConversations')
+                : t('noConversations')}
+            </p>
           </div>
         ) : (
           <div className="flex flex-col">
@@ -437,8 +584,12 @@ function ConversationItem({
   t,
 }: ConversationItemProps) {
   const contact = conversation.contact;
-  const displayName = contact?.name || contact?.phone || t("unknown");
-  const initials = displayName.charAt(0).toUpperCase();
+  const displayName = contact?.name || contact?.phone || t('unknown');
+  // Two initials where a full name exists, so "Kavi Sharma" reads as KS
+  // rather than a lone K shared with every other K in the list. Falls back
+  // to '#' for a contact known only by number, since charAt(0) of a phone
+  // string produced a meaningless '9'.
+  const initials = avatarInitials(contact?.name, '#');
 
   const handleClick = useCallback(() => {
     onSelect(conversation);
@@ -448,18 +599,31 @@ function ConversationItem({
     ? formatDistanceToNow(new Date(conversation.last_message_at), {
         addSuffix: false,
       })
-    : "";
+    : '';
 
   return (
     <button
       onClick={handleClick}
       className={cn(
-        "flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50",
-        isActive && "border-l-2 border-primary bg-muted/70"
+        'hover:bg-muted/50 flex w-full items-start gap-3 px-3 py-3 text-left transition-colors',
+        isActive && 'border-primary bg-muted/70 border-l-2'
       )}
     >
-      {/* Avatar */}
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
+      {/* Avatar.
+          WhatsApp gives us no customer profile picture (see
+          src/lib/avatar-color.ts), so initials are the finished design
+          rather than a placeholder. Coloured from the contact id so the
+          same person is always the same colour — a uniform grey circle on
+          every row was what made this look unfinished.
+
+          `avatar_url` is still honoured: it is populated for contacts
+          created through the API or edited by hand. */}
+      <div
+        className={cn(
+          'flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold',
+          avatarColor(contact?.id ?? contact?.phone ?? displayName)
+        )}
+      >
         {contact?.avatar_url ? (
           <img
             src={contact.avatar_url}
@@ -474,24 +638,26 @@ function ConversationItem({
       {/* Content */}
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium text-foreground">
+          <span className="text-foreground truncate text-sm font-medium">
             {displayName}
           </span>
-          <span className="shrink-0 text-[10px] text-muted-foreground">{timeAgo}</span>
+          <span className="text-muted-foreground shrink-0 text-[10px]">
+            {timeAgo}
+          </span>
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">
-          <p className="truncate text-xs text-muted-foreground">
-            {conversation.last_message_text || t("noMessagesYet")}
+          <p className="text-muted-foreground truncate text-xs">
+            {conversation.last_message_text || t('noMessagesYet')}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
             {conversation.unread_count > 0 && (
-              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+              <span className="bg-primary text-primary-foreground flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold">
                 {conversation.unread_count}
               </span>
             )}
             <span
               className={cn(
-                "h-2 w-2 rounded-full",
+                'h-2 w-2 rounded-full',
                 STATUS_COLORS[conversation.status]
               )}
               title={conversation.status}

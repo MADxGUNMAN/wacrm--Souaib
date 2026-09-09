@@ -161,6 +161,10 @@ describe("node classification helpers", () => {
     expect(isSuspending("send_buttons")).toBe(true);
     expect(isSuspending("send_list")).toBe(true);
     expect(isSuspending("collect_input")).toBe(true);
+    // The runner sends ai_agent's opening line, persists
+    // current_node_key and returns — the same suspend shape as
+    // collect_input.
+    expect(isSuspending("ai_agent")).toBe(true);
     expect(isSuspending("start")).toBe(false);
     expect(isSuspending("send_message")).toBe(false);
     expect(isSuspending("condition")).toBe(false);
@@ -178,6 +182,10 @@ describe("node classification helpers", () => {
   });
 
   it("the three classifications are mutually exclusive for known node types", () => {
+    // Must list EVERY node type. `ai_agent` was missing here, which is
+    // how isSuspending() came to disagree with the runner it describes
+    // (the runner suspends on ai_agent; the classifier said it didn't)
+    // without any test going red.
     const types = [
       "start",
       "send_message",
@@ -188,12 +196,13 @@ describe("node classification helpers", () => {
       "condition",
       "set_tag",
       "handoff",
+      "ai_agent",
       "end",
     ];
     for (const t of types) {
       const flags = [isAutoAdvancing(t), isSuspending(t), isTerminal(t)];
       // Exactly one of the three should be true for every known node.
-      expect(flags.filter(Boolean).length).toBe(1);
+      expect(flags.filter(Boolean).length, `classification of ${t}`).toBe(1);
     }
   });
 });

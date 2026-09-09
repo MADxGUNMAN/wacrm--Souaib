@@ -1,6 +1,6 @@
 /**
  * CSV parsing for the contacts import modal. Shared + unit-tested so
- * tag-column handling stays aligned with phone/name/email/company.
+ * tag-column and custom-fields handling stays aligned with phone/name/email/company.
  */
 
 export interface ParsedContactRow {
@@ -10,6 +10,8 @@ export interface ParsedContactRow {
   company?: string;
   /** Tag names from the optional `tags` column (comma/semicolon separated). */
   tagNames: string[];
+  /** Dynamic custom field values keyed by column name (e.g. { "Order ID": "12345" }). */
+  customFields?: Record<string, string>;
 }
 
 /** Split a CSV cell into unique tag names (case-insensitive de-dupe). */
@@ -37,21 +39,22 @@ export interface ParseContactCsvResult {
   hasTagsColumn: boolean;
   /** True when the CSV header includes a `company` column. */
   hasCompanyColumn: boolean;
+  /** List of detected custom field column names (e.g. ["Order ID", "City"]). */
+  customFieldColumns: string[];
 }
 
 export function parseContactCsv(text: string): ParseContactCsvResult {
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) {
-    return { rows: [], hasTagsColumn: false, hasCompanyColumn: false };
+    return { rows: [], hasTagsColumn: false, hasCompanyColumn: false, customFieldColumns: [] };
   }
 
-  const headers = lines[0]
-    .split(',')
-    .map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
+  const rawHeaders = parseCsvLine(lines[0]);
+  const headers = rawHeaders.map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
 
   const phoneIdx = headers.indexOf('phone');
   if (phoneIdx === -1) {
-    return { rows: [], hasTagsColumn: false, hasCompanyColumn: false };
+    return { rows: [], hasTagsColumn: false, hasCompanyColumn: false, customFieldColumns: [] };
   }
 
   const nameIdx = headers.indexOf('name');
@@ -59,6 +62,20 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
   const companyIdx = headers.indexOf('company');
   const tagsIdx = headers.indexOf('tags');
 
+  // Identify all other non-empty headers as dynamic custom field columns
+  const standardIndices = new Set([phoneIdx, nameIdx, emailIdx, companyIdx, tagsIdx].filter((i) => i >= 0));
+  const customFieldIndices: { index: number; name: string }[] = [];
+
+  rawHeaders.forEach((rawHeader, idx) => {
+    if (!standardIndices.has(idx)) {
+      const cleanName = rawHeader.trim().replace(/^["']|["']$/g, '');
+      if (cleanName.length > 0) {
+        customFieldIndices.push({ index: idx, name: cleanName });
+      }
+    }
+  });
+
+  const customFieldColumns = customFieldIndices.map((c) => c.name);
   const rows: ParsedContactRow[] = [];
 
   for (let i = 1; i < lines.length; i++) {
@@ -68,6 +85,14 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
     const values = parseCsvLine(line);
     const phone = values[phoneIdx]?.replace(/["']/g, '').trim();
     if (!phone) continue;
+
+    const customFields: Record<string, string> = {};
+    for (const { index, name } of customFieldIndices) {
+      const val = values[index]?.replace(/^["']|["']$/g, '').trim();
+      if (val !== undefined && val !== '') {
+        customFields[name] = val;
+      }
+    }
 
     rows.push({
       phone,
@@ -85,6 +110,7 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
           : undefined,
       tagNames:
         tagsIdx >= 0 ? parseTagCell(values[tagsIdx]?.replace(/["']/g, '')) : [],
+      customFields: Object.keys(customFields).length > 0 ? customFields : undefined,
     });
   }
 
@@ -92,18 +118,26 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
     rows,
     hasTagsColumn: tagsIdx >= 0,
     hasCompanyColumn: companyIdx >= 0,
+    customFieldColumns,
   };
 }
 
 /** Simple CSV line parse (handles quoted fields). */
-function parseCsvLine(line: string): string[] {
+export function parseCsvLine(line: string): string[] {
   const values: string[] = [];
   let current = '';
   let inQuotes = false;
 
-  for (const char of line) {
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
     if (char === '"') {
-      inQuotes = !inQuotes;
+      // Handle escaped quotes ("")
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
     } else if (char === ',' && !inQuotes) {
       values.push(current.trim());
       current = '';

@@ -28,7 +28,13 @@ import {
   sendInteractiveButtons,
   sendInteractiveCtaUrl,
   sendInteractiveList,
+  sendContactsMessage,
+  sendLocationMessage,
+  sendLocationRequestMessage,
+  sendStickerMessage,
+  MetaApiError,
   type MediaKind,
+  type WhatsAppContactCard,
 } from '@/lib/whatsapp/meta-api';
 import {
   validateInteractivePayload,
@@ -45,12 +51,22 @@ import {
 } from '@/lib/whatsapp/phone-utils';
 import type { MessageTemplate } from '@/types';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
+import {
+  isMarketingCategory,
+  isPhoneOptedOut,
+  marketingSuppressionReason,
+  recordOptOutFromSendError,
+} from '@/lib/whatsapp/marketing-opt-out';
 
 export const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const;
 export const VALID_MESSAGE_TYPES = [
   'text',
   'template',
   'interactive',
+  'contacts',
+  'location',
+  'location_request',
+  'sticker',
   ...MEDIA_KINDS,
 ] as const;
 
@@ -84,7 +100,28 @@ export interface SendMessageParams {
   templateMessageParams?: unknown;
   /** Structured payload for `messageType === 'interactive'`. */
   interactivePayload?: InteractiveMessagePayload | null;
+  /** Structured payload for `messageType === 'contacts'`. */
+  contactsPayload?: WhatsAppContactCard[] | null;
+  /** Structured payload for `messageType === 'location'`. */
+  location?: {
+    latitude: number | string;
+    longitude: number | string;
+    name?: string | null;
+    address?: string | null;
+  } | null;
   replyToMessageId?: string | null;
+  /**
+   * `auth.users.id` of the human sending this, persisted to
+   * `messages.sender_id` so the inbox can name them.
+   *
+   * Optional, and left NULL by the public API on purpose: an API key has
+   * a creator, but that person did not send this message — their
+   * integration did. Labelling a machine send with a human's name would
+   * be worse than showing no name at all.
+   */
+  senderUserId?: string | null;
+  /** Internal ID of the source message if this send is a forwarded / re-sent message (Phase 6). */
+  forwardedFromMessageId?: string | null;
 }
 
 export interface SendMessageResult {
@@ -115,9 +152,23 @@ export function validateSendMessageParams(params: {
   mediaUrl?: string | null;
   templateName?: string | null;
   interactivePayload?: InteractiveMessagePayload | null;
+  contactsPayload?: WhatsAppContactCard[] | null;
+  location?: {
+    latitude: number | string;
+    longitude: number | string;
+    name?: string | null;
+    address?: string | null;
+  } | null;
 }): void {
-  const { messageType, contentText, mediaUrl, templateName, interactivePayload } =
-    params;
+  const {
+    messageType,
+    contentText,
+    mediaUrl,
+    templateName,
+    interactivePayload,
+    contactsPayload,
+    location,
+  } = params;
 
   if (!messageType) {
     throw new SendMessageError('bad_request', 'message_type is required', 400);
@@ -158,7 +209,74 @@ export function validateSendMessageParams(params: {
     }
   }
 
-  if (isMediaKind && !mediaUrl) {
+  // Location pin: validate latitude and longitude
+  if (messageType === 'location') {
+    if (!location) {
+      throw new SendMessageError(
+        'bad_request',
+        'location payload is required for location messages',
+        400
+      );
+    }
+    const lat = Number(location.latitude);
+    const lng = Number(location.longitude);
+    if (isNaN(lat) || lat < -90 || lat > 90) {
+      throw new SendMessageError(
+        'bad_request',
+        'Invalid latitude. Must be a number between -90 and 90',
+        400
+      );
+    }
+    if (isNaN(lng) || lng < -180 || lng > 180) {
+      throw new SendMessageError(
+        'bad_request',
+        'Invalid longitude. Must be a number between -180 and 180',
+        400
+      );
+    }
+  }
+
+  // Location request: prompt text is required
+  if (messageType === 'location_request' && !contentText?.trim()) {
+    throw new SendMessageError(
+      'bad_request',
+      'content_text is required for location_request messages',
+      400
+    );
+  }
+
+  // Contacts: validate array and formatted_name on each contact
+  if (messageType === 'contacts') {
+    if (
+      !contactsPayload ||
+      !Array.isArray(contactsPayload) ||
+      contactsPayload.length === 0
+    ) {
+      throw new SendMessageError(
+        'bad_request',
+        'contacts array is required for contacts messages',
+        400
+      );
+    }
+    if (contactsPayload.length > 257) {
+      throw new SendMessageError(
+        'bad_request',
+        'Meta allows a maximum of 257 contacts per message',
+        400
+      );
+    }
+    for (const c of contactsPayload) {
+      if (!c.name?.formatted_name?.trim()) {
+        throw new SendMessageError(
+          'bad_request',
+          'Each contact must have a formatted_name',
+          400
+        );
+      }
+    }
+  }
+
+  if ((isMediaKind || messageType === 'sticker') && !mediaUrl) {
     throw new SendMessageError(
       'bad_request',
       `media_url is required for ${messageType} messages`,
@@ -197,7 +315,11 @@ export async function sendMessageToConversation(
     templateParams,
     templateMessageParams,
     interactivePayload,
+    contactsPayload,
+    location,
     replyToMessageId,
+    senderUserId,
+    forwardedFromMessageId,
   } = params;
 
   if (!conversationId) {
@@ -214,6 +336,8 @@ export async function sendMessageToConversation(
     mediaUrl,
     templateName,
     interactivePayload,
+    contactsPayload,
+    location,
   });
 
   const isMediaKind = (MEDIA_KINDS as readonly string[]).includes(messageType);
@@ -330,6 +454,29 @@ export async function sendMessageToConversation(
     templateRow = data ?? null;
   }
 
+  // ── Marketing opt-out suppression ────────────────────────────────
+  // Both `/api/whatsapp/send` and `/api/v1/messages` funnel through
+  // here, so this one check covers both.
+  //
+  // Scoped to template sends: a free-form reply inside the 24-hour
+  // window is a customer-service message, not marketing, and blocking
+  // an agent from answering somebody who unsubscribed would be wrong.
+  //
+  // Short-circuits deliberately: the suppression lookup only runs for a
+  // marketing template, so an ordinary text reply costs no extra query.
+  const isMarketingTemplateSend =
+    messageType === 'template' && isMarketingCategory(templateRow?.category);
+  if (
+    isMarketingTemplateSend &&
+    (await isPhoneOptedOut(db, accountId, sanitizedPhone))
+  ) {
+    throw new SendMessageError(
+      'recipient_opted_out',
+      marketingSuppressionReason(templateRow?.category),
+      409
+    );
+  }
+
   const attempt = async (phone: string): Promise<string> => {
     if (messageType === 'template') {
       const result = await sendTemplateMessage({
@@ -400,6 +547,49 @@ export async function sendMessageToConversation(
       });
       return result.messageId;
     }
+    if (messageType === 'contacts') {
+      const result = await sendContactsMessage({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        to: phone,
+        contacts: contactsPayload!,
+        contextMessageId,
+      });
+      return result.messageId;
+    }
+    if (messageType === 'location') {
+      const result = await sendLocationMessage({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        to: phone,
+        latitude: location!.latitude,
+        longitude: location!.longitude,
+        name: location!.name || undefined,
+        address: location!.address || undefined,
+        contextMessageId,
+      });
+      return result.messageId;
+    }
+    if (messageType === 'location_request') {
+      const result = await sendLocationRequestMessage({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        to: phone,
+        bodyText: contentText!,
+        contextMessageId,
+      });
+      return result.messageId;
+    }
+    if (messageType === 'sticker') {
+      const result = await sendStickerMessage({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        to: phone,
+        link: mediaUrl!,
+        contextMessageId,
+      });
+      return result.messageId;
+    }
     const result = await sendTextMessage({
       phoneNumberId: config.phone_number_id,
       accessToken,
@@ -442,7 +632,137 @@ export async function sendMessageToConversation(
     const message =
       err instanceof Error ? err.message : 'Unknown Meta API error';
     console.error('[send-message] Meta send failed for all variants:', message);
-    throw new SendMessageError('meta_error', `Meta API error: ${message}`, 502);
+
+    // Record the failure BEFORE throwing.
+    //
+    // This insert did not exist. The success insert further down only runs
+    // once Meta accepts, so a rejected send left nothing behind: the red
+    // cross in the thread was optimistic client state that disappeared on
+    // refresh, and the reason lived only in a toast. Operators were left
+    // with "it failed" and no way to ever find out why.
+    //
+    // Meta's own wording is stored verbatim rather than a paraphrase of
+    // ours — see MetaApiError.operatorText for the preference order, and
+    // migration 073 for why the code and details are kept alongside it.
+    //
+    // Deliberately best-effort: if this write fails we still throw the
+    // original Meta error, because losing the audit trail must not also
+    // change what the caller is told went wrong.
+    // Meta error 131050 means the customer opted out of marketing at the
+    // platform level. Recording it locally is what stops the next
+    // broadcast rediscovering the same fact one wasted send at a time.
+    await recordOptOutFromSendError(db, {
+      accountId,
+      phone: sanitizedPhone,
+      contactId: contact.id,
+      error: err,
+    });
+
+    const meta = err instanceof MetaApiError ? err : null;
+    const contactsSummary =
+      messageType === 'contacts' && contactsPayload?.length
+        ? `👤 ${contactsPayload
+            .map((c) => c.name?.formatted_name)
+            .filter(Boolean)
+            .join(', ')}`
+        : null;
+    const locationSummary =
+      messageType === 'location' && location
+        ? `📍 ${[location.name, location.address].filter(Boolean).join(', ') || `${location.latitude}, ${location.longitude}`}`
+        : messageType === 'location_request'
+          ? `📍 ${contentText || 'Location requested'}`
+          : null;
+
+    const dbContentType =
+      messageType === 'location_request' ? 'interactive' : messageType;
+    const storedInteractivePayload =
+      messageType === 'interactive'
+        ? interactivePayload
+        : messageType === 'location_request'
+          ? {
+              type: 'location_request_message',
+              body: {
+                text: contentText || 'Please share your location with us.',
+              },
+              action: { name: 'send_location' },
+            }
+          : null;
+
+    try {
+      await db.from('messages').insert({
+        conversation_id: conversationId,
+        sender_type: 'agent',
+        // Recorded on the failure row too. "Who tried to send this and
+        // got an error" is exactly the question a team asks about a
+        // failed message, and it is unanswerable after the fact.
+        sender_id: senderUserId || null,
+        content_type: dbContentType,
+        content_text:
+          interactivePayload?.body ??
+          contactsSummary ??
+          locationSummary ??
+          contentText ??
+          null,
+        media_url: mediaUrl || null,
+        template_name: templateName || null,
+        interactive_payload: storedInteractivePayload,
+        contacts_payload:
+          messageType === 'contacts'
+            ? (contactsPayload as unknown as Record<string, unknown>[])
+            : null,
+        latitude:
+          messageType === 'location' && location
+            ? Number(location.latitude)
+            : null,
+        longitude:
+          messageType === 'location' && location
+            ? Number(location.longitude)
+            : null,
+        location_name:
+          messageType === 'location' && location ? location.name || null : null,
+        location_address:
+          messageType === 'location' && location
+            ? location.address || null
+            : null,
+        // No wamid: Meta never accepted it, so there is nothing to
+        // reconcile against later status webhooks.
+        message_id: null,
+        status: 'failed',
+        reply_to_message_id: replyToMessageId || null,
+        forwarded_from_message_id: forwardedFromMessageId || null,
+        error_code: meta?.code != null ? String(meta.code) : 'meta_error',
+        error_message: meta ? meta.operatorText : message,
+        error_details: meta
+          ? {
+              code: meta.code,
+              subcode: meta.subcode,
+              type: meta.type,
+              details: meta.details,
+              user_title: meta.userTitle,
+              user_message: meta.userMessage,
+              raw_message: meta.message,
+              fbtrace_id: meta.fbtraceId,
+              http_status: meta.httpStatus,
+            }
+          : { raw_message: message },
+      });
+    } catch (writeErr) {
+      console.error(
+        '[send-message] could not record the failure reason:',
+        writeErr instanceof Error ? writeErr.message : writeErr
+      );
+    }
+
+    // The conversation preview is deliberately NOT updated. A message that
+    // was never delivered must not become the last thing shown in the
+    // conversation list, or the list starts advertising failures as
+    // activity.
+
+    throw new SendMessageError(
+      'meta_error',
+      `Meta API error: ${meta ? meta.operatorText : message}`,
+      502
+    );
   }
 
   if (workingPhone !== sanitizedPhone) {
@@ -462,21 +782,75 @@ export async function sendMessageToConversation(
   // payload so the thread can re-render the buttons / rows.
   const interactiveBody =
     messageType === 'interactive' ? interactivePayload!.body : null;
+  const contactsSummary =
+    messageType === 'contacts' && contactsPayload?.length
+      ? `👤 ${contactsPayload
+          .map((c) => c.name?.formatted_name)
+          .filter(Boolean)
+          .join(', ')}`
+      : null;
+  const locationSummary =
+    messageType === 'location' && location
+      ? `📍 ${[location.name, location.address].filter(Boolean).join(', ') || `${location.latitude}, ${location.longitude}`}`
+      : messageType === 'location_request'
+        ? `📍 ${contentText || 'Location requested'}`
+        : null;
+
+  const dbContentType =
+    messageType === 'location_request' ? 'interactive' : messageType;
+  const storedInteractivePayload =
+    messageType === 'interactive'
+      ? interactivePayload
+      : messageType === 'location_request'
+        ? {
+            type: 'location_request_message',
+            body: {
+              text: contentText || 'Please share your location with us.',
+            },
+            action: { name: 'send_location' },
+          }
+        : null;
 
   const { data: messageRecord, error: msgError } = await db
     .from('messages')
     .insert({
       conversation_id: conversationId,
       sender_type: 'agent',
-      content_type: messageType,
-      content_text: interactiveBody ?? contentText ?? null,
+      // Migration 075. NULL when the caller is the public API — see the
+      // note on SendMessageParams.senderUserId.
+      sender_id: senderUserId || null,
+      content_type: dbContentType,
+      content_text:
+        interactiveBody ??
+        contactsSummary ??
+        locationSummary ??
+        contentText ??
+        null,
       media_url: mediaUrl || null,
       template_name: templateName || null,
-      interactive_payload:
-        messageType === 'interactive' ? interactivePayload : null,
+      interactive_payload: storedInteractivePayload,
+      contacts_payload:
+        messageType === 'contacts'
+          ? (contactsPayload as unknown as Record<string, unknown>[])
+          : null,
+      latitude:
+        messageType === 'location' && location
+          ? Number(location.latitude)
+          : null,
+      longitude:
+        messageType === 'location' && location
+          ? Number(location.longitude)
+          : null,
+      location_name:
+        messageType === 'location' && location ? location.name || null : null,
+      location_address:
+        messageType === 'location' && location
+          ? location.address || null
+          : null,
       message_id: waMessageId,
       status: 'sent',
       reply_to_message_id: replyToMessageId || null,
+      forwarded_from_message_id: forwardedFromMessageId || null,
     })
     .select()
     .single();
@@ -493,7 +867,7 @@ export async function sendMessageToConversation(
   const lastMessageText =
     messageType === 'interactive'
       ? interactivePayloadPreviewText(interactivePayload!)
-      : contentText || `[${messageType}]`;
+      : contactsSummary || locationSummary || contentText || `[${messageType}]`;
 
   await db
     .from('conversations')

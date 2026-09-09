@@ -21,17 +21,30 @@ export function FloatingChatWindow({
   const [resyncToken, setResyncToken] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  // Fetch initial messages
+  // Fetch the most recent messages.
+  //
+  // Newest-first with an explicit limit, then reversed for display. This
+  // was `ascending: true` with no limit, which looks like "load the whole
+  // thread" but is not: PostgREST caps a response at 1,000 rows, so an
+  // ascending sort returns the OLDEST 1,000 and silently drops everything
+  // after them. On a conversation carrying imported coexistence history
+  // (one is at 7,003 messages) that meant the window opened on messages
+  // from five weeks ago and never showed today's.
+  //
+  // A chat window wants the tail, and a bounded one: this is a small
+  // floating panel, not the full thread view, so it deliberately loads
+  // less than the main thread and offers no back-paging.
   const fetchMessages = useCallback(async () => {
     const supabase = createClient();
     const { data, error } = await supabase
       .from("messages")
       .select("*")
       .eq("conversation_id", chat.conversation.id)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: false })
+      .limit(100);
 
     if (!error && data) {
-      setMessages(data as Message[]);
+      setMessages([...(data as Message[])].reverse());
     }
     setLoading(false);
   }, [chat.conversation.id]);
@@ -80,17 +93,14 @@ export function FloatingChatWindow({
   }, []);
 
   // Mark messages as read automatically when the window is open (not minimized).
-  // This effect runs on mount (after fetch), when new messages arrive, and when maximized.
+  // Sends blue ticks to Meta and resets unread_count.
   useEffect(() => {
     if (!chat.isMinimized && messages.length > 0) {
-      const supabase = createClient();
-      supabase
-        .from("conversations")
-        .update({ unread_count: 0 })
-        .eq("id", chat.conversation.id)
-        .then(({ error }) => {
-          if (error) console.error("Failed to reset floating window unread count:", error);
-        });
+      fetch(`/api/whatsapp/conversations/${chat.conversation.id}/read`, {
+        method: "POST",
+      }).catch((error) => {
+        console.error("Failed to mark floating window conversation as read:", error);
+      });
     }
   }, [messages.length, chat.isMinimized, chat.conversation.id]);
 

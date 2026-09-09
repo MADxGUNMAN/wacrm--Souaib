@@ -47,7 +47,7 @@ function assertUsableDuration(duration: GrantDuration): void {
   const months = duration.months ?? 0;
   if (days <= 0 && months <= 0) {
     throw new SubscriptionMutationError(
-      'Specify a duration of at least one day or one month',
+      'Specify a duration of at least one day or one month'
     );
   }
 }
@@ -64,10 +64,21 @@ export interface ActivateResult {
 /**
  * Grant or extend paid access on an account.
  *
- * Renewal semantics: if the account still has time left, the new window
- * starts at the CURRENT end date, not today — paying early must never
- * cost the customer their remaining days. Once lapsed, the window
- * starts now. `resolveRenewalStart` owns that decision.
+ * Renewal semantics (updated Aug 2026 for window stacking):
+ *
+ *   1. If the account has an ACTIVE TRIAL (`trial_ends_at > now`
+ *      and stored status is `trialing`), the paid window is QUEUED
+ *      behind the trial. The paid window starts at `trial_ends_at`,
+ *      status stays `trialing`, and the resolver exposes the paid
+ *      window via `pendingWindow`. The user keeps their remaining
+ *      trial days, then the subscription takes over.
+ *
+ *   2. If the account already has a paid window (`subscription_ends_at
+ *      > now`), the new window EXTENDS from the current end date.
+ *
+ *   3. Otherwise (lapsed or no window), the window starts now.
+ *
+ *   `resolveRenewalStart` owns the decision for cases 2 and 3.
  */
 export async function activateSubscription(input: {
   accountId: string;
@@ -91,32 +102,60 @@ export async function activateSubscription(input: {
   }
 
   const now = new Date();
+
+  // ---- Window-stacking: queue paid behind an active trial ----
+  const trialEndsAt = current.trial_ends_at
+    ? new Date(current.trial_ends_at)
+    : null;
+  const trialIsOpen =
+    trialEndsAt !== null &&
+    trialEndsAt.getTime() > now.getTime() &&
+    current.subscription_status === 'trialing';
+
+  // When no explicit start was given, decide where the paid window begins:
+  //   - active trial → start from trial_ends_at (queue behind trial)
+  //   - existing paid → extend from subscription_ends_at
+  //   - otherwise → now
   const startsAt =
-    input.startAt ?? resolveRenewalStart(current.subscription_ends_at, now);
+    input.startAt ??
+    (trialIsOpen
+      ? resolveRenewalStart(
+          // If a paid window already exists AND ends later than the
+          // trial, extend from the paid end. Otherwise start from
+          // the trial end.
+          current.subscription_ends_at &&
+            new Date(current.subscription_ends_at).getTime() >
+              trialEndsAt!.getTime()
+            ? current.subscription_ends_at
+            : current.trial_ends_at,
+          now
+        )
+      : resolveRenewalStart(current.subscription_ends_at, now));
   const endsAt = addDuration(startsAt, input.duration);
 
   if (endsAt.getTime() <= now.getTime()) {
-    // Would grant an already-expired window — almost certainly an
-    // operator typo (negative days, a past start override). Refuse
-    // rather than silently locking the customer out.
     throw new SubscriptionMutationError(
-      'That duration would end in the past. Check the values and try again.',
+      'That duration would end in the past. Check the values and try again.'
     );
   }
 
   const extended = startsAt.getTime() > now.getTime();
 
+  // When the trial is still open, keep the status as 'trialing' so the
+  // resolver knows the user is inside their trial. The paid window sits
+  // behind it and becomes active automatically when the trial expires.
+  const newStatus: SubscriptionStatus = trialIsOpen ? 'trialing' : 'active';
+
   const { error } = await admin
     .from('accounts')
     .update({
-      subscription_status: 'active' satisfies SubscriptionStatus,
-      subscription_plan_id: input.planId ?? current.subscription_plan_id ?? null,
+      subscription_status: newStatus,
+      subscription_plan_id:
+        input.planId ?? current.subscription_plan_id ?? null,
       subscription_plan_name:
         input.planName ?? current.subscription_plan_name ?? null,
       subscription_cycle_label:
         input.cycleLabel ?? current.subscription_cycle_label ?? null,
-      // Preserve the original start across renewals so "customer since"
-      // stays meaningful; only set it on a fresh activation.
       subscription_started_at:
         current.subscription_started_at ?? startsAt.toISOString(),
       subscription_ends_at: endsAt.toISOString(),
@@ -128,7 +167,7 @@ export async function activateSubscription(input: {
   if (error) {
     throw new SubscriptionMutationError(
       `Could not activate the subscription: ${error.message}`,
-      500,
+      500
     );
   }
 
@@ -136,14 +175,23 @@ export async function activateSubscription(input: {
     accountId: input.accountId,
     eventType: extended ? 'subscription_extended' : 'subscription_activated',
     fromStatus: current.subscription_status,
-    toStatus: 'active',
+    toStatus: newStatus,
     endsAt,
     planName: input.planName ?? current.subscription_plan_name ?? null,
     cycleLabel: input.cycleLabel ?? current.subscription_cycle_label ?? null,
     amount: input.amount ?? null,
     paymentRequestId: input.paymentRequestId ?? null,
     actorUserId: input.actorUserId ?? null,
-    note: input.note ?? null,
+    note: trialIsOpen
+      ? (input.note ??
+        `Paid window queued behind trial (trial ends ${trialEndsAt!.toISOString().slice(0, 10)})`)
+      : (input.note ?? null),
+    durationDays: input.duration.days ?? null,
+    durationMonths: input.duration.days
+      ? null
+      : (input.duration.months ?? null),
+    previousEndsAt: current.subscription_ends_at ?? null,
+    windowKind: 'paid',
   });
 
   return {
@@ -182,7 +230,7 @@ export async function approvePaymentRequest(input: {
   if (readErr) {
     throw new SubscriptionMutationError(
       `Could not load the payment request: ${readErr.message}`,
-      500,
+      500
     );
   }
   if (!existing) {
@@ -191,7 +239,7 @@ export async function approvePaymentRequest(input: {
   if (existing.status !== 'pending') {
     throw new SubscriptionMutationError(
       `This request was already ${existing.status}`,
-      409,
+      409
     );
   }
 
@@ -210,7 +258,25 @@ export async function approvePaymentRequest(input: {
   // request match what the account will get.
   const account = await getAccountSubscription(existing.account_id);
   const now = new Date();
-  const startsAt = resolveRenewalStart(account?.subscription_ends_at, now);
+
+  // ---- Window-stacking: queue paid behind an active trial ----
+  const trialEnd = account?.trial_ends_at
+    ? new Date(account.trial_ends_at)
+    : null;
+  const trialIsOpen =
+    trialEnd !== null &&
+    trialEnd.getTime() > now.getTime() &&
+    account?.subscription_status === 'trialing';
+
+  const startsAt = trialIsOpen
+    ? resolveRenewalStart(
+        account?.subscription_ends_at &&
+          new Date(account.subscription_ends_at).getTime() > trialEnd!.getTime()
+          ? account.subscription_ends_at
+          : account?.trial_ends_at,
+        now
+      )
+    : resolveRenewalStart(account?.subscription_ends_at, now);
   const endsAt = addDuration(startsAt, duration);
 
   // ---- CLAIM ----
@@ -235,13 +301,13 @@ export async function approvePaymentRequest(input: {
   if (claimErr) {
     throw new SubscriptionMutationError(
       `Could not approve the payment: ${claimErr.message}`,
-      500,
+      500
     );
   }
   if (!claimed || claimed.length === 0) {
     throw new SubscriptionMutationError(
       'This request was reviewed by someone else a moment ago. Reload to see its current state.',
-      409,
+      409
     );
   }
 
@@ -315,7 +381,7 @@ export async function rejectPaymentRequest(input: {
   if (error) {
     throw new SubscriptionMutationError(
       `Could not reject the payment: ${error.message}`,
-      500,
+      500
     );
   }
   if (!claimed || claimed.length === 0) {
@@ -323,7 +389,7 @@ export async function rejectPaymentRequest(input: {
     // conflict response — the admin's next move is to reload either way.
     throw new SubscriptionMutationError(
       'That request is no longer pending. Reload to see its current state.',
-      409,
+      409
     );
   }
 
@@ -375,7 +441,7 @@ export async function revokeSubscription(input: {
   if (error) {
     throw new SubscriptionMutationError(
       `Could not revoke the subscription: ${error.message}`,
-      500,
+      500
     );
   }
 
@@ -387,6 +453,10 @@ export async function revokeSubscription(input: {
     planName: current?.subscription_plan_name ?? null,
     actorUserId: input.actorUserId,
     note: input.note ?? null,
+    // No duration — a block is not a span of time. But recording the date
+    // it overrode matters: it is how you see how much access the customer
+    // still had left when they were cut off.
+    previousEndsAt: current?.subscription_ends_at ?? null,
   });
 }
 
@@ -464,7 +534,7 @@ export async function expireNow(input: {
   if (error) {
     throw new SubscriptionMutationError(
       `Could not expire the current window: ${error.message}`,
-      500,
+      500
     );
   }
 
@@ -480,9 +550,224 @@ export async function expireNow(input: {
     note:
       input.note ??
       `${hasPaidWindow ? 'Subscription' : 'Trial'} ended immediately by a platform admin`,
+    // Which window was cut short, and the date it would otherwise have
+    // run to — the two facts that make this event reviewable later.
+    windowKind: hasPaidWindow ? 'paid' : 'trial',
+    previousEndsAt: hasPaidWindow
+      ? (current.subscription_ends_at ?? null)
+      : (current.trial_ends_at ?? null),
   });
 
   return { mode: hasPaidWindow ? 'paid' : 'trial', endsAt: now };
+}
+
+/**
+ * End ONE specific window right now, leaving the other untouched.
+ *
+ * `expireNow` (above) auto-detects which window to end, and that guess
+ * is wrong exactly in the case that prompted this function: an account
+ * can have BOTH a trial and a paid window at once (window stacking —
+ * see the module comment), and the admin may want to end only one of
+ * them. Concretely:
+ *
+ *   - End the trial while a paid plan is still queued behind it → the
+ *     paid plan should take over immediately, not get cancelled.
+ *   - Cancel a queued/active paid plan while a trial is still running
+ *     → the trial should keep counting down, untouched.
+ *
+ * Each branch only ever writes the ONE date column it names. That is
+ * deliberate and is what makes the two calls independent: expiring the
+ * trial does not require knowing anything about the paid window's
+ * state (the resolver's fallthrough already prefers whichever window
+ * is still open), and vice versa.
+ */
+export async function expireWindow(input: {
+  accountId: string;
+  which: 'trial' | 'paid';
+  actorUserId: string;
+  note?: string | null;
+}): Promise<{ which: 'trial' | 'paid'; endsAt: Date }> {
+  const admin = supabaseAdmin();
+  const current = await getAccountSubscription(input.accountId);
+  if (!current) {
+    throw new SubscriptionMutationError('Account not found', 404);
+  }
+
+  const now = new Date();
+  const iso = now.toISOString();
+
+  const patch: Record<string, unknown> =
+    input.which === 'trial'
+      ? { trial_ends_at: iso }
+      : { subscription_ends_at: iso };
+
+  const { error } = await admin
+    .from('accounts')
+    .update({
+      ...patch,
+      subscription_updated_by_user_id: input.actorUserId,
+      subscription_note: input.note ?? null,
+    })
+    .eq('id', input.accountId);
+
+  if (error) {
+    throw new SubscriptionMutationError(
+      `Could not expire the ${input.which} window: ${error.message}`,
+      500
+    );
+  }
+
+  await logSubscriptionEvent({
+    accountId: input.accountId,
+    eventType: 'subscription_expired',
+    fromStatus: current.subscription_status,
+    toStatus: current.subscription_status,
+    endsAt: now,
+    planName: current.subscription_plan_name ?? null,
+    cycleLabel: current.subscription_cycle_label ?? null,
+    actorUserId: input.actorUserId,
+    note:
+      input.note ??
+      `${input.which === 'trial' ? 'Trial' : 'Paid subscription'} ended immediately by a platform admin`,
+    windowKind: input.which,
+    previousEndsAt:
+      input.which === 'trial'
+        ? (current.trial_ends_at ?? null)
+        : (current.subscription_ends_at ?? null),
+  });
+
+  return { which: input.which, endsAt: now };
+}
+
+/**
+ * End BOTH windows at once — the third option next to "expire trial
+ * only" and "expire paid only". One account update (both date columns
+ * in the same write, so there's no instant in between where only one
+ * has closed) and two audit rows, since `window_kind` on
+ * `subscription_events` is a single value and each window's own
+ * "what date did this replace" deserves its own row.
+ */
+export async function expireBothWindows(input: {
+  accountId: string;
+  actorUserId: string;
+  note?: string | null;
+}): Promise<{ endsAt: Date }> {
+  const admin = supabaseAdmin();
+  const current = await getAccountSubscription(input.accountId);
+  if (!current) {
+    throw new SubscriptionMutationError('Account not found', 404);
+  }
+
+  const now = new Date();
+  const iso = now.toISOString();
+
+  const { error } = await admin
+    .from('accounts')
+    .update({
+      trial_ends_at: iso,
+      subscription_ends_at: iso,
+      subscription_updated_by_user_id: input.actorUserId,
+      subscription_note: input.note ?? null,
+    })
+    .eq('id', input.accountId);
+
+  if (error) {
+    throw new SubscriptionMutationError(
+      `Could not expire the account's access: ${error.message}`,
+      500
+    );
+  }
+
+  const note =
+    input.note ??
+    'Trial and paid subscription both ended immediately by a platform admin';
+
+  await logSubscriptionEvent({
+    accountId: input.accountId,
+    eventType: 'subscription_expired',
+    fromStatus: current.subscription_status,
+    toStatus: current.subscription_status,
+    endsAt: now,
+    planName: current.subscription_plan_name ?? null,
+    cycleLabel: current.subscription_cycle_label ?? null,
+    actorUserId: input.actorUserId,
+    note,
+    windowKind: 'trial',
+    previousEndsAt: current.trial_ends_at ?? null,
+  });
+  await logSubscriptionEvent({
+    accountId: input.accountId,
+    eventType: 'subscription_expired',
+    fromStatus: current.subscription_status,
+    toStatus: current.subscription_status,
+    endsAt: now,
+    planName: current.subscription_plan_name ?? null,
+    cycleLabel: current.subscription_cycle_label ?? null,
+    actorUserId: input.actorUserId,
+    note,
+    windowKind: 'paid',
+    previousEndsAt: current.subscription_ends_at ?? null,
+  });
+
+  return { endsAt: now };
+}
+
+/**
+ * Correct the TRIAL's end date to an exact value, the trial-side
+ * counterpart of the `set_end_date` action (which only ever touched
+ * `subscription_ends_at`). Added because the paid window had a "fix the
+ * date" escape hatch and the trial window did not — an admin who put in
+ * a wrong number of trial days had no way to correct it without going
+ * through the day-count math of `extend_trial` again.
+ *
+ * Deliberately leaves `subscription_status` exactly as stored. Unlike
+ * `set_end_date`, which forces `status: 'active'` because setting a
+ * paid end date only ever makes sense when paid access is/becomes the
+ * live window, correcting a trial date must NOT flip status — the
+ * account might currently be inside a paid window with this trial
+ * merely queued behind it, and this call should not disturb that.
+ */
+export async function setTrialEndDate(input: {
+  accountId: string;
+  trialEndsAt: Date;
+  actorUserId: string;
+  note?: string | null;
+}): Promise<void> {
+  const admin = supabaseAdmin();
+  const current = await getAccountSubscription(input.accountId);
+  if (!current) {
+    throw new SubscriptionMutationError('Account not found', 404);
+  }
+
+  const { error } = await admin
+    .from('accounts')
+    .update({
+      trial_ends_at: input.trialEndsAt.toISOString(),
+      subscription_updated_by_user_id: input.actorUserId,
+      subscription_note: input.note ?? null,
+    })
+    .eq('id', input.accountId);
+
+  if (error) {
+    throw new SubscriptionMutationError(
+      `Could not update the trial end date: ${error.message}`,
+      500
+    );
+  }
+
+  await logSubscriptionEvent({
+    accountId: input.accountId,
+    eventType: 'trial_extended',
+    fromStatus: current.subscription_status,
+    toStatus: current.subscription_status,
+    endsAt: input.trialEndsAt,
+    planName: current.subscription_plan_name ?? null,
+    cycleLabel: current.subscription_cycle_label ?? null,
+    actorUserId: input.actorUserId,
+    note: input.note ?? null,
+    windowKind: 'trial',
+    previousEndsAt: current.trial_ends_at ?? null,
+  });
 }
 
 /**
@@ -502,6 +787,15 @@ export async function setSubscriptionState(input: {
   cycleLabel?: string | null;
   actorUserId: string;
   note?: string | null;
+  /**
+   * For the audit trail only (migration 081) — how many days the operator
+   * asked for. Does not affect the dates, which the caller has already
+   * resolved; this records the INTENT so "Trial extended" can say by how
+   * much instead of only showing the resulting date.
+   */
+  durationDays?: number | null;
+  /** Which window this write is about, when it is not implied by a trial date. */
+  windowKind?: 'paid' | 'trial' | null;
 }): Promise<void> {
   const admin = supabaseAdmin();
   const current = await getAccountSubscription(input.accountId);
@@ -516,15 +810,40 @@ export async function setSubscriptionState(input: {
   };
 
   if (input.endsAt !== undefined) {
-    patch.subscription_ends_at = input.endsAt ? input.endsAt.toISOString() : null;
+    patch.subscription_ends_at = input.endsAt
+      ? input.endsAt.toISOString()
+      : null;
   }
   if (input.trialEndsAt !== undefined) {
     patch.trial_ends_at = input.trialEndsAt
       ? input.trialEndsAt.toISOString()
       : null;
   }
+
+  // --- Window coexistence (Aug 2026) ---
+  // Both a trial and a paid window may coexist now (queued windows).
+  // The resolver uses stored status to decide which is primary and
+  // falls through to the other when the primary expires.
+  //
+  // Only clear the OTHER window when it is STALE (in the past) and
+  // would confuse the resolver. A future-dated other window is a
+  // legitimate queue entry and must be preserved.
+  if (
+    input.status === 'trialing' &&
+    input.trialEndsAt &&
+    input.endsAt === undefined
+  ) {
+    // Clear stale paid window only — a future paid window is a queue.
+    const currentPaidEnd = current.subscription_ends_at
+      ? new Date(current.subscription_ends_at)
+      : null;
+    if (!currentPaidEnd || currentPaidEnd.getTime() <= Date.now()) {
+      patch.subscription_ends_at = null;
+    }
+  }
   if (input.planId !== undefined) patch.subscription_plan_id = input.planId;
-  if (input.planName !== undefined) patch.subscription_plan_name = input.planName;
+  if (input.planName !== undefined)
+    patch.subscription_plan_name = input.planName;
   if (input.cycleLabel !== undefined) {
     patch.subscription_cycle_label = input.cycleLabel;
   }
@@ -540,7 +859,7 @@ export async function setSubscriptionState(input: {
   if (error) {
     throw new SubscriptionMutationError(
       `Could not update the subscription: ${error.message}`,
-      500,
+      500
     );
   }
 
@@ -559,5 +878,13 @@ export async function setSubscriptionState(input: {
     cycleLabel: input.cycleLabel ?? current.subscription_cycle_label ?? null,
     actorUserId: input.actorUserId,
     note: input.note ?? null,
+    // Migration 081. This path serves both trial extension and a direct
+    // status write, so the window and duration are whatever the caller
+    // supplied rather than assumed — a bare status change has neither.
+    durationDays: input.durationDays ?? null,
+    windowKind: input.trialEndsAt ? 'trial' : (input.windowKind ?? null),
+    previousEndsAt: input.trialEndsAt
+      ? (current.trial_ends_at ?? null)
+      : (current.subscription_ends_at ?? null),
   });
 }

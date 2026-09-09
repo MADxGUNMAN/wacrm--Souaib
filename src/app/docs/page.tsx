@@ -1,15 +1,15 @@
-import type { Metadata } from "next";
-import Link from "next/link";
+import type { Metadata } from 'next';
+import Link from 'next/link';
 
-import { DocsExplorer } from "@/components/docs/DocsExplorer";
+import { DocsExplorer } from '@/components/docs/DocsExplorer';
 import {
   getDocsCategories,
   getDocsPageSettings,
   getLegalPagesList,
   getSiteSettings,
-} from "@/lib/cms/queries";
+} from '@/lib/cms/queries';
 
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 
 export async function generateMetadata(): Promise<Metadata> {
   const [settings, docs] = await Promise.all([
@@ -17,14 +17,19 @@ export async function generateMetadata(): Promise<Metadata> {
     getDocsPageSettings(),
   ]);
 
-  const siteName = settings?.site_name || "Replai";
-  const heading = docs?.heading || "Resource centre";
+  const siteName = settings?.site_name || 'Replai';
+  const heading = docs?.heading || 'Resource centre';
+  const isNoIndex = settings?.no_index ?? false;
 
   return {
     title: `${heading} | ${siteName}`,
     description:
       docs?.subheading ||
       `Guides, feature walkthroughs and policies for ${siteName}.`,
+    robots: {
+      index: !isNoIndex,
+      follow: !isNoIndex,
+    },
   };
 }
 
@@ -47,7 +52,7 @@ export default async function DocsPage() {
     getLegalPagesList(),
   ]);
 
-  const heading = settings?.heading || "Everything you need to run Replai";
+  const heading = settings?.heading || 'Everything you need to run Replai';
 
   return (
     <div>

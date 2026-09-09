@@ -1,11 +1,12 @@
-import type { Metadata, Viewport } from "next";
+import type { Metadata, Viewport } from 'next';
 import { NextIntlClientProvider } from 'next-intl';
 import { getLocale, getMessages } from 'next-intl/server';
-import { Inter } from "next/font/google";
-import Script from "next/script";
-import "./globals.css";
-import { ThemeProvider } from "@/hooks/use-theme";
-import { ThemedToaster } from "@/components/themed-toaster";
+import { Inter } from 'next/font/google';
+import Script from 'next/script';
+import './globals.css';
+import { ThemeProvider } from '@/hooks/use-theme';
+import { ThemedToaster } from '@/components/themed-toaster';
+import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import {
   DEFAULT_MODE,
   DEFAULT_THEME,
@@ -13,26 +14,32 @@ import {
   MODES,
   STORAGE_KEY,
   THEME_IDS,
-} from "@/lib/themes";
+} from '@/lib/themes';
 
 const inter = Inter({
-  variable: "--font-sans",
-  subsets: ["latin"],
+  variable: '--font-sans',
+  subsets: ['latin'],
 });
 
 export async function generateMetadata(): Promise<Metadata> {
-  let faviconUrl = "/logo-icon.png";
-  let siteName = "Replai - WhatsApp CRM Automation";
-  
+  let faviconUrl: string | undefined = undefined;
+  let siteName = 'Replai - WhatsApp CRM Automation';
+  let noIndex = false;
+
   try {
     const { supabaseAdmin } = await import('@/lib/auth/admin-client');
     const admin = supabaseAdmin();
-    const { data } = await admin.from('site_settings').select('favicon_url, site_name').limit(1).maybeSingle();
-    
+    const { data } = await admin
+      .from('site_settings')
+      .select('favicon_url, site_name, no_index')
+      .limit(1)
+      .maybeSingle();
+
     if (data?.favicon_url) faviconUrl = data.favicon_url;
     if (data?.site_name) siteName = data.site_name;
+    if (typeof data?.no_index === 'boolean') noIndex = data.no_index;
   } catch (err) {
-    console.error("Failed to load metadata in root layout:", err);
+    console.error('Failed to load metadata in root layout:', err);
   }
 
   return {
@@ -40,14 +47,16 @@ export async function generateMetadata(): Promise<Metadata> {
       default: siteName,
       template: `%s — ${siteName}`,
     },
-    description: "Self-hostable CRM and Automation platform for WhatsApp.",
+    description: 'Self-hostable CRM and Automation platform for WhatsApp.',
     robots: {
-      index: false,
-      follow: false,
+      index: !noIndex,
+      follow: !noIndex,
     },
-    icons: {
-      icon: [{ url: faviconUrl }],
-    },
+    icons: faviconUrl
+      ? {
+          icon: [{ url: faviconUrl }],
+        }
+      : undefined,
     formatDetection: {
       email: false,
       address: false,
@@ -57,8 +66,8 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export const viewport: Viewport = {
-  themeColor: "#020617",
-  colorScheme: "dark light",
+  themeColor: '#020617',
+  colorScheme: 'dark light',
 };
 
 // Inline boot script — runs before React hydrates so the user's
@@ -123,11 +132,13 @@ export default async function RootLayout({
           dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }}
         />
       </head>
-      <body className="min-h-full bg-background text-foreground font-sans">
+      <body className="bg-background text-foreground min-h-full font-sans">
         <NextIntlClientProvider messages={messages} locale={locale}>
           <ThemeProvider>
-            {children}
-            <ThemedToaster />
+            <ConfirmProvider>
+              {children}
+              <ThemedToaster />
+            </ConfirmProvider>
           </ThemeProvider>
         </NextIntlClientProvider>
       </body>

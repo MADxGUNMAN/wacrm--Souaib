@@ -1,11 +1,11 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
-import type { MessageTemplate } from "@/types";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { useEffect, useMemo, useState } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import type { MessageTemplate } from '@/types';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Dialog,
   DialogContent,
@@ -13,18 +13,14 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
-import {
-  ArrowLeft,
-  ChevronRight,
-  LayoutTemplate,
-  Loader2,
-} from "lucide-react";
-import { definitionFromRow } from "@/lib/whatsapp/template-definition";
-import { positionalValues } from "@/lib/whatsapp/template-preview-text";
-import { WhatsAppPreview } from "@/components/templates/whatsapp-preview";
-import { templateSendability } from "@/lib/whatsapp/template-sendability";
+} from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
+import { ArrowLeft, ChevronRight, LayoutTemplate, Loader2 } from 'lucide-react';
+import { definitionFromRow } from '@/lib/whatsapp/template-definition';
+import { positionalValues } from '@/lib/whatsapp/template-preview-text';
+import { WhatsAppPreview } from '@/components/templates/whatsapp-preview';
+import { MediaUploadField } from '@/components/media/media-upload-field';
+import { templateSendability } from '@/lib/whatsapp/template-sendability';
 import {
   EMPTY_HEADER_LOCATION,
   EMPTY_MPM,
@@ -39,7 +35,7 @@ import {
   type OrderDetailsValues,
   type OrderStatusOption,
   type SendValues,
-} from "@/lib/whatsapp/template-send-inputs";
+} from '@/lib/whatsapp/template-send-inputs';
 import {
   CarouselCardFields,
   CatalogThumbnailField,
@@ -48,8 +44,8 @@ import {
   OfferExpiryField,
   OrderDetailsFields,
   OrderStatusFields,
-} from "@/components/templates/send-time-fields";
-import { useTranslations } from "next-intl";
+} from '@/components/templates/send-time-fields';
+import { useTranslations } from 'next-intl';
 
 export interface TemplateSendValues {
   body: string[];
@@ -66,8 +62,56 @@ export interface TemplateSendValues {
   namedBody?: Record<string, string>;
   /** Order status: which order this send updates, and the new status. */
   orderReferenceId?: string;
-  orderStatus?: OrderStatusOption | "";
+  orderStatus?: OrderStatusOption | '';
   orderStatusDescription?: string;
+}
+
+/**
+ * Build the `POST /api/whatsapp/send` body for a template send.
+ *
+ * ─── Why this is a function and not inline JSON ────────────────────
+ *
+ * `TemplateSendValues` has eleven fields, and a caller that lists them
+ * by hand silently drops whatever it forgot. That has now happened
+ * twice: the inbox once omitted `headerMediaUrl`, and the contacts panel
+ * shipped only `body`, `headerText` and `buttonParams` — so every
+ * carousel sent from a contact failed with "Card 1 needs a media link or
+ * id at send time" while the identical template sent fine from the
+ * inbox. Named templates, limited-time offers, location headers and
+ * order-status templates were all broken the same way and nobody had hit
+ * them yet.
+ *
+ * One builder means the next surface that sends a template cannot repeat
+ * it, and a twelfth field is picked up everywhere for free.
+ */
+export function buildTemplateSendRequest(args: {
+  template: Pick<MessageTemplate, 'name' | 'language'>;
+  values: TemplateSendValues;
+  /**
+   * An existing thread, or a contact with no conversation yet — the send
+   * route find-or-creates one for `contact_id`.
+   */
+  target: { conversationId: string } | { contactId: string };
+  /** Rendered body, for the optimistic bubble and the list preview. */
+  contentText?: string;
+}): Record<string, unknown> {
+  const { template, values, target, contentText } = args;
+  return {
+    ...('conversationId' in target
+      ? { conversation_id: target.conversationId }
+      : { contact_id: target.contactId }),
+    message_type: 'template',
+    template_name: template.name,
+    template_language: template.language,
+    // Spread, never field-by-field. This is the whole point of the
+    // helper: header media, carousel cards, offer expiry, location pins,
+    // named body params and order references all live in here.
+    template_message_params: values,
+    // Mirrored under the legacy positional shape too, so the route can
+    // still fall back when the template row is not found locally.
+    template_params: values.body,
+    ...(contentText ? { content_text: contentText } : {}),
+  };
 }
 
 interface TemplatePickerProps {
@@ -81,29 +125,29 @@ export function TemplatePicker({
   onOpenChange,
   onSelect,
 }: TemplatePickerProps) {
-  const t = useTranslations("Inbox.templatePicker");
+  const t = useTranslations('Inbox.templatePicker');
 
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<MessageTemplate | null>(null);
   const [params, setParams] = useState<string[]>([]);
-  const [headerText, setHeaderText] = useState<string>("");
-  const [headerMediaUrl, setHeaderMediaUrl] = useState<string>("");
+  const [headerText, setHeaderText] = useState<string>('');
+  const [headerMediaUrl, setHeaderMediaUrl] = useState<string>('');
   const [buttonParams, setButtonParams] = useState<Record<number, string>>({});
   /** datetime-local string, converted to ms only on confirm. */
-  const [offerExpiry, setOfferExpiry] = useState<string>("");
+  const [offerExpiry, setOfferExpiry] = useState<string>('');
   const [cardValues, setCardValues] = useState<CardValues[]>([]);
   const [orderStatusValues, setOrderStatusValues] = useState<{
     orderReferenceId: string;
-    orderStatus: OrderStatusOption | "";
+    orderStatus: OrderStatusOption | '';
     orderStatusDescription: string;
-  }>({ orderReferenceId: "", orderStatus: "", orderStatusDescription: "" });
+  }>({ orderReferenceId: '', orderStatus: '', orderStatusDescription: '' });
   const [headerLocation, setHeaderLocation] = useState<HeaderLocationValues>(
-    EMPTY_HEADER_LOCATION,
+    EMPTY_HEADER_LOCATION
   );
   /** NAMED templates only: values keyed by parameter name. */
   const [namedBody, setNamedBody] = useState<Record<string, string>>({});
-  const [catalogThumbnail, setCatalogThumbnail] = useState("");
+  const [catalogThumbnail, setCatalogThumbnail] = useState('');
   const [mpmValues, setMpmValues] = useState<MpmValues>(EMPTY_MPM);
   const [orderDetailsValues, setOrderDetailsValues] =
     useState<OrderDetailsValues>(EMPTY_ORDER_DETAILS);
@@ -132,14 +176,14 @@ export function TemplatePicker({
       // user_id hid templates that a teammate created — leaving them unable
       // to send approved templates in a shared account.
       const { data, error } = await supabase
-        .from("message_templates")
-        .select("*")
-        .eq("status", "APPROVED")
-        .order("created_at", { ascending: false });
+        .from('message_templates')
+        .select('*')
+        .eq('status', 'APPROVED')
+        .order('created_at', { ascending: false });
 
       if (cancelled) return;
       if (error) {
-        console.error("Failed to fetch templates:", error);
+        console.error('Failed to fetch templates:', error);
         setTemplates([]);
       } else {
         setTemplates((data as MessageTemplate[]) ?? []);
@@ -155,19 +199,19 @@ export function TemplatePicker({
   function resetSelection() {
     setSelected(null);
     setParams([]);
-    setHeaderText("");
-    setHeaderMediaUrl("");
+    setHeaderText('');
+    setHeaderMediaUrl('');
     setButtonParams({});
-    setOfferExpiry("");
+    setOfferExpiry('');
     setCardValues([]);
     setOrderStatusValues({
-      orderReferenceId: "",
-      orderStatus: "",
-      orderStatusDescription: "",
+      orderReferenceId: '',
+      orderStatus: '',
+      orderStatusDescription: '',
     });
     setHeaderLocation(EMPTY_HEADER_LOCATION);
     setNamedBody({});
-    setCatalogThumbnail("");
+    setCatalogThumbnail('');
     setMpmValues(EMPTY_MPM);
     setOrderDetailsValues(EMPTY_ORDER_DETAILS);
   }
@@ -187,21 +231,21 @@ export function TemplatePicker({
       return;
     }
     setSelected(template);
-    setParams(new Array(plan.bodyVarCount).fill(""));
-    setHeaderText("");
-    setHeaderMediaUrl(plan.headerMedia?.defaultUrl ?? "");
+    setParams(new Array(plan.bodyVarCount).fill(''));
+    setHeaderText('');
+    setHeaderMediaUrl(plan.headerMedia?.defaultUrl ?? '');
     setButtonParams({});
     // An offer needs a deadline and there is no defensible default, but an
     // empty datetime field is fiddly to fill from scratch — seed 24 hours
     // out, which the operator can change and must consciously accept.
-    setOfferExpiry(plan.offer ? defaultOfferExpiryLocal(24) : "");
+    setOfferExpiry(plan.offer ? defaultOfferExpiryLocal(24) : '');
     setCardValues(plan.cards.map(() => ({})));
     setOrderStatusValues({
-      orderReferenceId: "",
+      orderReferenceId: '',
       // Left blank on purpose: a default status would let someone tell a
       // customer their order had shipped by not reading the form.
-      orderStatus: "",
-      orderStatusDescription: "",
+      orderStatus: '',
+      orderStatusDescription: '',
     });
     setHeaderLocation(EMPTY_HEADER_LOCATION);
     setNamedBody({});
@@ -212,7 +256,7 @@ export function TemplatePicker({
     const trimmedButtons = Object.fromEntries(
       Object.entries(buttonParams)
         .filter(([, v]) => v.trim().length > 0)
-        .map(([k, v]) => [Number(k), v.trim()]),
+        .map(([k, v]) => [Number(k), v.trim()])
     );
     return {
       body: params,
@@ -223,9 +267,7 @@ export function TemplatePicker({
       ...(Object.keys(trimmedButtons).length > 0
         ? { buttonParams: trimmedButtons }
         : {}),
-      ...(offerExpiry
-        ? { offerExpiresAtMs: localInputToMs(offerExpiry) }
-        : {}),
+      ...(offerExpiry ? { offerExpiresAtMs: localInputToMs(offerExpiry) } : {}),
       ...(cardValues.length > 0 ? { cards: cardValues } : {}),
       ...(orderStatusValues.orderReferenceId.trim()
         ? { orderReferenceId: orderStatusValues.orderReferenceId.trim() }
@@ -273,13 +315,13 @@ export function TemplatePicker({
 
   const plan = useMemo(
     () => (selected ? buildSendPlan(selected) : null),
-    [selected],
+    [selected]
   );
   // One gate, and the same rules the send builder enforces — so a send
   // that passes here cannot throw for a missing value on the server.
   const missing = useMemo(
     () => (plan ? missingSendValues(plan, sendValues) : []),
-    [plan, sendValues],
+    [plan, sendValues]
   );
   const canConfirm = !!selected && missing.length === 0;
 
@@ -295,14 +337,12 @@ export function TemplatePicker({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="border-border bg-popover sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-popover-foreground">
-            <LayoutTemplate className="h-4 w-4 text-primary" />
-            {selected ? selected.name : t("sendTemplate")}
+          <DialogTitle className="text-popover-foreground flex items-center gap-2">
+            <LayoutTemplate className="text-primary h-4 w-4" />
+            {selected ? selected.name : t('sendTemplate')}
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            {selected
-              ? t("fillPlaceholders")
-              : t("pickTemplate")}
+            {selected ? t('fillPlaceholders') : t('pickTemplate')}
           </DialogDescription>
         </DialogHeader>
 
@@ -310,13 +350,15 @@ export function TemplatePicker({
           <div className="max-h-[60vh] space-y-2 overflow-y-auto">
             {loading ? (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                <Loader2 className="text-primary h-5 w-5 animate-spin" />
               </div>
             ) : templates.length === 0 ? (
-              <div className="rounded-md border border-border bg-background/50 p-6 text-center">
-                <p className="text-sm text-popover-foreground">{t("noApprovedTemplates")}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t("noApprovedTemplatesHint")}
+              <div className="border-border bg-background/50 rounded-md border p-6 text-center">
+                <p className="text-popover-foreground text-sm">
+                  {t('noApprovedTemplates')}
+                </p>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  {t('noApprovedTemplatesHint')}
                 </p>
               </div>
             ) : (
@@ -326,59 +368,68 @@ export function TemplatePicker({
                 // hidden, so an approved template never appears to vanish.
                 const verdict = templateSendability(t);
                 return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => verdict.sendable && pickTemplate(t)}
-                  disabled={!verdict.sendable}
-                  aria-disabled={!verdict.sendable}
-                  title={verdict.reason}
-                  className={
-                    verdict.sendable
-                      ? 'w-full rounded-md border border-border bg-background/50 p-3 text-left transition-colors hover:border-primary/40 hover:bg-popover min-w-0 overflow-hidden'
-                      : 'w-full cursor-not-allowed rounded-md border border-border bg-background/30 p-3 text-left opacity-60 min-w-0 overflow-hidden'
-                  }
-                >
-                  <div className="flex items-start gap-2 min-w-0">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2 min-w-0">
-                        <p className="break-words min-w-0 text-sm font-medium text-popover-foreground">
-                          {t.name}
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => verdict.sendable && pickTemplate(t)}
+                    disabled={!verdict.sendable}
+                    aria-disabled={!verdict.sendable}
+                    title={verdict.reason}
+                    className={
+                      verdict.sendable
+                        ? 'border-border bg-background/50 hover:border-primary/40 hover:bg-popover w-full min-w-0 overflow-hidden rounded-md border p-3 text-left transition-colors'
+                        : 'border-border bg-background/30 w-full min-w-0 cursor-not-allowed overflow-hidden rounded-md border p-3 text-left opacity-60'
+                    }
+                  >
+                    <div className="flex min-w-0 items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <p className="text-popover-foreground min-w-0 text-sm font-medium break-words">
+                            {t.name}
+                          </p>
+                          <Badge className="border-primary/30 bg-primary/20 text-primary border text-[10px]">
+                            {t.category}
+                          </Badge>
+                          {t.language && (
+                            <span className="text-muted-foreground text-[10px] uppercase">
+                              {t.language}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-muted-foreground mt-1 line-clamp-2 text-xs break-words">
+                          {t.body_text}
                         </p>
-                        <Badge className="border border-primary/30 bg-primary/20 text-[10px] text-primary">
-                          {t.category}
-                        </Badge>
-                        {t.language && (
-                          <span className="text-[10px] uppercase text-muted-foreground">
-                            {t.language}
-                          </span>
-                        )}
                       </div>
-                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground break-words">
-                        {t.body_text}
-                      </p>
+                      <ChevronRight className="text-muted-foreground h-4 w-4 flex-shrink-0" />
                     </div>
-                    <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-                  </div>
-                  {!verdict.sendable && verdict.reason ? (
-                    <p className="mt-1.5 text-[10px] leading-relaxed text-amber-600 dark:text-amber-500">
-                      {verdict.reason}
-                    </p>
-                  ) : null}
-                </button>
+                    {!verdict.sendable && verdict.reason ? (
+                      <p className="mt-1.5 text-[10px] leading-relaxed text-amber-600 dark:text-amber-500">
+                        {verdict.reason}
+                      </p>
+                    ) : null}
+                  </button>
                 );
               })
             )}
           </div>
         ) : (
-          <div className="space-y-3 min-w-0">
+          // Height-capped and scrollable, exactly like the template list
+          // branch above. Without this the dialog grew past the viewport:
+          // DialogContent is centred with -translate-y-1/2 and sets no
+          // max-height, so a tall child overflows the top AND bottom and
+          // the footer — including Send — ends up off-screen with no way
+          // to scroll to it. A template with a preview, five body
+          // variables and a URL button value is already past that point.
+          <div className="max-h-[60vh] min-w-0 space-y-3 overflow-y-auto">
             {/* The real WhatsApp rendering, not a text substitution.
                 This used to be plain body text with {{n}} swapped out,
                 which hid the header, the buttons and any formatting — so
                 an agent could send a template without ever seeing that
                 it carried a "Call now" button. */}
             <div className="min-w-0 overflow-hidden">
-              <p className="mb-1 text-xs text-muted-foreground">{t("preview")}</p>
+              <p className="text-muted-foreground mb-1 text-xs">
+                {t('preview')}
+              </p>
               {/* Named templates resolve by name, so the values map is
                   already in the right shape; positional ones need the
                   array turned into "1" / "2" keys. */}
@@ -390,53 +441,64 @@ export function TemplatePicker({
                     : positionalValues(params)
                 }
                 headerValues={positionalValues([headerText])}
+                // What the operator just uploaded, so the preview shows the
+                // image that will actually be sent rather than the sample
+                // Meta approved — which for these templates is nothing.
+                headerMediaUrl={headerMediaUrl}
+                cardMediaUrls={cardValues.map((c) => c.headerMediaUrl)}
               />
             </div>
             {plan && plan.headerVarCount > 0 && (
               <div className="space-y-1">
-                <Label className="text-xs text-popover-foreground">
+                <Label className="text-popover-foreground text-xs">
                   {`Header {{1}}`}
                 </Label>
                 <Input
                   value={headerText}
                   onChange={(e) => setHeaderText(e.target.value)}
-                  placeholder={t("headerValuePlaceholder")}
+                  placeholder={t('headerValuePlaceholder')}
                   className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
                 />
               </div>
             )}
             {plan?.headerMedia && (
               <div className="space-y-1">
-                <Label className="text-xs text-popover-foreground">
-                  {`Header ${plan.headerMedia.format} URL`}
+                <Label className="text-popover-foreground text-xs">
+                  {`Header ${plan.headerMedia.format.toLowerCase()}`}
                 </Label>
-                <Input
-                  value={headerMediaUrl}
-                  onChange={(e) => setHeaderMediaUrl(e.target.value)}
-                  placeholder={
-                    plan.headerMedia.defaultUrl ||
-                    `https://example.com/sample.${plan.headerMedia.format === "IMAGE" ? "png" : plan.headerMedia.format === "VIDEO" ? "mp4" : "pdf"}`
+                <MediaUploadField
+                  kind={
+                    plan.headerMedia.format.toLowerCase() as
+                      'image' | 'video' | 'document'
                   }
-                  className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
+                  purpose="send"
+                  compact
+                  value={headerMediaUrl}
+                  onChange={setHeaderMediaUrl}
+                  urlPlaceholder={
+                    plan.headerMedia.defaultUrl ||
+                    `https://example.com/sample.${plan.headerMedia.format === 'IMAGE' ? 'png' : plan.headerMedia.format === 'VIDEO' ? 'mp4' : 'pdf'}`
+                  }
+                  hint={
+                    plan.headerMedia.defaultUrl
+                      ? 'Leave as-is to use the file approved with the template.'
+                      : undefined
+                  }
                 />
-                <p className="text-[10px] text-muted-foreground">
-                  {t("headerMediaHint") ||
-                    `Provide a public URL for the ${plan.headerMedia.format.toLowerCase()} attachment.`}
-                </p>
               </div>
             )}
             {plan?.isAuthentication && (
               <div className="space-y-1">
-                <Label className="text-xs text-popover-foreground">
+                <Label className="text-popover-foreground text-xs">
                   One-time code
                 </Label>
                 <Input
-                  value={params[0] ?? ""}
+                  value={params[0] ?? ''}
                   onChange={(e) => setParams([e.target.value])}
                   placeholder="e.g. 428913"
                   className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
                 />
-                <p className="text-[10px] text-muted-foreground">
+                <p className="text-muted-foreground text-[10px]">
                   Meta owns the wording. This code fills the message and the
                   copy button.
                 </p>
@@ -446,15 +508,18 @@ export function TemplatePicker({
                 variable — no positional index to line up. */}
             {plan?.bodyParamNames.map((name) => (
               <div key={name} className="space-y-1">
-                <Label className="text-xs text-popover-foreground">
+                <Label className="text-popover-foreground text-xs">
                   {`{{${name}}}`}
                 </Label>
                 <Input
-                  value={namedBody[name] ?? ""}
+                  value={namedBody[name] ?? ''}
                   onChange={(e) =>
-                    setNamedBody((prev) => ({ ...prev, [name]: e.target.value }))
+                    setNamedBody((prev) => ({
+                      ...prev,
+                      [name]: e.target.value,
+                    }))
                   }
-                  placeholder={name.replace(/_/g, " ")}
+                  placeholder={name.replace(/_/g, ' ')}
                   className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
                 />
               </div>
@@ -462,15 +527,15 @@ export function TemplatePicker({
             {!plan?.isAuthentication &&
               Array.from({ length: plan?.bodyVarCount ?? 0 }, (_, i) => (
                 <div key={i} className="space-y-1">
-                  <Label className="text-xs text-popover-foreground">{`Body {{${i + 1}}}`}</Label>
+                  <Label className="text-popover-foreground text-xs">{`Body {{${i + 1}}}`}</Label>
                   <Input
-                    value={params[i] ?? ""}
+                    value={params[i] ?? ''}
                     onChange={(e) => {
                       const next = [...params];
                       next[i] = e.target.value;
                       setParams(next);
                     }}
-                    placeholder={t("bodyValuePlaceholder", {
+                    placeholder={t('bodyValuePlaceholder', {
                       val: `{{${i + 1}}}`,
                     })}
                     className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
@@ -484,8 +549,8 @@ export function TemplatePicker({
                 onChange={setOfferExpiry}
                 code={
                   plan.offer.code
-                    ? (buttonParams[plan.offer.code.index] ?? "")
-                    : ""
+                    ? (buttonParams[plan.offer.code.index] ?? '')
+                    : ''
                 }
                 onCodeChange={(next) => {
                   const idx = plan.offer?.code?.index;
@@ -494,16 +559,16 @@ export function TemplatePicker({
                 }}
               />
             )}
-            {plan?.commerce === "catalog" && (
+            {plan?.commerce === 'catalog' && (
               <CatalogThumbnailField
                 value={catalogThumbnail}
                 onChange={setCatalogThumbnail}
               />
             )}
-            {plan?.commerce === "mpm" && (
+            {plan?.commerce === 'mpm' && (
               <MpmFields value={mpmValues} onChange={setMpmValues} />
             )}
-            {plan?.commerce === "order_details" && (
+            {plan?.commerce === 'order_details' && (
               <OrderDetailsFields
                 value={orderDetailsValues}
                 onChange={setOrderDetailsValues}
@@ -547,22 +612,28 @@ export function TemplatePicker({
             )}
             {plan?.urlButtons.map((slot) => (
               <div key={slot.index} className="space-y-1">
-                <Label className="text-xs text-popover-foreground">
-                  {`URL button "${slot.text}" — value for `}{`{{1}}`}
+                <Label className="text-popover-foreground text-xs">
+                  {`URL button "${slot.text}" — value for `}
+                  {`{{1}}`}
                 </Label>
                 <Input
-                  value={buttonParams[slot.index] ?? ""}
+                  value={buttonParams[slot.index] ?? ''}
                   onChange={(e) =>
                     setButtonParams((prev) => ({
                       ...prev,
                       [slot.index]: e.target.value,
                     }))
                   }
-                  placeholder={t("urlSuffixValuePlaceholder")}
+                  placeholder={t('urlSuffixValuePlaceholder')}
                   className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
                 />
-                <p className="text-[10px] text-muted-foreground break-words">
-                  {t("finalUrl", { url: slot.url.replace(/\{\{1\}\}/g, buttonParams[slot.index] || "{{1}}") })}
+                <p className="text-muted-foreground text-[10px] break-words">
+                  {t('finalUrl', {
+                    url: slot.url.replace(
+                      /\{\{1\}\}/g,
+                      buttonParams[slot.index] || '{{1}}'
+                    ),
+                  })}
                 </p>
               </div>
             ))}
@@ -573,7 +644,7 @@ export function TemplatePicker({
             explanation on a ten-card carousel is a guessing game. */}
         {selected && missing.length > 0 ? (
           <p className="text-[10px] leading-relaxed text-amber-600 dark:text-amber-500">
-            {`Still needed: ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? ` and ${missing.length - 3} more` : ""}.`}
+            {`Still needed: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ` and ${missing.length - 3} more` : ''}.`}
           </p>
         ) : null}
 
@@ -586,14 +657,14 @@ export function TemplatePicker({
                 className="border-border text-popover-foreground hover:bg-muted"
               >
                 <ArrowLeft className="h-4 w-4" />
-                {t("back")}
+                {t('back')}
               </Button>
               <Button
                 disabled={!canConfirm}
                 onClick={confirm}
                 className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                {t("send")}
+                {t('send')}
               </Button>
             </>
           ) : (
@@ -602,7 +673,7 @@ export function TemplatePicker({
               onClick={() => handleOpenChange(false)}
               className="border-border text-popover-foreground hover:bg-muted"
             >
-              {t("cancel")}
+              {t('cancel')}
             </Button>
           )}
         </DialogFooter>

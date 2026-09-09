@@ -1,7 +1,7 @@
-"use server";
+'use server';
 
-import { supabaseAdmin } from "@/lib/auth/admin-client";
-import { revalidatePath } from "next/cache";
+import { supabaseAdmin } from '@/lib/auth/admin-client';
+import { revalidatePath } from 'next/cache';
 
 export async function updateSiteSettings(data: {
   site_name: string;
@@ -19,31 +19,33 @@ export async function updateSiteSettings(data: {
 
   // The site_settings table is meant to be a singleton, so we update the first row
   const { data: current } = await admin
-    .from("site_settings")
-    .select("id")
+    .from('site_settings')
+    .select('id')
     .limit(1)
     .single();
 
   if (!current) {
     // If it doesn't exist, insert
-    const { error } = await admin.from("site_settings").insert([data]);
+    const { error } = await admin.from('site_settings').insert([data]);
     if (error) {
-      console.error("[cms] updateSiteSettings insert error:", error);
+      console.error('[cms] updateSiteSettings insert error:', error);
       return { error: error.message };
     }
   } else {
     // Update existing
     const { error } = await admin
-      .from("site_settings")
+      .from('site_settings')
       .update(data)
-      .eq("id", current.id);
+      .eq('id', current.id);
     if (error) {
-      console.error("[cms] updateSiteSettings update error:", error);
+      console.error('[cms] updateSiteSettings update error:', error);
       return { error: error.message };
     }
   }
 
-  revalidatePath("/", "layout");
-  revalidatePath("/super-admin/cms", "layout");
+  revalidatePath('/', 'layout');
+  revalidatePath('/super-admin/cms', 'layout');
+  revalidatePath('/robots.txt');
+  revalidatePath('/sitemap.xml');
   return { success: true };
 }

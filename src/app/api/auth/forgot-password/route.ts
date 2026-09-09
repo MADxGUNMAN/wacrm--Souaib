@@ -12,10 +12,12 @@ import { NextResponse } from 'next/server';
 
 import { supabaseAdmin } from '@/lib/auth/admin-client';
 import { sendPasswordResetEmail } from '@/lib/email/auth';
+import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit';
 import {
-  checkRateLimit,
-  rateLimitResponse,
-} from '@/lib/rate-limit';
+  EMAIL_INVALID_MESSAGE,
+  isValidEmail,
+  normalizeEmail,
+} from '@/lib/validation/email';
 
 export async function POST(request: Request) {
   try {
@@ -25,18 +27,21 @@ export async function POST(request: Request) {
 
     const { email } = body ?? {};
 
-    if (!email || typeof email !== 'string' || !email.includes('@')) {
+    // Same weak check as signup had. Harmless-looking here, but it means
+    // a typo'd domain is accepted, a reset link is generated, and the
+    // user waits for an email that was never deliverable.
+    if (!isValidEmail(email)) {
       return NextResponse.json(
-        { error: 'Valid email is required' },
-        { status: 400 },
+        { error: EMAIL_INVALID_MESSAGE },
+        { status: 400 }
       );
     }
 
     // Tight rate limit on password resets to prevent abuse
-    const limit = checkRateLimit(
-      `auth:reset:${email.toLowerCase().trim()}`,
-      { limit: 3, windowMs: 60_000 },
-    );
+    const limit = checkRateLimit(`auth:reset:${normalizeEmail(email)}`, {
+      limit: 3,
+      windowMs: 60_000,
+    });
     if (!limit.success) return rateLimitResponse(limit);
 
     const admin = supabaseAdmin();
@@ -60,7 +65,10 @@ export async function POST(request: Request) {
     if (error) {
       // Don't reveal whether the email exists — always return success
       // to prevent email enumeration.
-      console.warn('[POST /api/auth/forgot-password] generateLink error:', error.message);
+      console.warn(
+        '[POST /api/auth/forgot-password] generateLink error:',
+        error.message
+      );
       return NextResponse.json({ success: true });
     }
 
@@ -79,7 +87,7 @@ export async function POST(request: Request) {
       console.warn(
         '[POST /api/auth/forgot-password] email send issue:',
         emailResult.reason,
-        'detail' in emailResult ? emailResult.detail : '',
+        'detail' in emailResult ? emailResult.detail : ''
       );
     }
 

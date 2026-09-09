@@ -29,6 +29,11 @@ import {
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 import type { MessageTemplate } from '@/types';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
+import {
+  filterOptedOutPhones,
+  isMarketingCategory,
+  recordOptOutFromSendError,
+} from '@/lib/whatsapp/marketing-opt-out';
 
 /** Thrown by createBroadcast on a caller-visible failure; route maps it. */
 export class BroadcastError extends Error {
@@ -58,12 +63,16 @@ export interface CreateBroadcastParams {
 
 interface PlannedRecipient {
   recipientRowId: string;
+  /** Carried so a 131050 opt-out can be attributed to the contact. */
+  contactId: string;
   phone: string;
   params: string[];
 }
 
 export interface BroadcastPlan {
   broadcastId: string;
+  /** Needed by the delivery phase to record opt-outs account-scoped. */
+  accountId: string;
   templateName: string;
   templateLanguage: string;
   phoneNumberId: string;
@@ -72,6 +81,15 @@ export interface BroadcastPlan {
   planned: PlannedRecipient[];
   /** Phones rejected up front (invalid E.164) — counted as failed. */
   rejected: number;
+  /**
+   * Recipients dropped because they opted out of marketing.
+   *
+   * These get NO `broadcast_recipients` row at all — suppression happens
+   * before the insert, so an opt-out never appears as a recipient and
+   * cannot skew the trigger-owned counts. Reported to the caller in the
+   * POST response instead.
+   */
+  suppressed: number;
 }
 
 const MAX_RECIPIENTS = 1000;
@@ -148,7 +166,9 @@ export async function createBroadcast(
   const resolved: { contactId: string; phone: string; params: string[] }[] = [];
   let rejected = 0;
   for (const r of recipients) {
-    const sanitized = sanitizePhoneForMeta(typeof r.to === 'string' ? r.to : '');
+    const sanitized = sanitizePhoneForMeta(
+      typeof r.to === 'string' ? r.to : ''
+    );
     if (!isValidE164(sanitized)) {
       rejected++;
       continue;
@@ -171,11 +191,39 @@ export async function createBroadcast(
   // params aren't silently overwritten by a later duplicate — and so
   // the row↔params pairing below (keyed by contact_id) is unambiguous.
   const seenContact = new Set<string>();
-  const deduped = resolved.filter((r) => {
+  const dedupedAll = resolved.filter((r) => {
     if (seenContact.has(r.contactId)) return false;
     seenContact.add(r.contactId);
     return true;
   });
+
+  // ── Marketing opt-out suppression ──────────────────────────────
+  // Applied BEFORE the recipient rows are inserted, so a suppressed
+  // contact never becomes a `broadcast_recipients` row. That keeps the
+  // trigger-owned counts honest without needing a 'skipped' row here.
+  //
+  // Only marketing is suppressed. isMarketingCategory fails closed when
+  // templateRow is null (exists at Meta, never synced locally).
+  const suppressedPhones = isMarketingCategory(templateRow?.category)
+    ? (
+        await filterOptedOutPhones(
+          db,
+          accountId,
+          dedupedAll.map((r) => r.phone)
+        )
+      ).suppressed
+    : new Set<string>();
+
+  const deduped = dedupedAll.filter((r) => !suppressedPhones.has(r.phone));
+  const suppressed = dedupedAll.length - deduped.length;
+
+  if (deduped.length === 0 && suppressed > 0) {
+    throw new BroadcastError(
+      'all_recipients_opted_out',
+      'Every recipient has opted out of marketing messages from this account',
+      400
+    );
+  }
 
   if (deduped.length === 0) {
     throw new BroadcastError(
@@ -231,11 +279,17 @@ export async function createBroadcast(
   const byContact = new Map(deduped.map((r) => [r.contactId, r]));
   const planned: PlannedRecipient[] = recipientRows.map((row) => {
     const r = byContact.get(row.contact_id as string)!;
-    return { recipientRowId: row.id as string, phone: r.phone, params: r.params };
+    return {
+      recipientRowId: row.id as string,
+      contactId: r.contactId,
+      phone: r.phone,
+      params: r.params,
+    };
   });
 
   return {
     broadcastId: broadcast.id,
+    accountId,
     templateName,
     templateLanguage,
     phoneNumberId: config.phone_number_id,
@@ -243,6 +297,7 @@ export async function createBroadcast(
     templateRow,
     planned,
     rejected,
+    suppressed,
   };
 }
 
@@ -269,6 +324,9 @@ export async function deliverBroadcast(
     const variants = phoneVariants(recipient.phone);
     let sentMessageId: string | null = null;
     let lastError: string | null = null;
+    // The error OBJECT too: MetaApiError carries the numeric code, which
+    // is what identifies a 131050 (opted out at Meta) among failures.
+    let lastErrorObject: unknown = null;
 
     for (const variant of variants) {
       try {
@@ -285,8 +343,10 @@ export async function deliverBroadcast(
         lastError = null;
         break;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
+        const message =
+          error instanceof Error ? error.message : 'Unknown error';
         lastError = message;
+        lastErrorObject = error;
         // Only a "recipient not allowed" error is worth another variant.
         if (!isRecipientNotAllowedError(message)) break;
       }
@@ -304,6 +364,15 @@ export async function deliverBroadcast(
         })
         .eq('id', recipient.recipientRowId);
     } else {
+      // 131050 = the customer opted out at Meta's level. Record it so the
+      // next broadcast suppresses them up front instead of spending
+      // another send discovering the same thing.
+      await recordOptOutFromSendError(db, {
+        accountId: plan.accountId,
+        phone: recipient.phone,
+        contactId: recipient.contactId,
+        error: lastErrorObject ?? lastError,
+      });
       await db
         .from('broadcast_recipients')
         .update({

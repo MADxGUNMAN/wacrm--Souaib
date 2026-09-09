@@ -25,6 +25,7 @@
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  BookOpen,
   CircleDot,
   History,
   Loader2,
@@ -93,8 +94,22 @@ export function EditorHeader() {
           </span>
         )}
 
-        {/* ---- right: runs · delete · activate · save ---- */}
+        {/* ---- right: guide · runs · delete · activate · save ---- */}
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          {/* New tab, deliberately. The editor holds unsaved state in
+              memory, so navigating to the guide in place would throw
+              away whatever the user is halfway through building —
+              which is exactly when they reach for the docs. */}
+          <a
+            href="/flows/guide"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Node reference and AI flow builder (opens in a new tab)"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <BookOpen className="h-3.5 w-3.5" />
+            Guide
+          </a>
           <Button
             variant="ghost"
             size="sm"

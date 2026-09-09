@@ -72,6 +72,13 @@ export const recipientStatusConfig: Record<RecipientStatus, StatusDisplay> = {
     label: "failed",
     classes: "bg-red-500/10 text-red-400 border-red-500/20",
   },
+  // Amber, not red: the send was withheld on purpose because the contact
+  // opted out of marketing. Colouring it as a failure would read as
+  // something to fix.
+  skipped: {
+    label: "skipped",
+    classes: "bg-amber-500/10 text-amber-500 border-amber-500/20",
+  },
 };
 
 /**

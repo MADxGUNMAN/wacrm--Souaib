@@ -30,8 +30,10 @@ import { Switch } from '@/components/ui/switch';
 import { describeCycleDuration } from '@/lib/subscription/plans';
 import type { BillingCycle } from '@/lib/subscription/types';
 import { cn } from '@/lib/utils';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export function CyclesPanel() {
+  const confirm = useConfirm();
   const [cycles, setCycles] = useState<BillingCycle[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -76,17 +78,22 @@ export function CyclesPanel() {
   };
 
   const remove = async (cycle: BillingCycle) => {
-    if (
-      !window.confirm(
-        `Delete the "${cycle.label}" cycle?\n\nIts prices are removed too. Existing subscriptions keep their access and payment history.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: `Delete the "${cycle.label}" cycle?`,
+      description:
+        'Its prices are removed too. Existing subscriptions will keep their access and payment history.',
+      confirmText: 'Delete Cycle',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+    if (!ok) return;
     try {
-      const res = await fetch(`/api/super-admin/billing/cycles?id=${cycle.id}`, {
-        method: 'DELETE',
-      });
+      const res = await fetch(
+        `/api/super-admin/billing/cycles?id=${cycle.id}`,
+        {
+          method: 'DELETE',
+        }
+      );
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(payload?.error ?? 'Could not delete the cycle');
@@ -142,7 +149,9 @@ export function CyclesPanel() {
             key={cycle.id}
             className={cn(
               'flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-white p-4 shadow-sm',
-              cycle.is_visible ? 'border-slate-200' : 'border-dashed border-slate-300',
+              cycle.is_visible
+                ? 'border-slate-200'
+                : 'border-dashed border-slate-300'
             )}
           >
             <div className="min-w-0">
@@ -186,7 +195,9 @@ export function CyclesPanel() {
               <button
                 type="button"
                 title={cycle.is_visible ? 'Hide' : 'Show'}
-                onClick={() => void patch(cycle, { is_visible: !cycle.is_visible })}
+                onClick={() =>
+                  void patch(cycle, { is_visible: !cycle.is_visible })
+                }
                 className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition-colors hover:text-slate-900"
               >
                 {cycle.is_visible ? (
@@ -244,13 +255,13 @@ function CycleDialog({
   const [label, setLabel] = useState(cycle?.label ?? '');
   const [months, setMonths] = useState(String(cycle?.months ?? 1));
   const [durationDays, setDurationDays] = useState(
-    cycle?.duration_days ? String(cycle.duration_days) : '',
+    cycle?.duration_days ? String(cycle.duration_days) : ''
   );
   const [isRecommended, setIsRecommended] = useState(
-    cycle?.is_recommended ?? false,
+    cycle?.is_recommended ?? false
   );
   const [recommendedLabel, setRecommendedLabel] = useState(
-    cycle?.recommended_label ?? '',
+    cycle?.recommended_label ?? ''
   );
   const [isDefault, setIsDefault] = useState(cycle?.is_default ?? false);
   const [isVisible, setIsVisible] = useState(cycle?.is_visible ?? true);
@@ -330,21 +341,29 @@ function CycleDialog({
   return (
     <>
       <div className="fixed inset-0 z-[100] bg-black/30" onClick={onClose} />
-      <div className="fixed top-1/2 left-1/2 z-[110] max-h-[90vh] w-full max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-        <div className="flex items-start justify-between gap-3">
+      {/* Header and footer are pinned; only the middle scrolls.
+          
+          With everything inside one `overflow-y-auto` box, a viewport
+          shorter than the form pushed the X off the top and Cancel off the
+          bottom at the same time, leaving no visible way out. Same trap as
+          the subscriber Manage dialog — fixed here too rather than waiting
+          for it to be reported twice. */}
+      <div className="fixed top-1/2 left-1/2 z-[110] flex max-h-[90vh] w-full max-w-md -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 px-6 py-4">
           <h3 className="text-lg font-bold text-slate-900">
             {cycle ? `Edit ${cycle.label}` : 'New billing cycle'}
           </h3>
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-900"
+            aria-label="Close"
+            className="-m-1.5 shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="mt-5 space-y-4">
+        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
           <div>
             <p className="mb-1.5 text-xs font-medium text-slate-600">
               Card title <span className="text-red-500">*</span>
@@ -362,7 +381,9 @@ function CycleDialog({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <p className="mb-1.5 text-xs font-medium text-slate-600">Months</p>
+              <p className="mb-1.5 text-xs font-medium text-slate-600">
+                Months
+              </p>
               <Input
                 type="number"
                 min={0}
@@ -389,14 +410,16 @@ function CycleDialog({
           <div
             className={cn(
               'rounded-lg border p-3',
-              resolved ? 'border-slate-200 bg-slate-50' : 'border-red-200 bg-red-50',
+              resolved
+                ? 'border-slate-200 bg-slate-50'
+                : 'border-red-200 bg-red-50'
             )}
           >
             <p className="text-xs text-slate-500">An approved payment grants</p>
             <p
               className={cn(
                 'mt-0.5 text-sm font-semibold',
-                resolved ? 'text-slate-900' : 'text-red-700',
+                resolved ? 'text-slate-900' : 'text-red-700'
               )}
             >
               {resolved ?? 'nothing — set months or days'}
@@ -440,7 +463,9 @@ function CycleDialog({
           </div>
 
           <div>
-            <p className="mb-1.5 text-xs font-medium text-slate-600">Position</p>
+            <p className="mb-1.5 text-xs font-medium text-slate-600">
+              Position
+            </p>
             <Input
               type="number"
               min={0}
@@ -464,7 +489,9 @@ function CycleDialog({
           </div>
 
           <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
-            <p className="text-sm font-medium text-slate-800">Visible to customers</p>
+            <p className="text-sm font-medium text-slate-800">
+              Visible to customers
+            </p>
             <Switch
               checked={isVisible}
               onCheckedChange={(v: boolean) => setIsVisible(v)}
@@ -479,14 +506,18 @@ function CycleDialog({
           ) : null}
         </div>
 
-        <div className="mt-6 flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 border-t border-slate-100 px-6 py-4">
           <button
             type="button"
             disabled={busy}
             onClick={() => void submit()}
             className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#25D366] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#20b958] disabled:opacity-60"
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}
             {cycle ? 'Save changes' : 'Create cycle'}
           </button>
           <button

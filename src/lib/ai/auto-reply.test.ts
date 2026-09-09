@@ -22,6 +22,13 @@ vi.mock('./context', () => ({ buildConversationContext: h.buildConversationConte
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
+vi.mock('@/lib/whatsapp/meta-api', () => ({
+  sendTypingIndicator: vi.fn(async () => ({ success: true })),
+}))
+vi.mock('@/lib/whatsapp/encryption', () => ({
+  decrypt: vi.fn((token: string) => `decrypted-${token}`),
+}))
+
 vi.mock('./admin-client', () => ({
   supabaseAdmin: () => ({
     from: (table: string) => {
@@ -33,6 +40,17 @@ vi.mock('./admin-client', () => ({
           in: () => chain,
           limit: () =>
             Promise.resolve({ data: h.state.autoResponders, error: null }),
+        }
+        return chain
+      }
+      if (table === 'messages' || table === 'whatsapp_config') {
+        const chain: Record<string, unknown> = {
+          select: () => chain,
+          eq: () => chain,
+          not: () => chain,
+          order: () => chain,
+          limit: () => chain,
+          maybeSingle: () => Promise.resolve({ data: null, error: null }),
         }
         return chain
       }

@@ -16,8 +16,6 @@
 // phishing vector. Callers cannot opt out — there is no "raw" variant.
 // ============================================================
 
-import { EMAIL_LOGO_CID } from './send';
-
 /**
  * Escape text for interpolation into HTML.
  *
@@ -57,7 +55,10 @@ const BRAND = '#25D366';
 
 export type NoticeTone = 'neutral' | 'success' | 'warning' | 'danger';
 
-const NOTICE_TONES: Record<NoticeTone, { bg: string; border: string; text: string }> = {
+const NOTICE_TONES: Record<
+  NoticeTone,
+  { bg: string; border: string; text: string }
+> = {
   neutral: { bg: '#f8fafc', border: BORDER, text: SLATE_700 },
   success: { bg: '#f0fdf4', border: '#bbf7d0', text: '#166534' },
   warning: { bg: '#fffbeb', border: '#fde68a', text: '#92400e' },
@@ -90,7 +91,12 @@ export interface DetailRow {
  */
 export function detailTable(rows: DetailRow[]): string {
   const cells = rows
-    .filter((row) => row.value !== null && row.value !== undefined && String(row.value).trim() !== '')
+    .filter(
+      (row) =>
+        row.value !== null &&
+        row.value !== undefined &&
+        String(row.value).trim() !== ''
+    )
     .map((row) => {
       const valueStyle = row.emphasis
         ? `font-size: 15px; font-weight: 700; color: ${SLATE_900};`
@@ -164,6 +170,10 @@ export function renderEmail(options: {
   content: string;
   /** Small print under the divider, e.g. how to reach support. */
   footerNote?: string;
+  /** Direct light mode logo URL (defaults to /Replai-logo.png) */
+  logoUrl?: string | null;
+  /** Direct dark mode logo URL (defaults to /logo-full.jpg) */
+  logoDarkUrl?: string | null;
 }): string {
   const year = new Date().getFullYear();
   const siteName = escapeHtml(options.siteName);
@@ -171,15 +181,71 @@ export function renderEmail(options: {
     ? `<p style="margin: 0; font-size: 12px; color: ${SLATE_400}; line-height: 1.5;">${escapeMultiline(options.footerNote)}</p>`
     : '';
 
+  const defaultBaseUrl = (
+    process.env.NEXT_PUBLIC_SITE_URL || 'https://wacrm.junkiescoder.com'
+  ).replace(/\/+$/, '');
+  const lightLogo = escapeHtml(
+    options.logoUrl || `${defaultBaseUrl}/Replai-logo.png`
+  );
+  const darkLogo = escapeHtml(
+    options.logoDarkUrl || options.logoUrl || `${defaultBaseUrl}/logo-full.jpg`
+  );
+
+  // Preheader anti-bleed padding: stops email clients from scraping subsequent CSS & body text into preview snippets
+  const preheaderPadding =
+    '&zwnj;&nbsp;'.repeat(40) + '&#847;&zwnj;&nbsp;'.repeat(40);
+
   return `<!DOCTYPE html>
-<html>
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
   <title>${siteName}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      supported-color-schemes: light dark;
+    }
+    /* Dark mode media query for Apple Mail, iOS Mail, Gmail app, etc. */
+    @media (prefers-color-scheme: dark) {
+      .email-logo-light {
+        display: none !important;
+      }
+      .email-logo-dark-wrap {
+        display: block !important;
+        max-height: none !important;
+        overflow: visible !important;
+      }
+      .email-logo-dark {
+        display: block !important;
+      }
+    }
+    /* Outlook.com & Outlook mobile dark mode attributes */
+    [data-ogsc] .email-logo-light,
+    [data-ogsb] .email-logo-light {
+      display: none !important;
+    }
+    [data-ogsc] .email-logo-dark-wrap,
+    [data-ogsb] .email-logo-dark-wrap {
+      display: block !important;
+      max-height: none !important;
+      overflow: visible !important;
+    }
+    [data-ogsc] .email-logo-dark,
+    [data-ogsb] .email-logo-dark {
+      display: block !important;
+    }
+  </style>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: ${PAGE_BG}; color: ${SLATE_900};">
-  <div style="display: none; max-height: 0; overflow: hidden; opacity: 0;">${escapeHtml(options.preheader)}</div>
+  <div style="display: none; max-height: 0px; overflow: hidden; mso-hide: all; font-size: 1px; line-height: 1px; color: #ffffff; opacity: 0;">
+    ${escapeHtml(options.preheader)}
+  </div>
+  <div style="display: none; max-height: 0px; overflow: hidden; mso-hide: all; font-size: 1px; line-height: 1px; color: #ffffff; opacity: 0;">
+    ${preheaderPadding}
+  </div>
   <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: ${PAGE_BG}; padding: 40px 0;">
     <tr>
       <td align="center">
@@ -187,7 +253,14 @@ export function renderEmail(options: {
 
           <tr>
             <td style="padding: 32px 40px; border-bottom: 1px solid ${HAIRLINE}; text-align: left;">
-              <img src="cid:${EMAIL_LOGO_CID}" alt="${siteName}" style="height: 32px; max-width: 200px; display: block; object-fit: contain;">
+              <!-- Light theme logo (shown by default in light mode) -->
+              <img class="email-logo-light" src="${lightLogo}" alt="${siteName}" style="height: 32px; max-width: 200px; display: block; object-fit: contain; border: 0;" />
+              <!-- Dark theme logo (hidden by default, displayed in dark mode inboxes) -->
+              <div class="email-logo-dark-wrap" style="display: none; max-height: 0px; overflow: hidden; mso-hide: all;">
+                <!--[if !mso]><!-->
+                <img class="email-logo-dark" src="${darkLogo}" alt="${siteName}" style="height: 32px; max-width: 200px; display: none; object-fit: contain; border: 0;" />
+                <!--<![endif]-->
+              </div>
             </td>
           </tr>
 
@@ -233,20 +306,22 @@ export function renderEmail(options: {
  * authored twice and drift apart.
  */
 export function toPlainText(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|h1|tr|table)>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    // Ampersand last, mirroring escapeHtml's ordering in reverse.
-    .replace(/&amp;/g, '&')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line, index, all) => line !== '' || all[index - 1] !== '')
-    .join('\n')
-    .trim();
+  return (
+    html
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|h1|tr|table)>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      // Ampersand last, mirroring escapeHtml's ordering in reverse.
+      .replace(/&amp;/g, '&')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line, index, all) => line !== '' || all[index - 1] !== '')
+      .join('\n')
+      .trim()
+  );
 }

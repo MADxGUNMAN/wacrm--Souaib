@@ -85,12 +85,12 @@ function Segments({ segments }: { segments: PreviewSegment[] }) {
               s.bold && 'font-bold',
               s.italic && 'italic',
               s.strike && 'line-through',
-              s.mono && 'font-mono text-[13px]',
+              s.mono && 'font-mono text-[13px]'
             )}
           >
             {s.text}
           </span>
-        ),
+        )
       )}
     </>
   );
@@ -103,9 +103,21 @@ function Segments({ segments }: { segments: PreviewSegment[] }) {
 function HeaderBlock({
   header,
   values,
+  mediaUrl,
 }: {
   header: HeaderComponent;
   values: PreviewValues;
+  /**
+   * Media chosen for THIS send, which wins over the sample approved with
+   * the template.
+   *
+   * Without this the preview could only ever show `example.header_url` —
+   * the file Meta downloaded during review. On a template approved with no
+   * stored sample that is nothing at all, so uploading an image in the send
+   * dialog left the preview showing a grey placeholder and no way to tell
+   * whether the upload had worked.
+   */
+  mediaUrl?: string;
 }) {
   if (header.format === 'TEXT') {
     return (
@@ -115,8 +127,11 @@ function HeaderBlock({
     );
   }
 
+  // Send-time choice first, then the approved sample.
+  const overrideOrSample = mediaUrl?.trim() || undefined;
+
   if (header.format === 'IMAGE') {
-    const url = header.example?.header_url?.[0];
+    const url = overrideOrSample ?? header.example?.header_url?.[0];
     return (
       <div className="m-1.5 mb-0 overflow-hidden rounded-[6px] bg-[#CCD0D5]">
         {url ? (
@@ -141,9 +156,21 @@ function HeaderBlock({
   }
 
   if (header.format === 'VIDEO') {
+    const url = overrideOrSample ?? header.example?.header_url?.[0];
     return (
-      <div className="m-1.5 mb-0 flex aspect-[1.91/1] items-center justify-center rounded-[6px] bg-[#2A3942]">
-        <span className="flex size-10 items-center justify-center rounded-full bg-black/40">
+      <div className="relative m-1.5 mb-0 flex aspect-[1.91/1] items-center justify-center overflow-hidden rounded-[6px] bg-[#2A3942]">
+        {url ? (
+          // Muted and not preloaded: this is a thumbnail, not a player.
+          // The frame it lands on is the same first frame WhatsApp shows.
+          <video
+            src={url}
+            muted
+            playsInline
+            preload="metadata"
+            className="absolute inset-0 size-full object-cover"
+          />
+        ) : null}
+        <span className="relative flex size-10 items-center justify-center rounded-full bg-black/40">
           <Play className="size-5 fill-white text-white" />
         </span>
       </div>
@@ -151,12 +178,25 @@ function HeaderBlock({
   }
 
   if (header.format === 'DOCUMENT') {
+    const url = overrideOrSample ?? header.example?.header_url?.[0];
+    // WhatsApp shows the file's own name, so showing it here too is the
+    // difference between "a document is attached" and "the right document
+    // is attached".
+    let fileName = 'Attached document';
+    if (url) {
+      try {
+        const last = decodeURIComponent(
+          new URL(url).pathname.split('/').pop() ?? ''
+        );
+        if (last) fileName = last;
+      } catch {
+        // Not a parseable URL (a half-typed link). Keep the generic label.
+      }
+    }
     return (
       <div className="m-1.5 mb-0 flex items-center gap-2.5 rounded-[6px] bg-[#F5F6F6] px-3 py-2.5">
         <FileText className="size-6 shrink-0 text-[#EA4335]" />
-        <span className="truncate text-[13px] text-[#111B21]">
-          Attached document
-        </span>
+        <span className="truncate text-[13px] text-[#111B21]">{fileName}</span>
       </div>
     );
   }
@@ -243,9 +283,12 @@ function ButtonRows({ buttons }: { buttons: MetaTemplateButton[] }) {
 function CarouselStrip({
   cards,
   values,
+  cardMediaUrls,
 }: {
   cards: CarouselCard[];
   values: PreviewValues;
+  /** Per-card send-time media, indexed to match `cards`. */
+  cardMediaUrls?: (string | undefined)[];
 }) {
   return (
     <div className="-mx-1 mt-1.5 flex snap-x gap-2 overflow-x-auto px-1 pb-1">
@@ -258,7 +301,13 @@ function CarouselStrip({
             key={i}
             className="w-[190px] shrink-0 snap-start overflow-hidden rounded-[7.5px] bg-white shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]"
           >
-            {header ? <HeaderBlock header={header} values={values} /> : null}
+            {header ? (
+              <HeaderBlock
+                header={header}
+                values={values}
+                mediaUrl={cardMediaUrls?.[i]}
+              />
+            ) : null}
             {resolveBodyText(body) ? (
               <p className="px-2.5 py-1.5 text-[13px] leading-[18px] whitespace-pre-wrap text-[#111B21]">
                 <Segments
@@ -282,6 +331,8 @@ export function WhatsAppPreview({
   definition,
   values = {},
   headerValues,
+  headerMediaUrl,
+  cardMediaUrls,
   timestamp = '11:59',
   className,
 }: {
@@ -295,6 +346,18 @@ export function WhatsAppPreview({
    * has no header variable, where the distinction cannot matter.
    */
   headerValues?: PreviewValues;
+  /**
+   * Media picked for this particular send, overriding the sample approved
+   * with the template.
+   *
+   * Both are optional and absent is the normal case in the wizard, where
+   * the approved sample IS the thing being previewed. They matter in the
+   * send dialog and the broadcast composer, where the operator uploads the
+   * real image and expects to see it.
+   */
+  headerMediaUrl?: string;
+  /** Per-card media for a carousel, indexed to match the card order. */
+  cardMediaUrls?: (string | undefined)[];
   timestamp?: string;
   className?: string;
 }) {
@@ -325,7 +388,11 @@ export function WhatsAppPreview({
     >
       <div className="max-w-[300px] overflow-hidden rounded-[7.5px] bg-white shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]">
         {header ? (
-          <HeaderBlock header={header} values={resolvedHeaderValues} />
+          <HeaderBlock
+            header={header}
+            values={resolvedHeaderValues}
+            mediaUrl={headerMediaUrl}
+          />
         ) : null}
 
         {/* Limited-time offer strip sits above the body in the client. */}
@@ -368,7 +435,11 @@ export function WhatsAppPreview({
       </div>
 
       {cards.length > 0 ? (
-        <CarouselStrip cards={cards} values={values} />
+        <CarouselStrip
+          cards={cards}
+          values={values}
+          cardMediaUrls={cardMediaUrls}
+        />
       ) : null}
     </div>
   );

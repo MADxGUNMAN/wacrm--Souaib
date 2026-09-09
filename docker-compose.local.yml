@@ -1,0 +1,522 @@
+# ============================================================
+# Replai — FULL LOCAL STACK (app + Supabase) in Docker
+# ============================================================
+#
+# One command runs everything with no dependency on supabase.com:
+#
+#   docker compose --env-file .env.docker.local -f docker-compose.local.yml up -d --build
+#
+# ─── WHY THESE SERVICES AND NOT THE OTHERS ──────────────────
+#
+# Supabase's own self-host compose ships ~12 services. This runs 6,
+# because that is what THIS app measurably uses (see
+# docs/supabase-to-aws-migration.md §4):
+#
+#   db        Postgres 15 + pgvector       66 tables, 158 functions
+#   auth      GoTrue                       95 auth calls, 46 FKs to auth.users
+#   rest      PostgREST                    843 .from() calls
+#   realtime  Realtime                     6 postgres_changes channels
+#   kong      Gateway                      serves all three under ONE url
+#   app       Next.js (this repo)
+#   migrate   one-shot; applies supabase/migrations/*.sql then exits
+#
+# DELIBERATELY OMITTED:
+#
+#   storage + imgproxy — grepped for `supabase.storage` and there are
+#       ZERO call sites. Uploads already go to S3 via @aws-sdk/client-s3.
+#       Running Storage would be two containers serving nothing.
+#   edge-runtime — no supabase/functions directory exists.
+#   analytics / vector / logflare — telemetry, not app dependencies.
+#   inbucket — mail catcher. This app sends via its own SMTP
+#       (nodemailer + SMTP_* vars), so it would never receive anything.
+#   supavisor / pooler — connection pooling matters at scale, not for
+#       one local app container.
+#   studio + meta — a DB browser, not required to RUN the app. Available
+#       behind a profile since it is genuinely useful:
+#         docker compose ... --profile studio up -d
+#
+# ─── SECURITY ───────────────────────────────────────────────
+# Every credential in .env.docker.local is a known, committed,
+# local-only value. Bind mounts are 127.0.0.1 so nothing is reachable
+# off-machine. Do not run this compose file on a public host.
+# ============================================================
+
+name: replai-local
+
+services:
+  # ==========================================================
+  # Postgres — the database
+  # ==========================================================
+  # ==========================================================
+  # NOTE ON VERSIONS — db, auth and realtime are pinned to match
+  # PRODUCTION, because this stack restores a production pg_dump. The
+  # dump carries production's auth, realtime and storage schemas, so a
+  # container older than the schema it is handed does not merely lag, it
+  # breaks:
+  #
+  #   db       Production is Postgres 17.6. A 17.6 plain dump uses syntax
+  #            and settings 15.x rejects outright.
+  #
+  #   auth     The dump's auth schema is at GoTrue migration
+  #            20260625000000; gotrue v2.177.0 only knows up to
+  #            20241009103726.
+  #
+  #   realtime The dump's realtime schema is at 20260709120000, which
+  #            added realtime.subscription.action_filter and
+  #            .selected_columns and widened the unique index to five
+  #            columns. Realtime v2.34.47 upserts with
+  #            ON CONFLICT (subscription_id, entity, filters) and dies
+  #            with 42P10 "no unique or exclusion constraint matching the
+  #            ON CONFLICT specification". Visible only in the realtime
+  #            container's log: the client still gets SUBSCRIBED and then
+  #            silently receives nothing.
+  #
+  # Keep these in step with prod when prod moves.
+  # ==========================================================
+  db:
+    # supabase/postgres, not plain postgres: it ships pgvector,
+    # wal_level=logical (required by Realtime) and the pg_stat_statements
+    # config that hosted Supabase has. Plain postgres:15 would need all
+    # three configured by hand and still lacks pgvector.
+    image: supabase/postgres:17.6.1.165
+    container_name: replai-db
+    restart: unless-stopped
+    ports:
+      # Bound to localhost only. Exposed so you can psql / point a GUI at
+      # it while developing.
+      - '127.0.0.1:${POSTGRES_PORT:-54322}:5432'
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+      # Realtime connects with this and needs the WAL.
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Runs once, on an empty volume, before anything else connects.
+      - ./docker/supabase/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # A real query, not `pg_isready`. pg_isready reports "accepting
+      # connections" even when the role you named does not exist, which
+      # made the container report healthy while every connection failed
+      # with 'role "postgres" does not exist'. This asserts the role can
+      # actually log in and that 01-bootstrap.sql finished.
+      test:
+        [
+          'CMD-SHELL',
+          'psql -U postgres -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname = ''authenticator''" | grep -q 1',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # ==========================================================
+  # Restore — loads a production pg_dump, one-shot, then exits.
+  #
+  # Runs BEFORE GoTrue on purpose. GoTrue creates auth.users itself on
+  # first boot, and if it wins that race the dump's `CREATE TABLE
+  # auth.users` collides and the restore aborts half-applied.
+  #
+  # No-ops (exit 0) when there is no *-plain.sql in the backups folder, so
+  # a from-scratch install still works — migrate.sh then builds the schema
+  # from supabase/migrations instead. Exactly one of the two does the work.
+  # ==========================================================
+  restore:
+    # postgres:17 client, matching the server. The sibling .backup file is
+    # a pg_dump 18 custom-format archive and pg_restore will not read an
+    # archive from a newer major, which is why this path uses plain SQL.
+    image: postgres:17-alpine
+    container_name: replai-restore
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: postgres
+      PGDATABASE: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Set this to pin a specific file, e.g. RESTORE_FILE=24-08-plain.sql.
+      # Unset means "newest *-plain.sql by mtime".
+      RESTORE_FILE: ${RESTORE_FILE:-}
+    volumes:
+      - './supabase/Production db backups:/backups:ro'
+      - ./docker/supabase/restore.sh:/restore.sh:ro
+    entrypoint: ['sh', '/restore.sh']
+    restart: 'no'
+
+  # ==========================================================
+  # GoTrue — auth. Creates auth.users on first boot.
+  # ==========================================================
+  auth:
+    image: supabase/gotrue:v2.196.0
+    container_name: replai-auth
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      restore:
+        # Must not boot until the restore has finished — see the note on
+        # that service.
+        condition: service_completed_successfully
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${SUPABASE_PUBLIC_URL}
+
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD:-postgres}@db:5432/postgres?search_path=auth
+
+      GOTRUE_SITE_URL: ${SITE_URL}
+      GOTRUE_URI_ALLOW_LIST: ${SITE_URL},${SITE_URL}/**
+      GOTRUE_DISABLE_SIGNUP: 'false'
+
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
+      GOTRUE_MAILER_AUTOCONFIRM: 'true'
+      # ^ THE important local-dev setting. With this false, signup writes
+      # a user then waits for an email click that no local mail server
+      # will ever deliver, and login fails with "Email not confirmed".
+      GOTRUE_EXTERNAL_PHONE_ENABLED: 'false'
+      GOTRUE_SMS_AUTOCONFIRM: 'true'
+
+      GOTRUE_LOG_LEVEL: info
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--no-verbose',
+          '--tries=1',
+          '--spider',
+          'http://localhost:9999/health',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # ==========================================================
+  # PostgREST — turns .from('contacts').select() into SQL
+  # ==========================================================
+  rest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: replai-rest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      # Must wait for the MIGRATIONS, not just a healthy database.
+      # PostgREST builds its schema cache once at startup. On a fresh
+      # volume it would otherwise connect while the 89 migrations are
+      # still running and cache a half-built schema: tables created after
+      # that moment return `404 Not Found` forever, with no error anywhere
+      # in the logs. `notifications` failed exactly this way.
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      # Logs in as `authenticator`, then SET ROLE per request based on the
+      # JWT. That switch is what makes RLS apply — see 01-bootstrap.sql.
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD:-postgres}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: 'false'
+      # Surfaces `request.jwt.claims` as the modern GUC that auth.uid()
+      # reads first.
+      PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_MAX_ROWS: 100000
+      PGRST_LOG_LEVEL: error
+
+  # ==========================================================
+  # Realtime — the 6 live channels
+  # ==========================================================
+  realtime:
+    image: supabase/realtime:v2.129.9
+    container_name: replai-realtime
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      # Same reasoning as `rest`: the supabase_realtime publication and
+      # the REPLICA IDENTITY settings are applied by migrate.sh. Realtime
+      # does recover on its own by retrying, but starting after the
+      # migrations avoids a window where a channel reports SUBSCRIBED and
+      # delivers nothing.
+      migrate:
+        condition: service_completed_successfully
+    # The alias is load-bearing, not cosmetic. Realtime is multi-tenant:
+    # it resolves the tenant from the FIRST LABEL of the incoming Host
+    # header. Kong proxying to `http://realtime:4000` sends
+    # `Host: realtime`, no tenant named "realtime" exists, and every
+    # websocket upgrade dies with a bare `403 Forbidden` from Cowboy.
+    # Naming the alias `<tenant>.<anything>` makes the first label match
+    # the `realtime-dev` row SEED_SELF_HOST creates below.
+    networks:
+      default:
+        aliases:
+          - realtime-dev.replai-realtime
+    environment:
+      PORT: 4000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: supabase_admin
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DB_NAME: postgres
+      # Realtime keeps its own Ecto tables in _realtime (created in
+      # 01-bootstrap.sql) rather than polluting public.
+      DB_AFTER_CONNECT_QUERY: 'SET search_path TO _realtime'
+      DB_ENC_KEY: ${REALTIME_ENC_KEY}
+      API_JWT_SECRET: ${JWT_SECRET}
+      # Required from Realtime ~v2.5x onward — it is fetched with
+      # System.fetch_env!/1 at boot, so an unset value is a hard crash
+      # loop, not a warning. Only guards the /metrics endpoint, which this
+      # stack does not scrape; reusing JWT_SECRET keeps the secret count
+      # down without weakening anything.
+      METRICS_JWT_SECRET: ${JWT_SECRET}
+      SECRET_KEY_BASE: ${REALTIME_SECRET_KEY_BASE}
+      ERL_AFLAGS: '-proto_dist inet_tcp'
+      DNS_NODE: "'realtime@127.0.0.1'"
+      RLIMIT_NOFILE: '10000'
+      APP_NAME: realtime
+      # Seeds the single-tenant record so a self-hosted Realtime works
+      # without the multi-tenant provisioning API.
+      SEED_SELF_HOST: 'true'
+      RUN_JANITOR: 'true'
+    # This healthcheck is doing real work, not just reporting status.
+    #
+    # Realtime applies its PER-TENANT migrations lazily, on first contact
+    # with a tenant — those are what create realtime.subscription,
+    # realtime.list_changes() and realtime.apply_rls(). Until they have
+    # run, a client can connect, get a 101 upgrade and even see
+    # SUBSCRIBED, while no postgres_changes event is ever delivered.
+    #
+    # On a brand-new volume that window lands exactly on whoever opens the
+    # app first: the inbox looks fine and silently never updates, then
+    # starts working on reload with nothing in the logs to explain it.
+    #
+    # Hitting the tenant health endpoint here forces those migrations
+    # during startup, and gating `app` on this being healthy means the
+    # window is closed before anyone can hit it.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'curl',
+          '-sSfL',
+          '--head',
+          '-o',
+          '/dev/null',
+          '-H',
+          'Authorization: Bearer ${NEXT_PUBLIC_SUPABASE_ANON_KEY}',
+          'http://localhost:4000/api/tenants/realtime-dev/health',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # ==========================================================
+  # Kong — one URL for auth + rest + realtime
+  #
+  # Kong listens on ${SUPABASE_PORT} INSIDE the container, not on
+  # Kong's usual 8000, and it publishes the app's port too. Both are
+  # deliberate; see the long note on the `app` service.
+  # ==========================================================
+  kong:
+    image: kong:2.8.1
+    container_name: replai-kong
+    restart: unless-stopped
+    depends_on:
+      auth:
+        condition: service_started
+      rest:
+        condition: service_started
+    ports:
+      # Supabase gateway. Same port number on both sides of the boundary.
+      - '127.0.0.1:${SUPABASE_PORT:-54321}:${SUPABASE_PORT:-54321}'
+      # The Next.js app. Published here rather than on the `app` service
+      # because `app` shares this container's network namespace and so
+      # cannot declare ports of its own.
+      - '127.0.0.1:${HOST_PORT:-3000}:3000'
+    environment:
+      KONG_DATABASE: 'off'
+      KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      # Kong defaults to `auto`, meaning ONE nginx worker per host CPU, and
+      # each worker reserves the 64x160k proxy buffers above. On a 12-core
+      # machine that measured 960 MB resident — more than the other five
+      # services put together — for a gateway serving one developer.
+      #
+      # 2 workers is ~200 MB and still far more concurrency than a single
+      # app instance can generate. This matters most on the target EC2 box:
+      # without the cap, memory use silently changes with instance size.
+      KONG_NGINX_WORKER_PROCESSES: 2
+      # IPv6 is not optional here. /etc/hosts in the container maps
+      # `localhost` to ::1 BEFORE 127.0.0.1, and Node resolves verbatim,
+      # so the app's very first connection attempt goes to [::1]:54321.
+      # Listening on v4 only still "works" — undici retries over IPv4 —
+      # but every server-side Supabase call then pays a refused
+      # connection first, and anything using a plain v6-only client
+      # (wget, some HTTP libs) fails outright.
+      KONG_PROXY_LISTEN: '0.0.0.0:${SUPABASE_PORT:-54321}, [::]:${SUPABASE_PORT:-54321}'
+    volumes:
+      - ./docker/supabase/kong.yml:/home/kong/kong.yml:ro
+
+  # ==========================================================
+  # Migrations — one-shot, then exits
+  # ==========================================================
+  migrate:
+    image: postgres:15-alpine
+    container_name: replai-migrate
+    depends_on:
+      db:
+        condition: service_healthy
+      auth:
+        # Waits for GoTrue's HTTP health, then migrate.sh additionally
+        # polls for the auth.users TABLE — a healthy container can still
+        # be mid-migration.
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: postgres
+      PGDATABASE: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - ./supabase/migrations:/migrations:ro
+      - ./docker/supabase/migrate.sh:/migrate.sh:ro
+    entrypoint: ['sh', '/migrate.sh']
+    restart: 'no'
+
+  # ==========================================================
+  # The app itself
+  # ==========================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* are inlined into the browser bundle at BUILD time,
+        # so the local Supabase URL has to be a build arg — setting it
+        # only at runtime would leave the production URL baked into the JS
+        # and the browser would still talk to supabase.com.
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_META_APP_ID: ${NEXT_PUBLIC_META_APP_ID}
+        NEXT_PUBLIC_META_ES_CONFIG_ID: ${NEXT_PUBLIC_META_ES_CONFIG_ID}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+    image: replai-local:latest
+    container_name: replai-app
+    restart: unless-stopped
+    depends_on:
+      kong:
+        condition: service_started
+      migrate:
+        # Waits for the migration job to EXIT 0 — the app must not boot
+        # against an empty schema.
+        condition: service_completed_successfully
+      realtime:
+        # Not cosmetic: Realtime's healthcheck is what forces its
+        # per-tenant migrations to run. Booting the app before that means
+        # the first user gets a live-updates-shaped hole. See the note on
+        # the realtime service.
+        condition: service_healthy
+    # ----------------------------------------------------------
+    # Why the app shares Kong's network namespace
+    #
+    # Every Supabase client in this codebase — browser AND server —
+    # reads the same `NEXT_PUBLIC_SUPABASE_URL`, and Next.js inlines
+    # NEXT_PUBLIC_* textually at BUILD time in both bundles. There is
+    # no server-only override anywhere in src/ (checked: 11 call sites,
+    # all of them read that one var). So a single string has to resolve
+    # correctly from two different places:
+    #
+    #   browser on the host  -> needs localhost:54321
+    #   server inside docker -> needs to reach the kong container
+    #
+    # `http://kong:54321` is unreachable from the browser.
+    # `http://localhost:54321` is unreachable from a normal container.
+    # A docker network alias cannot fix it either: /etc/hosts already
+    # pins `localhost` to 127.0.0.1 and is consulted before docker DNS.
+    #
+    # Sharing Kong's namespace makes `localhost:54321` mean Kong for
+    # BOTH — the server hits Kong over loopback inside the namespace,
+    # the browser hits the same port published on the host. Zero app
+    # code changes, one URL, no split-horizon DNS.
+    #
+    # The cost: this container publishes no ports of its own (Kong
+    # publishes :3000 on its behalf) and it restarts if Kong does.
+    # ----------------------------------------------------------
+    network_mode: 'service:kong'
+    env_file:
+      - .env.docker.local
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--no-verbose',
+          '--tries=1',
+          '--spider',
+          'http://127.0.0.1:3000/api/health',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ==========================================================
+  # Studio — OPTIONAL DB browser. `--profile studio` to enable.
+  # ==========================================================
+  meta:
+    image: supabase/postgres-meta:v0.84.2
+    container_name: replai-meta
+    profiles: ['studio']
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: postgres
+      PG_META_DB_USER: postgres
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+
+  studio:
+    image: supabase/studio:2025.06.30-sha-6f5982d
+    container_name: replai-studio
+    profiles: ['studio']
+    restart: unless-stopped
+    depends_on:
+      - meta
+    ports:
+      - '127.0.0.1:${STUDIO_PORT:-54323}:3000'
+    environment:
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DEFAULT_ORGANIZATION_NAME: Replai Local
+      DEFAULT_PROJECT_NAME: Replai
+      SUPABASE_URL: http://kong:${SUPABASE_PORT:-54321}
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL}
+      SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      AUTH_JWT_SECRET: ${JWT_SECRET}
+
+volumes:
+  db-data:
+    name: replai-local-db-data

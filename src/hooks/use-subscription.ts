@@ -33,6 +33,13 @@ export interface SubscriptionSnapshot {
     billingDisabled: boolean;
     daysLeft: number | null;
     endsAt: string | null;
+    pendingWindow: {
+      type: 'active' | 'trialing';
+      startsAt: string;
+      endsAt: string;
+      /** Length of the queued window (`endsAt - startsAt`), not time until it ends. */
+      durationDays: number;
+    } | null;
   };
   subscription: {
     planName: string | null;
@@ -41,6 +48,25 @@ export interface SubscriptionSnapshot {
     endsAt: string | null;
     trialEndsAt: string | null;
   } | null;
+  /**
+   * The plan the customer chose but has NOT paid for.
+   *
+   * Deliberately separate from `subscription`, which is coverage they
+   * actually hold. Null also covers "the chosen plan or term has since
+   * been deleted or unpriced" — the server checks that — so a non-null
+   * value is always safe to put a Pay button against.
+   */
+  selectedPlan: {
+    planId: string;
+    planName: string;
+    cycleId: string;
+    cycleLabel: string;
+    amount: number;
+    currency: string;
+    selectedAt: string | null;
+  } | null;
+  /** True while this account still owes us a plan choice before using the CRM. */
+  planSelectionRequired: boolean;
   copy: {
     trialBanner: string | null;
     trialBannerCta: string;
@@ -55,6 +81,17 @@ export interface SubscriptionSnapshot {
       note: string;
       contactLabel: string;
     };
+    // ---- Trial-first onboarding + upcoming-plan card ----
+    showTrialBadges: boolean;
+    /** Already `{days}`-substituted from trial_days, not from daysLeft. */
+    trialBadge: string;
+    noCardLabel: string;
+    trialCtaLabel: string;
+    trialCtaNote: string | null;
+    upcomingPlanLabel: string;
+    upcomingUnpaidLabel: string;
+    payNowLabel: string;
+    changePlanLabel: string;
   };
   owner: { name: string; email: string | null } | null;
   pendingPayment: {
@@ -128,7 +165,10 @@ async function load(): Promise<void> {
       const data = (await res.json()) as SubscriptionSnapshot;
       setStore({ data, loading: false, error: null });
     } catch {
-      setStore({ loading: false, error: 'Could not load subscription details' });
+      setStore({
+        loading: false,
+        error: 'Could not load subscription details',
+      });
     } finally {
       inFlight = null;
     }
@@ -185,10 +225,10 @@ export function useSubscription(): UseSubscriptionResult {
     refresh,
     showTrialBanner: Boolean(
       state &&
-        !state.billingDisabled &&
-        state.isTrialing &&
-        !state.isBlocked &&
-        state.daysLeft !== null,
+      !state.billingDisabled &&
+      state.isTrialing &&
+      !state.isBlocked &&
+      state.daysLeft !== null
     ),
   };
 }

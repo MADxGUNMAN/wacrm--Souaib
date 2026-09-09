@@ -86,6 +86,10 @@ export async function POST(request: Request) {
         total_recipients: plan.planned.length,
         accepted: plan.planned.length,
         rejected: plan.rejected,
+        // Recipients dropped because they opted out of marketing. They get
+        // no recipient row, so they are reported here rather than in the
+        // persisted counts.
+        suppressed: plan.suppressed,
       },
       202
     );

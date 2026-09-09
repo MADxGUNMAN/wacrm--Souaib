@@ -109,6 +109,38 @@ export interface SubscriptionSettings {
   free_plan_label: string;
   free_plan_subtitle: string;
 
+  // ---- Trial-first onboarding (migration 20260824030000) ----
+  // A new signup now picks a term BEFORE reaching the CRM, and may take
+  // the free trial instead of paying immediately. These are the strings
+  // that flow makes visible.
+  /**
+   * Master switch for the whole trial-first presentation: the two badges
+   * on each plan card and the "Start with trial" button. FALSE leaves
+   * `trial_days` alone but sells the plans as pay-now only.
+   */
+  show_trial_badges: boolean;
+  /**
+   * Badge on every plan card. Supports `{days}`, filled from
+   * `trial_days` — see `formatTrialBadge`.
+   *
+   * Templated rather than literal on purpose: a hardcoded "14 days free
+   * trial" becomes a lie the moment an operator changes `trial_days` two
+   * tabs away, and it would be a lie directly next to the buy button.
+   */
+  trial_badge_template: string;
+  /** Second badge: selecting a plan does not charge anything. */
+  no_card_label: string;
+  /** Secondary CTA beside "Continue to payment". */
+  trial_cta_label: string;
+  /** Optional small print under the two CTAs. */
+  trial_cta_note: string | null;
+
+  // ---- The chosen-but-unpaid plan card in Settings -> Billing ----
+  upcoming_plan_label: string;
+  upcoming_unpaid_label: string;
+  pay_now_label: string;
+  change_plan_label: string;
+
   // ---- member-blocked screen (migration 052) ----
   // Only the owner can pay, so blocked non-owner members get their own
   // screen instead of an unusable pricing page. These support the
@@ -270,6 +302,107 @@ export interface SubscriptionEvent {
 }
 
 // ============================================================
+// Customer-facing billing history
+//
+// These two shapes are the ONLY ones that may cross to a customer's
+// browser, and they are narrow on purpose. `payment_requests` and
+// `subscription_events` both hold operator-only columns, and the
+// audit trail in particular is service-role-only with zero RLS
+// policies precisely because it was built as an internal tool.
+//
+// Excluded deliberately, in both shapes:
+//   reviewed_by_user_id / actor_user_id — internal ids, and naming a
+//     platform admin to a customer leaks staff identity
+//   subscription_events.note — free text one operator writes for
+//     another ("comped, complained on WhatsApp"); NOT customer copy.
+//     `payment_requests.review_note` IS customer copy and is kept.
+//   from_status / to_status — internal state machine values; the
+//     customer gets a plain-language label instead
+// ============================================================
+
+/** One submitted payment, as its payer may see it. */
+export interface CustomerPaymentRecord {
+  id: string;
+  /** Short human reference for support conversations, e.g. "A1B2C3D4". */
+  reference: string;
+  planName: string;
+  cycleLabel: string;
+  /** Price in force when this was submitted. */
+  expectedAmount: number;
+  /** What the payer reported transferring. */
+  paidAmount: number;
+  currency: string;
+  transactionRef: string;
+  payerName: string;
+  payerUpiId: string | null;
+  payerBank: string | null;
+  /** When the payer says the transfer happened. */
+  paidAt: string | null;
+  status: PaymentRequestStatus;
+  /** The reviewing admin's message TO the customer. */
+  reviewNote: string | null;
+  reviewedAt: string | null;
+  /** Access window this payment bought, once approved. */
+  activatedFrom: string | null;
+  activatedUntil: string | null;
+  createdAt: string;
+}
+
+/**
+ * A change to the plan that did NOT come from one of the customer's own
+ * payments — trial start, an extension granted by support, an expiry.
+ *
+ * Payment-derived events are excluded at the query level rather than
+ * here, so the payments list stays the single place a receipt appears.
+ */
+export interface CustomerPlanActivity {
+  id: string;
+  eventType: SubscriptionEventType;
+  planName: string | null;
+  cycleLabel: string | null;
+  /** Which window moved. Null on rows written before migration 081. */
+  windowKind: 'paid' | 'trial' | null;
+  durationDays: number | null;
+  durationMonths: number | null;
+  /** Access end date after this change. */
+  endsAt: string | null;
+  createdAt: string;
+}
+
+/** One page of results plus what the pager needs to render itself. */
+export interface CustomerHistoryPage<T> {
+  items: T[];
+  page: number;
+  pageSize: number;
+  /** Rows matching the query, across all pages. */
+  total: number;
+  totalPages: number;
+}
+
+/** Everything the Billing & plan history section renders. */
+export interface BillingHistoryPayload {
+  payments: CustomerHistoryPage<CustomerPaymentRecord>;
+  activity: CustomerHistoryPage<CustomerPlanActivity>;
+  /**
+   * Computed over EVERY payment, never over the current page — a "total
+   * paid" that changed when you clicked to page 2 would be a bug, and a
+   * subtle one, because each individual page total looks plausible.
+   */
+  summary: {
+    /**
+     * Lifetime approved spend, split BY CURRENCY. A single total would
+     * be wrong the moment an account has paid in two currencies, and
+     * `subscription_settings.currency` is admin-editable at any time,
+     * so historical rows genuinely can disagree.
+     */
+    totalsByCurrency: { currency: string; amount: number }[];
+    approvedCount: number;
+    pendingCount: number;
+    rejectedCount: number;
+  };
+}
+
+// ============================================================
 // Account-side view
 // ============================================================
 
@@ -300,6 +433,25 @@ export interface AccountSubscriptionRow {
   subscription_started_at: string | null;
   subscription_ends_at: string | null;
   subscription_note: string | null;
+
+  // ---- Chosen but NOT paid for (migration 20260824030000) ----
+  //
+  // Deliberately separate from `subscription_plan_id`, which is what the
+  // account HOLDS. These record what it WANTS, so trial expiry can send
+  // the customer to the right payment screen instead of a generic price
+  // list, and Billing can show an unpaid upcoming plan.
+  //
+  // Both ids are needed to price anything, so a row with only one set is
+  // treated everywhere as no selection at all.
+  selected_plan_id: string | null;
+  selected_cycle_id: string | null;
+  plan_selected_at: string | null;
+  /**
+   * TRUE until this account has been through plan selection. Every
+   * account that existed before the migration was backfilled to FALSE,
+   * which is what keeps the new onboarding to new signups only.
+   */
+  plan_selection_required: boolean;
 }
 
 // ============================================================
@@ -323,6 +475,25 @@ export interface PlansBundle {
   cycles: BillingCycle[];
   plans: SubscriptionPlan[];
   prices: SubscriptionPlanPrice[];
+}
+
+/**
+ * A plan the customer has chosen but not paid for, resolved for display.
+ *
+ * Only ever produced when the (plan, cycle) pair still exists and is
+ * still priced — see `getSelectedPlan`. So a non-null value is always
+ * safe to render a "Pay now" button against, and null genuinely means
+ * "ask them to choose again".
+ */
+export interface SelectedPlanSummary {
+  planId: string;
+  planName: string;
+  cycleId: string;
+  cycleLabel: string;
+  /** Coerced from PostgREST's NUMERIC-as-string. */
+  amount: number;
+  currency: string;
+  selectedAt: string | null;
 }
 
 /**

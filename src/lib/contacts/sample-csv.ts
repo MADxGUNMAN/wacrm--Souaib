@@ -61,11 +61,12 @@ const SAMPLE_CONTACTS = [
 
 /** Build and return a CSV string ready for download. */
 export function generateSampleCsv(): string {
-  const header = 'phone,name,email,company,tags';
-  const rows = SAMPLE_CONTACTS.map((c) => {
+  const header = 'phone,name,email,company,tags,Order ID';
+  const rows = SAMPLE_CONTACTS.map((c, i) => {
     // Quote tags since they contain commas
     const tags = c.tags.includes(',') ? `"${c.tags}"` : c.tags;
-    return `${c.phone},${c.name},${c.email},${c.company},${tags}`;
+    const orderId = `ORD-2026-${String(1001 + i).padStart(4, '0')}`;
+    return `${c.phone},${c.name},${c.email},${c.company},${tags},${orderId}`;
   });
   return [header, ...rows].join('\n');
 }

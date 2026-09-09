@@ -1,26 +1,51 @@
-"use client";
+'use client';
 
-import { Suspense, useState, useCallback, useEffect, useRef } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useTranslations } from "next-intl";
-import { createClient } from "@/lib/supabase/client";
+import {
+  Suspense,
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useTranslations } from 'next-intl';
+import { createClient } from '@/lib/supabase/client';
 import {
   CONVERSATION_SELECT,
   normalizeConversation,
-} from "@/lib/inbox/conversations";
-import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
-import { useRealtime } from "@/hooks/use-realtime";
-import { ConversationList } from "@/components/inbox/conversation-list";
-import { MessageThread } from "@/components/inbox/message-thread";
-import { ContactSidebar } from "@/components/inbox/contact-sidebar";
-import { useFloatingChats } from "@/components/inbox/floating-chats-context";
-import { toast } from "sonner";
-import { WifiOff } from "lucide-react";
-import { cn } from "@/lib/utils";
+} from '@/lib/inbox/conversations';
+import type {
+  Conversation,
+  Message,
+  Contact,
+  ConversationStatus,
+} from '@/types';
+import { useRealtime } from '@/hooks/use-realtime';
+import { ConversationList } from '@/components/inbox/conversation-list';
+import { MessageThread } from '@/components/inbox/message-thread';
+import { ContactSidebar } from '@/components/inbox/contact-sidebar';
+import { ImportedChatsReview } from '@/components/inbox/imported-chats-review';
+import { useFloatingChats } from '@/components/inbox/floating-chats-context';
+import { ChevronsLeftRight, WifiOff } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
-const CONTACT_PANEL_STORAGE_KEY = "wacrm:inbox:contact-panel-open";
+const CONTACT_PANEL_STORAGE_KEY = 'wacrm:inbox:contact-panel-open';
+const CONTACT_PANEL_WIDTH_STORAGE_KEY = 'wacrm:inbox:contact-panel-width:v2';
+const DEFAULT_CONTACT_PANEL_WIDTH = 380;
+const MIN_CONTACT_PANEL_WIDTH = 320;
+const MAX_CONTACT_PANEL_WIDTH = 560;
+const CONTACT_PANEL_KEYBOARD_STEP = 16;
+
+function clampContactPanelWidth(width: number) {
+  return Math.min(
+    MAX_CONTACT_PANEL_WIDTH,
+    Math.max(MIN_CONTACT_PANEL_WIDTH, Math.round(width))
+  );
+}
 
 // `useSearchParams` (the `?c=<id>` deep link below) requires a Suspense
 // boundary or the production build bails to CSR and errors out. Thin
@@ -34,7 +59,7 @@ export default function InboxPage() {
 }
 
 function InboxPageInner() {
-  const t = useTranslations("Inbox.page");
+  const t = useTranslations('Inbox.page');
   const router = useRouter();
   const searchParams = useSearchParams();
   /**
@@ -42,7 +67,7 @@ function InboxPageInner() {
    * dashboard's recent-conversations list so the right thread opens
    * automatically instead of showing the empty center panel.
    */
-  const deepLinkConvId = searchParams.get("c");
+  const deepLinkConvId = searchParams.get('c');
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversation, setActiveConversation] =
@@ -75,11 +100,191 @@ function InboxPageInner() {
   useEffect(() => {
     try {
       const stored = localStorage.getItem(CONTACT_PANEL_STORAGE_KEY);
-      if (stored !== null) setContactPanelOpen(stored === "true");
+      if (stored !== null) setContactPanelOpen(stored === 'true');
     } catch {
       // localStorage can throw in private-browsing / sandboxed contexts.
     }
   }, []);
+
+  const [contactPanelWidth, setContactPanelWidth] = useState(
+    DEFAULT_CONTACT_PANEL_WIDTH
+  );
+  const [isResizingContactPanel, setIsResizingContactPanel] = useState(false);
+  const contactPanelResizeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const contactPanelElementRef = useRef<HTMLDivElement | null>(null);
+  const contactPanelResizeHandleRef = useRef<HTMLDivElement | null>(null);
+  const pendingContactPanelWidthRef = useRef(DEFAULT_CONTACT_PANEL_WIDTH);
+  const contactPanelResizeFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    try {
+      const stored = Number(
+        localStorage.getItem(CONTACT_PANEL_WIDTH_STORAGE_KEY)
+      );
+      if (Number.isFinite(stored) && stored > 0) {
+        // Reconcile the device preference after hydration; the server and
+        // initial client render intentionally share the default width.
+        const nextWidth = clampContactPanelWidth(stored);
+        pendingContactPanelWidthRef.current = nextWidth;
+        setContactPanelWidth(nextWidth);
+      }
+    } catch {
+      // Persistence is best-effort.
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (contactPanelResizeFrameRef.current !== null) {
+        cancelAnimationFrame(contactPanelResizeFrameRef.current);
+      }
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    },
+    []
+  );
+
+  const persistContactPanelWidth = useCallback((width: number) => {
+    try {
+      localStorage.setItem(
+        CONTACT_PANEL_WIDTH_STORAGE_KEY,
+        String(clampContactPanelWidth(width))
+      );
+    } catch {
+      // Persistence is best-effort.
+    }
+  }, []);
+
+  const applyContactPanelWidth = useCallback((width: number) => {
+    const nextWidth = clampContactPanelWidth(width);
+    pendingContactPanelWidthRef.current = nextWidth;
+
+    const panel = contactPanelElementRef.current;
+    if (panel) {
+      panel.style.width = `${nextWidth}px`;
+      panel.style.flexBasis = `${nextWidth}px`;
+    }
+    contactPanelResizeHandleRef.current?.setAttribute(
+      'aria-valuenow',
+      String(nextWidth)
+    );
+    return nextWidth;
+  }, []);
+
+  const handleContactPanelResizeStart = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      contactPanelResizeRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: pendingContactPanelWidthRef.current,
+      };
+      setIsResizingContactPanel(true);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    },
+    []
+  );
+
+  const handleContactPanelResizeMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const resize = contactPanelResizeRef.current;
+      if (!resize || resize.pointerId !== event.pointerId) return;
+
+      pendingContactPanelWidthRef.current = clampContactPanelWidth(
+        resize.startWidth + (resize.startX - event.clientX)
+      );
+      if (contactPanelResizeFrameRef.current !== null) return;
+
+      contactPanelResizeFrameRef.current = requestAnimationFrame(() => {
+        contactPanelResizeFrameRef.current = null;
+        applyContactPanelWidth(pendingContactPanelWidthRef.current);
+      });
+    },
+    [applyContactPanelWidth]
+  );
+
+  const finishContactPanelResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const resize = contactPanelResizeRef.current;
+      if (!resize || resize.pointerId !== event.pointerId) return;
+
+      if (contactPanelResizeFrameRef.current !== null) {
+        cancelAnimationFrame(contactPanelResizeFrameRef.current);
+        contactPanelResizeFrameRef.current = null;
+      }
+      const width = applyContactPanelWidth(
+        resize.startWidth + (resize.startX - event.clientX)
+      );
+      setContactPanelWidth(width);
+      persistContactPanelWidth(width);
+      contactPanelResizeRef.current = null;
+      setIsResizingContactPanel(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [applyContactPanelWidth, persistContactPanelWidth]
+  );
+
+  const cancelContactPanelResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const resize = contactPanelResizeRef.current;
+      if (!resize || resize.pointerId !== event.pointerId) return;
+
+      if (contactPanelResizeFrameRef.current !== null) {
+        cancelAnimationFrame(contactPanelResizeFrameRef.current);
+        contactPanelResizeFrameRef.current = null;
+      }
+      const width = applyContactPanelWidth(pendingContactPanelWidthRef.current);
+      setContactPanelWidth(width);
+      persistContactPanelWidth(width);
+      contactPanelResizeRef.current = null;
+      setIsResizingContactPanel(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [applyContactPanelWidth, persistContactPanelWidth]
+  );
+
+  const setAndPersistContactPanelWidth = useCallback(
+    (width: number) => {
+      const next = applyContactPanelWidth(width);
+      setContactPanelWidth(next);
+      persistContactPanelWidth(next);
+    },
+    [applyContactPanelWidth, persistContactPanelWidth]
+  );
+
+  const handleContactPanelResizeKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      let nextWidth: number | null = null;
+      if (event.key === 'ArrowLeft') {
+        nextWidth = contactPanelWidth + CONTACT_PANEL_KEYBOARD_STEP;
+      } else if (event.key === 'ArrowRight') {
+        nextWidth = contactPanelWidth - CONTACT_PANEL_KEYBOARD_STEP;
+      } else if (event.key === 'Home') {
+        nextWidth = MIN_CONTACT_PANEL_WIDTH;
+      } else if (event.key === 'End') {
+        nextWidth = MAX_CONTACT_PANEL_WIDTH;
+      }
+
+      if (nextWidth === null) return;
+      event.preventDefault();
+      setAndPersistContactPanelWidth(nextWidth);
+    },
+    [contactPanelWidth, setAndPersistContactPanelWidth]
+  );
 
   const handleToggleContactPanel = useCallback(() => {
     setContactPanelOpen((prev) => {
@@ -137,14 +342,14 @@ function InboxPageInner() {
     try {
       const supabase = createClient();
       const { data, error } = await supabase
-        .from("conversations")
+        .from('conversations')
         .select(CONVERSATION_SELECT)
-        .eq("id", convId)
+        .eq('id', convId)
         .maybeSingle();
       if (error) {
         // Supabase errors have non-enumerable properties — log fields
         // explicitly so the console message isn't just `{}`.
-        console.error("Failed to hydrate conversation:", {
+        console.error('Failed to hydrate conversation:', {
           message: error.message,
           details: error.details,
           hint: error.hint,
@@ -165,7 +370,7 @@ function InboxPageInner() {
           return prev.map((c) =>
             c.id === fetched.id
               ? { ...c, contact: c.contact ?? fetched.contact }
-              : c,
+              : c
           );
         }
         return [fetched, ...prev];
@@ -193,9 +398,9 @@ function InboxPageInner() {
       // shared inbox even though the admin had it configured.
       // Resolve account_id via the profile and query by that.
       const { data: profile } = await supabase
-        .from("profiles")
-        .select("account_id")
-        .eq("user_id", user.id)
+        .from('profiles')
+        .select('account_id')
+        .eq('user_id', user.id)
         .maybeSingle();
       const accountId = profile?.account_id as string | undefined;
       if (!accountId) {
@@ -204,12 +409,12 @@ function InboxPageInner() {
       }
 
       const { data } = await supabase
-        .from("whatsapp_config")
-        .select("status")
-        .eq("account_id", accountId)
+        .from('whatsapp_config')
+        .select('status')
+        .eq('account_id', accountId)
         .maybeSingle();
 
-      setWhatsappConnected(data?.status === "connected");
+      setWhatsappConnected(data?.status === 'connected');
     };
 
     checkConnection();
@@ -220,7 +425,7 @@ function InboxPageInner() {
     (event: { eventType: string; new: Message; old: Partial<Message> }) => {
       const newMsg = event.new;
 
-      if (event.eventType === "INSERT") {
+      if (event.eventType === 'INSERT') {
         // Add to messages if it belongs to active conversation
         if (
           activeConversation &&
@@ -231,7 +436,7 @@ function InboxPageInner() {
             if (prev.some((m) => m.id === newMsg.id)) return prev;
             // Replace optimistic message if it exists
             const withoutOptimistic = prev.filter(
-              (m) => !m.id.startsWith("temp-")
+              (m) => !m.id.startsWith('temp-')
             );
             return [...withoutOptimistic, newMsg];
           });
@@ -248,15 +453,15 @@ function InboxPageInner() {
               c.id === newMsg.conversation_id
                 ? {
                     ...c,
-                    last_message_text: newMsg.content_text ?? "",
+                    last_message_text: newMsg.content_text ?? '',
                     last_message_at: newMsg.created_at,
                     unread_count:
                       activeConversation?.id === newMsg.conversation_id
                         ? 0
                         : c.unread_count + 1,
                   }
-                : c,
-            ),
+                : c
+            )
           );
         } else {
           // First time we're seeing this conv: the conv-INSERT event
@@ -268,7 +473,7 @@ function InboxPageInner() {
         }
       }
 
-      if (event.eventType === "UPDATE") {
+      if (event.eventType === 'UPDATE') {
         // Update message status
         setMessages((prev) =>
           prev.map((m) => (m.id === newMsg.id ? { ...m, ...newMsg } : m))
@@ -287,7 +492,7 @@ function InboxPageInner() {
     }) => {
       const conv = event.new;
 
-      if (event.eventType === "INSERT") {
+      if (event.eventType === 'INSERT') {
         // Prepend immediately for snappy UX so the new conv shows in the
         // list right away, then hydrate to fill in the `contact` join
         // (realtime payloads never include joins). Skip both if we
@@ -302,7 +507,7 @@ function InboxPageInner() {
         }
       }
 
-      if (event.eventType === "UPDATE") {
+      if (event.eventType === 'UPDATE') {
         if (knownConvIdsRef.current.has(conv.id)) {
           // If this UPDATE is for the conv the user is currently viewing,
           // suppress the incoming unread_count — the user is reading it
@@ -318,8 +523,8 @@ function InboxPageInner() {
                     ...conv,
                     unread_count: isActive ? 0 : conv.unread_count,
                   }
-                : c,
-            ),
+                : c
+            )
           );
         } else {
           // UPDATE arrived before the INSERT (or after a missed INSERT)
@@ -331,9 +536,7 @@ function InboxPageInner() {
 
         // Update active conversation if it changed
         if (activeConversation && conv.id === activeConversation.id) {
-          setActiveConversation((prev) =>
-            prev ? { ...prev, ...conv } : prev
-          );
+          setActiveConversation((prev) => (prev ? { ...prev, ...conv } : prev));
         }
       }
     },
@@ -345,7 +548,7 @@ function InboxPageInner() {
   // WS was disconnected (laptop sleep, network blip, background-tab
   // throttle) are simply lost. We need a way to catch up.
   const { isConnected } = useRealtime({
-    channelName: "inbox-realtime",
+    channelName: 'inbox-realtime',
     onMessageEvent: handleMessageEvent,
     onConversationEvent: handleConversationEvent,
     enabled: true,
@@ -383,13 +586,13 @@ function InboxPageInner() {
    */
   useEffect(() => {
     const onVisibility = () => {
-      if (document.visibilityState === "visible") {
+      if (document.visibilityState === 'visible') {
         setResyncToken((n) => n + 1);
       }
     };
-    document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 
@@ -439,8 +642,8 @@ function InboxPageInner() {
           if (match.unread_count > 0) {
             setConversations((prev) =>
               prev.map((c) =>
-                c.id === match.id ? { ...c, unread_count: 0 } : c,
-              ),
+                c.id === match.id ? { ...c, unread_count: 0 } : c
+              )
             );
           }
         }
@@ -470,10 +673,8 @@ function InboxPageInner() {
       // even if the realtime UPDATE is dropped.
       setConversations((prev) =>
         prev.map((c) =>
-          c.id === conv.id && c.unread_count > 0
-            ? { ...c, unread_count: 0 }
-            : c,
-        ),
+          c.id === conv.id && c.unread_count > 0 ? { ...c, unread_count: 0 } : c
+        )
       );
       // Record the selection on the deep-link ref BEFORE we change the
       // URL. The router.replace below flips `deepLinkConvId`, which can
@@ -501,7 +702,7 @@ function InboxPageInner() {
     // Clearing the ref lets the deep-link auto-selector fire again if
     // the user later visits /inbox?c=<same-id> — desirable UX.
     autoSelectedForDeepLinkRef.current = null;
-    router.replace("/inbox", { scroll: false });
+    router.replace('/inbox', { scroll: false });
   }, [router]);
 
   const handlePopOut = useCallback(() => {
@@ -509,7 +710,7 @@ function InboxPageInner() {
       openChat(activeConversation, activeContact);
       setActiveConversation(null);
       setActiveContact(null);
-      router.replace("/inbox", { scroll: false });
+      router.replace('/inbox', { scroll: false });
     }
   }, [activeConversation, activeContact, openChat, router]);
 
@@ -573,17 +774,22 @@ function InboxPageInner() {
   const hasActiveConv = !!activeConversation;
 
   return (
-    <div className="-m-4 flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden sm:-m-6">
+    <div className="-m-4 flex h-[calc(100%+2rem)] flex-col overflow-hidden sm:-m-6 sm:h-[calc(100%+3rem)]">
       {/* WhatsApp connection banner — in the flex column, not absolute,
           so it pushes the panels down instead of overlapping them. */}
       {whatsappConnected === false && (
         <div className="flex shrink-0 items-center justify-center gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2">
           <WifiOff className="h-4 w-4 text-amber-400" />
-          <p className="text-xs text-amber-400">
-            {t("whatsappNotConnected")}
-          </p>
+          <p className="text-xs text-amber-400">{t('whatsappNotConnected')}</p>
         </div>
       )}
+
+      {/* Imported-chat review banner.
+          In the flex column alongside the connection banner so it pushes the
+          panels down rather than overlapping them. Renders nothing at all
+          unless this account actually has imported chats, so it costs a
+          non-coexistence inbox one count query and no layout. */}
+      <ImportedChatsReview onApproved={() => setResyncToken((t) => t + 1)} />
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left panel: Conversation list.
@@ -591,8 +797,8 @@ function InboxPageInner() {
             thread can occupy the full width. Always visible on lg+. */}
         <div
           className={cn(
-            "flex h-full flex-1 lg:flex-none",
-            hasActiveConv ? "hidden lg:flex" : "flex",
+            'flex h-full flex-1 lg:flex-none',
+            hasActiveConv ? 'hidden lg:flex' : 'flex'
           )}
         >
           <ConversationList
@@ -616,8 +822,8 @@ function InboxPageInner() {
             on the right. Issue #165. */}
         <div
           className={cn(
-            "flex h-full min-w-0 flex-1 lg:flex",
-            hasActiveConv ? "flex" : "hidden lg:flex",
+            'flex h-full min-w-0 flex-1 lg:flex',
+            hasActiveConv ? 'flex' : 'hidden lg:flex'
           )}
         >
           <MessageThread
@@ -643,7 +849,56 @@ function InboxPageInner() {
             On mobile it's always hidden (the `lg:block` below), so the
             toggle — which is itself desktop-only — never affects it. */}
         {contactPanelOpen && (
-          <div className="hidden lg:block">
+          <div
+            ref={contactPanelElementRef}
+            className="relative hidden h-full min-h-0 shrink-0 overflow-hidden lg:block"
+            style={{
+              width: contactPanelWidth,
+              minWidth: MIN_CONTACT_PANEL_WIDTH,
+              maxWidth: MAX_CONTACT_PANEL_WIDTH,
+              flexBasis: contactPanelWidth,
+            }}
+          >
+            <div
+              ref={contactPanelResizeHandleRef}
+              role="separator"
+              aria-label="Resize contact details panel"
+              aria-orientation="vertical"
+              aria-valuemin={MIN_CONTACT_PANEL_WIDTH}
+              aria-valuemax={MAX_CONTACT_PANEL_WIDTH}
+              aria-valuenow={contactPanelWidth}
+              tabIndex={0}
+              title="Drag to resize · Double-click to reset"
+              onPointerDown={handleContactPanelResizeStart}
+              onPointerMove={handleContactPanelResizeMove}
+              onPointerUp={finishContactPanelResize}
+              onPointerCancel={cancelContactPanelResize}
+              onKeyDown={handleContactPanelResizeKeyDown}
+              onDoubleClick={() =>
+                setAndPersistContactPanelWidth(DEFAULT_CONTACT_PANEL_WIDTH)
+              }
+              className={cn(
+                'contact-panel-resize-handle group absolute inset-y-0 left-0 z-20 w-2 touch-none outline-none',
+                'focus-visible:ring-primary focus-visible:ring-2 focus-visible:ring-inset'
+              )}
+            >
+              <span
+                className={cn(
+                  'bg-border group-hover:bg-primary/60 absolute inset-y-0 left-0 w-px transition-colors',
+                  isResizingContactPanel && 'bg-primary w-0.5'
+                )}
+              />
+              <span
+                className={cn(
+                  'contact-panel-resize-icon',
+                  'absolute top-1/2 left-0 flex h-9 w-5 -translate-y-1/2 items-center justify-center rounded-r-md border border-l-0 shadow-sm',
+                  'opacity-70 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100',
+                  isResizingContactPanel && 'opacity-100'
+                )}
+              >
+                <ChevronsLeftRight className="size-3.5 stroke-[2.25]" />
+              </span>
+            </div>
             <ContactSidebar contact={activeContact} />
           </div>
         )}

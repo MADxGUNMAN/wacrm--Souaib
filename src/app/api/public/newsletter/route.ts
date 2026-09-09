@@ -16,26 +16,30 @@ import {
   button,
   toPlainText,
 } from '@/lib/email/layout';
+import {
+  EMAIL_INVALID_MESSAGE,
+  isValidEmail,
+  normalizeEmail,
+} from '@/lib/validation/email';
 
 export const dynamic = 'force-dynamic';
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const email = (body.email ?? '').toLowerCase().trim();
+    const email = normalizeEmail(String(body.email ?? ''));
 
     // ── Validate ──────────────────────────────────────────────
-    if (!email || !EMAIL_RE.test(email)) {
+    if (!isValidEmail(email)) {
       return NextResponse.json(
-        { error: 'Please enter a valid email address.' },
+        { error: EMAIL_INVALID_MESSAGE },
         { status: 400 }
       );
     }
 
     const admin = supabaseAdmin();
-    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null;
+    const ip =
+      request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null;
     const ua = request.headers.get('user-agent') || null;
 
     // ── Rate limiting (5 per IP per hour) ─────────────────────
@@ -91,7 +95,12 @@ export async function POST(request: Request) {
           .single();
 
         if (updated) {
-          await sendConfirmationEmail(admin, updated.id, email, updated.confirm_token);
+          await sendConfirmationEmail(
+            admin,
+            updated.id,
+            email,
+            updated.confirm_token
+          );
         }
 
         return NextResponse.json({
@@ -105,7 +114,10 @@ export async function POST(request: Request) {
       if (!existing.confirm_token) {
         await admin
           .from('newsletter_subscribers')
-          .update({ confirm_token: token, updated_at: new Date().toISOString() })
+          .update({
+            confirm_token: token,
+            updated_at: new Date().toISOString(),
+          })
           .eq('id', existing.id);
       }
 
@@ -145,7 +157,12 @@ export async function POST(request: Request) {
     }
 
     // ── Send confirmation email ───────────────────────────────
-    await sendConfirmationEmail(admin, subscriber.id, email, subscriber.confirm_token);
+    await sendConfirmationEmail(
+      admin,
+      subscriber.id,
+      email,
+      subscriber.confirm_token
+    );
 
     return NextResponse.json({
       success: true,
@@ -167,17 +184,25 @@ async function sendConfirmationEmail(
   email: string,
   confirmToken: string
 ) {
-  // Fetch site name for branding
+  // Fetch site settings for branding
   const { data: settings } = await admin
     .from('site_settings')
-    .select('site_name')
+    .select('site_name, logo_url, logo_dark_url, full_logo_url')
     .limit(1)
     .maybeSingle();
   const siteName = settings?.site_name || 'Replai';
 
-  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+  const baseUrl = (
+    process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'
+  ).replace(/\/+$/, '');
   const confirmUrl = `${baseUrl}/api/public/newsletter/confirm?token=${confirmToken}`;
   const unsubscribeUrl = `${baseUrl}/api/public/newsletter/unsubscribe?email=${encodeURIComponent(email)}`;
+
+  const logoUrl =
+    settings?.logo_url ||
+    settings?.full_logo_url ||
+    `${baseUrl}/Replai-logo.png`;
+  const logoDarkUrl = settings?.logo_dark_url || `${baseUrl}/logo-full.jpg`;
 
   const content = [
     heading('Confirm your subscription'),
@@ -195,6 +220,8 @@ async function sendConfirmationEmail(
     preheader: `Confirm your ${siteName} newsletter subscription`,
     content,
     footerNote: `You received this because someone subscribed ${email} to the ${siteName} newsletter.\nTo unsubscribe, visit: ${unsubscribeUrl}`,
+    logoUrl,
+    logoDarkUrl,
   });
 
   const result = await sendEmail({

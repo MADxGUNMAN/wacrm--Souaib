@@ -13,15 +13,15 @@ import { ProfileForm } from '@/components/settings/profile-form';
 import { SecurityPanel } from '@/components/settings/security-panel';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { BillingSettings } from '@/components/settings/billing-settings';
-import { WhatsAppConfig } from '@/components/settings/whatsapp-config';
-import { WhatsAppSetup } from '@/components/settings/whatsapp-setup';
-import { MetaSDKProvider } from '@/components/providers/meta-sdk-provider';
+import { WhatsAppSettings } from '@/components/settings/whatsapp-settings';
 
 import { QuickRepliesManager } from '@/components/settings/quick-replies-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
 import { MembersTab } from '@/components/settings/members-tab';
 import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
+import { UsageAlertsPanel } from '@/components/settings/usage-alerts-panel';
+import { OptInOutPanel } from '@/components/settings/opt-in-out-panel';
 import {
   RELOCATED_SECTIONS,
   SECTION_META,
@@ -39,7 +39,13 @@ import {
 // the boundary; the inner component reads the query string.
 export default function SettingsPage() {
   return (
-    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading settings...</div>}>
+    <Suspense
+      fallback={
+        <div className="text-muted-foreground p-6 text-sm">
+          Loading settings...
+        </div>
+      }
+    >
       <SettingsPageInner />
     </Suspense>
   );
@@ -66,19 +72,41 @@ function SettingsPageInner() {
   useEffect(() => {
     if (relocatedTo) router.replace(relocatedTo);
   }, [relocatedTo, router]);
-  const canAccessSettings = hasSectionAccess(profile?.account_role, profile?.permissions, 'settings');
-  const canAccessThisSection = canAccessSettingsSection(profile?.account_role, profile?.permissions, rawSection);
-  const section = (!canAccessSettings && SECTION_META[rawSection]?.group !== 'account') || !canAccessThisSection ? 'profile' : rawSection;
+  const canAccessSettings = hasSectionAccess(
+    profile?.account_role,
+    profile?.permissions,
+    'settings'
+  );
+  const canAccessThisSection = canAccessSettingsSection(
+    profile?.account_role,
+    profile?.permissions,
+    rawSection
+  );
+  const section =
+    (!canAccessSettings && SECTION_META[rawSection]?.group !== 'account') ||
+    !canAccessThisSection
+      ? 'profile'
+      : rawSection;
 
   const go = (next: SettingsSection) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set('tab', next);
+    // `mode` belongs to the WhatsApp section's guided/manual tab. Leaving it
+    // behind would pin a stale sub-tab onto the next section you open.
+    params.delete('mode');
     router.replace(`/settings?${params.toString()}`, { scroll: false });
   };
 
   useEffect(() => {
     if (!loading && profile) {
-      if ((!canAccessSettings && SECTION_META[rawSection]?.group !== 'account') || !canAccessSettingsSection(profile.account_role, profile.permissions, rawSection)) {
+      if (
+        (!canAccessSettings && SECTION_META[rawSection]?.group !== 'account') ||
+        !canAccessSettingsSection(
+          profile.account_role,
+          profile.permissions,
+          rawSection
+        )
+      ) {
         go('profile');
       }
     }
@@ -89,15 +117,27 @@ function SettingsPageInner() {
   // already in context.
   const hints: Partial<Record<SettingsSection, ReactNode>> = useMemo(
     () => ({
-      'whatsapp': (
-        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium tracking-wide shadow-sm border border-emerald-500/20 text-[10px]">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+      whatsapp: (
+        <span className="flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium tracking-wide text-emerald-600 shadow-sm dark:text-emerald-400">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
           ONLINE
         </span>
       ),
-      'security': (
-        <span className="flex items-center gap-1 text-[10px] text-muted-foreground/80 group-hover:text-muted-foreground font-medium transition-colors">
-          <svg className="w-3 h-3 opacity-75" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+      security: (
+        <span className="text-muted-foreground/80 group-hover:text-muted-foreground flex items-center gap-1 text-[10px] font-medium transition-colors">
+          <svg
+            className="h-3 w-3 opacity-75"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+            />
+          </svg>
           2FA
         </span>
       ),
@@ -111,32 +151,22 @@ function SettingsPageInner() {
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
     billing: <BillingSettings />,
-    'whatsapp-setup': (
-      <MetaSDKProvider appId={process.env.NEXT_PUBLIC_META_APP_ID || '3141459766059334'}>
-        <WhatsAppSetup />
-      </MetaSDKProvider>
-    ),
-    whatsapp: <WhatsAppConfig />,
+    whatsapp: <WhatsAppSettings />,
     'quick-replies': <QuickRepliesManager />,
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,
     members: <MembersTab />,
     api: <ApiKeysSettings />,
+    alerts: <UsageAlertsPanel />,
+    'opt-out': <OptInOutPanel />,
   };
 
   return (
     <div>
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">
-          {t('pageTitle')}
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {t('pageDesc')}
-        </p>
-      </div>
+      <p className="text-muted-foreground text-sm">{t('pageDesc')}</p>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[236px_minmax(0,1fr)] lg:items-start">
-        <SettingsRail active={section} onSelect={go} hints={hints} />
+      <div className="mt-6 grid gap-6 lg:grid-cols-[256px_minmax(0,1fr)] lg:items-start lg:gap-8">
+        <SettingsRail active={section} hints={hints} />
         <div className="min-w-0">{panel[section]}</div>
       </div>
     </div>

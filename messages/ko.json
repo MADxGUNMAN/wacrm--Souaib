@@ -243,7 +243,14 @@
       "interactiveReply": "[인터랙티브 응답]",
       "unsupported": "[지원되지 않는 메시지 형식]",
       "aiBadge": "AI",
-      "aiBadgeTitle": "AI 어시스턴트가 자동으로 전송함"
+      "aiBadgeTitle": "AI 어시스턴트가 자동으로 전송함",
+      "ownerBadge": "소유자",
+      "ownerBadgeTitle": "계정 소유자가 이 CRM에서 전송함",
+      "personBadgeTitle": "{name}이(가) 이 CRM에서 전송함",
+      "automationBadge": "자동화",
+      "automationBadgeTitle": "사람이 아니라 플로우 또는 자동화 규칙이 자동으로 전송함",
+      "phoneBadge": "휴대폰",
+      "phoneBadgeTitle": "이 CRM이 아니라 휴대폰의 WhatsApp Business 앱에서 입력함"
     },
     "actions": {
       "reply": "답장",
@@ -333,6 +340,7 @@
       "deleteAction": "삭제",
       "showingPagination": "전체 {total}개 중 {start}-{end}",
       "pageCount": "{total} 중 {page}페이지",
+      "goToPage": "페이지 이동",
       "deleteContactTitle": "연락처 삭제",
       "deleteContactDesc": "{name}을(를) 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
       "cancel": "취소",

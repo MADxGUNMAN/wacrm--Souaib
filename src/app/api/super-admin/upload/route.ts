@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
 import { requireSuperAdmin } from '@/lib/super-admin/guard';
-import { supabaseAdmin } from '@/lib/auth/admin-client';
+import { uploadToS3, getS3PublicUrl } from '@/lib/storage/s3-client';
 
 export async function POST(request: Request) {
   try {
     await requireSuperAdmin(request);
-    const admin = supabaseAdmin();
 
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
@@ -20,37 +19,15 @@ export async function POST(request: Request) {
 
     // Sanitize file extension and name
     const ext = file.name.split('.').pop()?.toLowerCase() || 'png';
-    const filename = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const s3Key = `public-assets/${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
-    // Ensure storage bucket exists
-    const bucketName = 'public-assets';
-    const { data: buckets } = await admin.storage.listBuckets();
-    if (!buckets?.some((b) => b.name === bucketName || b.id === bucketName)) {
-      await admin.storage.createBucket(bucketName, {
-        public: true,
-        allowedMimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'image/x-icon'],
-      });
-    }
-
-    // Upload to Supabase Storage
-    const { data, error } = await admin.storage
-      .from(bucketName)
-      .upload(filename, buffer, {
-        contentType: file.type || 'image/png',
-        upsert: true,
-      });
-
-    if (error) {
-      console.error('[super-admin/upload] Supabase upload error:', error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    // Upload to AWS S3
+    await uploadToS3(s3Key, buffer, file.type || 'image/png');
 
     // Get public URL
-    const {
-      data: { publicUrl },
-    } = admin.storage.from(bucketName).getPublicUrl(filename);
+    const publicUrl = getS3PublicUrl(s3Key);
 
-    return NextResponse.json({ url: publicUrl, path: data.path });
+    return NextResponse.json({ url: publicUrl, path: s3Key });
   } catch (err) {
     if (err instanceof NextResponse) return err;
     console.error('[super-admin/upload] Error:', err);

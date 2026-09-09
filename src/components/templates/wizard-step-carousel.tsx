@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 // ============================================================
 // Wizard step 2, CAROUSEL variant.
@@ -6,8 +6,8 @@
 // The layout follows Meta's uniformity rules rather than fighting them.
 // Meta requires every card to share the same header format and the same
 // button types in the same order, so those two things are edited ONCE at
-// the top and applied to every card. The alternative — a full editor per
-// card — lets an operator build something that cannot pass review and
+// the top and applied to every card. The alternative â€” a full editor per
+// card â€” lets an operator build something that cannot pass review and
 // only tells them at submit.
 //
 // Card count is also frozen at approval: a template approved with three
@@ -21,6 +21,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { RequiredMark } from '@/components/templates/required-mark';
+import { MediaUploadField } from '@/components/media/media-upload-field';
 import {
   Select,
   SelectContent,
@@ -28,7 +30,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { CAROUSEL_LIMITS, TEMPLATE_LIMITS } from '@/lib/whatsapp/template-limits';
+import {
+  CAROUSEL_LIMITS,
+  TEMPLATE_LIMITS,
+} from '@/lib/whatsapp/template-limits';
 import { extractVariableIndices } from '@/lib/whatsapp/template-variables';
 import { carouselNeedsSendInput } from '@/lib/whatsapp/template-definition';
 import {
@@ -41,11 +46,12 @@ import {
 } from '@/components/templates/wizard-draft';
 import { WhatsAppPreview } from '@/components/templates/whatsapp-preview';
 
-const BUTTON_TYPE_LABEL: Record<CarouselDraft['buttonTypes'][number], string> = {
-  QUICK_REPLY: 'Quick reply',
-  URL: 'Visit website',
-  PHONE_NUMBER: 'Call phone number',
-};
+const BUTTON_TYPE_LABEL: Record<CarouselDraft['buttonTypes'][number], string> =
+  {
+    QUICK_REPLY: 'Quick reply',
+    URL: 'Visit website',
+    PHONE_NUMBER: 'Call phone number',
+  };
 
 export function WizardStepCarousel({
   draft,
@@ -61,7 +67,7 @@ export function WizardStepCarousel({
   const patchCard = (index: number, fields: Partial<CardDraft>) =>
     patchCarousel({
       cards: carousel.cards.map((c, i) =>
-        i === index ? { ...c, ...fields } : c,
+        i === index ? { ...c, ...fields } : c
       ),
     });
 
@@ -76,7 +82,7 @@ export function WizardStepCarousel({
         ...c,
         buttonValues: types.map(
           (_, i) =>
-            c.buttonValues[i] ?? { text: '', url: '', example: '', phone: '' },
+            c.buttonValues[i] ?? { text: '', url: '', example: '', phone: '' }
         ),
       })),
     });
@@ -87,20 +93,23 @@ export function WizardStepCarousel({
   // Keep body sample rows in step with the variable count.
   const bodySamples = Array.from(
     { length: bodyVarCount },
-    (_, i) => draft.bodySamples[i] ?? '',
+    (_, i) => draft.bodySamples[i] ?? ''
   );
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="min-w-0 space-y-5">
         {/* ---- Name + language ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Template name and language
           </h2>
           <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_200px]">
             <div className="space-y-1.5">
-              <Label htmlFor="car-name">Name your template</Label>
+              <Label htmlFor="car-name">
+                Name your template
+                <RequiredMark />
+              </Label>
               <Input
                 id="car-name"
                 value={draft.name}
@@ -116,7 +125,10 @@ export function WizardStepCarousel({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="car-lang">Select language</Label>
+              <Label htmlFor="car-lang">
+                Select language
+                <RequiredMark />
+              </Label>
               <Input
                 id="car-lang"
                 value={draft.language}
@@ -127,13 +139,13 @@ export function WizardStepCarousel({
         </section>
 
         {/* ---- Message body (above the cards) ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Message text
           </h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Appears above the cards. A carousel has no header or footer —
-            the cards take their place.
+          <p className="text-muted-foreground mt-1 text-sm">
+            Appears above the cards. A carousel has no header or footer â€” the
+            cards take their place.
           </p>
           <Textarea
             rows={3}
@@ -143,13 +155,13 @@ export function WizardStepCarousel({
             placeholder="Our new range is here, {{1}}. Use code {{2}} for 20% off."
             className="mt-3 resize-none"
           />
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="text-muted-foreground mt-1 text-xs">
             {draft.bodyText.length}/{TEMPLATE_LIMITS.bodyMaxLength}
           </p>
 
           {bodyVarCount > 0 ? (
-            <div className="mt-3 space-y-2 rounded-lg border border-border bg-muted/40 p-3">
-              <p className="text-xs font-medium text-foreground">
+            <div className="border-border bg-muted/40 mt-3 space-y-2 rounded-lg border p-3">
+              <p className="text-foreground text-xs font-medium">
                 Example values
               </p>
               {bodySamples.map((val, i) => (
@@ -170,17 +182,20 @@ export function WizardStepCarousel({
         </section>
 
         {/* ---- Shared card shape ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Card layout
           </h2>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="text-muted-foreground mt-1 text-sm">
             WhatsApp requires every card to be built the same way, so these
             apply to all of them.
           </p>
 
           <div className="mt-4 space-y-1.5">
-            <Label htmlFor="car-format">Card media</Label>
+            <Label htmlFor="car-format">
+              Card media
+              <RequiredMark />
+            </Label>
             <Select
               value={carousel.headerFormat}
               onValueChange={(v) =>
@@ -197,8 +212,8 @@ export function WizardStepCarousel({
                 <SelectItem value="video">Video</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              Every card needs one — it cannot be left off. Images are cropped
+            <p className="text-muted-foreground text-xs">
+              Every card needs one â€” it cannot be left off. Images are cropped
               to a wide ratio on the customer&apos;s device.
             </p>
           </div>
@@ -207,7 +222,7 @@ export function WizardStepCarousel({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Label>
                 Buttons on every card{' '}
-                <span className="text-muted-foreground">· optional</span>
+                <span className="text-muted-foreground">Â· optional</span>
               </Label>
               <Select
                 value=""
@@ -233,13 +248,15 @@ export function WizardStepCarousel({
                 <SelectContent>
                   <SelectItem value="QUICK_REPLY">Quick reply</SelectItem>
                   <SelectItem value="URL">Visit website</SelectItem>
-                  <SelectItem value="PHONE_NUMBER">Call phone number</SelectItem>
+                  <SelectItem value="PHONE_NUMBER">
+                    Call phone number
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
             {carousel.buttonTypes.length === 0 ? (
-              <p className="mt-2 rounded-lg border border-dashed border-border px-3 py-3 text-center text-xs text-muted-foreground">
+              <p className="border-border text-muted-foreground mt-2 rounded-lg border border-dashed px-3 py-3 text-center text-xs">
                 No buttons. Cards will show media and text only. Max{' '}
                 {CAROUSEL_LIMITS.maxButtonsPerCard}.
               </p>
@@ -248,12 +265,12 @@ export function WizardStepCarousel({
                 {carousel.buttonTypes.map((type, i) => (
                   <li
                     key={i}
-                    className="flex items-center gap-2 rounded-lg border border-border px-3 py-2"
+                    className="border-border flex items-center gap-2 rounded-lg border px-3 py-2"
                   >
-                    <span className="text-xs font-semibold text-muted-foreground">
+                    <span className="text-muted-foreground text-xs font-semibold">
                       {i + 1}.
                     </span>
-                    <span className="text-sm text-foreground">
+                    <span className="text-foreground text-sm">
                       {BUTTON_TYPE_LABEL[type]}
                     </span>
                     <Button
@@ -263,7 +280,7 @@ export function WizardStepCarousel({
                       aria-label={`Remove button ${i + 1} from every card`}
                       onClick={() =>
                         setButtonTypes(
-                          carousel.buttonTypes.filter((_, idx) => idx !== i),
+                          carousel.buttonTypes.filter((_, idx) => idx !== i)
                         )
                       }
                     >
@@ -277,16 +294,16 @@ export function WizardStepCarousel({
         </section>
 
         {/* ---- Cards ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
+        <section className="border-border bg-card rounded-xl border p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-base font-semibold text-foreground">
+              <h2 className="text-foreground text-base font-semibold">
                 Cards ({carousel.cards.length})
               </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {CAROUSEL_LIMITS.minCards}–{CAROUSEL_LIMITS.maxCards} cards. The
-                number is locked once approved — sending a different count is
-                rejected.
+              <p className="text-muted-foreground mt-1 text-sm">
+                {CAROUSEL_LIMITS.minCards}â€“{CAROUSEL_LIMITS.maxCards} cards.
+                The number is locked once approved â€” sending a different count
+                is rejected.
               </p>
             </div>
             <Button
@@ -312,16 +329,16 @@ export function WizardStepCarousel({
               const cardVars = extractVariableIndices(card.bodyText).length;
               const samples = Array.from(
                 { length: cardVars },
-                (_, i) => card.bodySamples[i] ?? '',
+                (_, i) => card.bodySamples[i] ?? ''
               );
               return (
                 <div
                   key={index}
-                  className="rounded-lg border border-border p-4"
+                  className="border-border rounded-lg border p-4"
                 >
                   <div className="flex items-center gap-2">
-                    <GripVertical className="size-4 text-muted-foreground/40" />
-                    <h3 className="text-sm font-semibold text-foreground">
+                    <GripVertical className="text-muted-foreground/40 size-4" />
+                    <h3 className="text-foreground text-sm font-semibold">
                       Card {index + 1}
                     </h3>
                     <Button
@@ -350,15 +367,22 @@ export function WizardStepCarousel({
                   <div className="mt-3 space-y-3">
                     <div className="space-y-1.5">
                       <Label htmlFor={`card-${index}-media`}>
-                        Sample {carousel.headerFormat} URL
+                        Card {index + 1} {carousel.headerFormat}
+                        <RequiredMark />
                       </Label>
-                      <Input
+                      {/* Every card is its own asset, so each gets its own
+                          upload. All of them land under the same
+                          per-account review folder. */}
+                      <MediaUploadField
                         id={`card-${index}-media`}
+                        kind={carousel.headerFormat}
+                        purpose="review"
+                        compact
                         value={card.headerMediaUrl}
-                        onChange={(e) =>
-                          patchCard(index, { headerMediaUrl: e.target.value })
+                        onChange={(url) =>
+                          patchCard(index, { headerMediaUrl: url })
                         }
-                        placeholder={`https://example.com/card${index + 1}.${
+                        urlPlaceholder={`https://example.com/card${index + 1}.${
                           carousel.headerFormat === 'video' ? 'mp4' : 'jpg'
                         }`}
                       />
@@ -368,7 +392,7 @@ export function WizardStepCarousel({
                       <Label htmlFor={`card-${index}-body`}>
                         Card text{' '}
                         <span className="text-muted-foreground">
-                          · optional
+                          Â· optional
                         </span>
                       </Label>
                       <Textarea
@@ -379,10 +403,10 @@ export function WizardStepCarousel({
                           patchCard(index, { bodyText: e.target.value })
                         }
                         maxLength={CAROUSEL_LIMITS.cardBodyMaxLength}
-                        placeholder="Aloe Vera — easy to care for"
+                        placeholder="Aloe Vera â€” easy to care for"
                         className="resize-none"
                       />
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-muted-foreground text-xs">
                         {card.bodyText.length}/
                         {CAROUSEL_LIMITS.cardBodyMaxLength}. If any card has
                         text, every card needs it.
@@ -390,7 +414,7 @@ export function WizardStepCarousel({
                     </div>
 
                     {cardVars > 0 ? (
-                      <div className="space-y-2 rounded-lg bg-muted/40 p-3">
+                      <div className="bg-muted/40 space-y-2 rounded-lg p-3">
                         {samples.map((val, i) => (
                           <Input
                             key={i}
@@ -424,15 +448,15 @@ export function WizardStepCarousel({
                                   url: '',
                                   example: '',
                                   phone: '',
-                                }),
+                                })
                           ),
                         });
                       return (
                         <div
                           key={bi}
-                          className="space-y-2 rounded-lg border border-border p-3"
+                          className="border-border space-y-2 rounded-lg border p-3"
                         >
-                          <p className="text-xs font-semibold text-muted-foreground">
+                          <p className="text-muted-foreground text-xs font-semibold">
                             {BUTTON_TYPE_LABEL[type]}
                           </p>
                           <Input
@@ -446,7 +470,9 @@ export function WizardStepCarousel({
                             <>
                               <Input
                                 value={v.url}
-                                onChange={(e) => update({ url: e.target.value })}
+                                onChange={(e) =>
+                                  update({ url: e.target.value })
+                                }
                                 placeholder="https://example.com/item/{{1}}"
                                 aria-label={`Card ${index + 1} button ${bi + 1} URL`}
                               />
@@ -465,7 +491,9 @@ export function WizardStepCarousel({
                           {type === 'PHONE_NUMBER' ? (
                             <Input
                               value={v.phone}
-                              onChange={(e) => update({ phone: e.target.value })}
+                              onChange={(e) =>
+                                update({ phone: e.target.value })
+                              }
                               placeholder="+911234567890"
                               aria-label={`Card ${index + 1} button ${bi + 1} phone`}
                             />
@@ -483,11 +511,11 @@ export function WizardStepCarousel({
 
       {/* ---- Preview ---- */}
       <aside className="lg:sticky lg:top-4 lg:self-start">
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground">
+        <div className="border-border bg-card rounded-xl border p-5">
+          <h3 className="text-foreground text-sm font-semibold">
             Template preview
           </h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <p className="text-muted-foreground mt-0.5 text-xs">
             Swipe the cards to check each one.
           </p>
           <WhatsAppPreview
@@ -496,19 +524,19 @@ export function WizardStepCarousel({
             className="mt-3"
           />
           {/* Cards whose text and links are fixed can be sent as soon as
-              they are approved — the card media rides along from the
+              they are approved â€” the card media rides along from the
               sample URLs above. A variable in card text or a card link
               cannot be filled in at send time yet, so say so while the
               operator is still deciding whether to add one. */}
           {needsSendInput ? (
             <p className="mt-3 text-xs leading-relaxed text-amber-600 dark:text-amber-500">
               Because a card uses a variable, this carousel will not be
-              selectable for sending yet — there is no form to fill per-card
+              selectable for sending yet â€” there is no form to fill per-card
               values in. Keep card text and links fixed and it can be sent as
               soon as Meta approves it.
             </p>
           ) : (
-            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+            <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
               Card images are reused from the sample URLs above when you send,
               so keep them online.
             </p>

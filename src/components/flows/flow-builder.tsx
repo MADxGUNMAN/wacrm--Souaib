@@ -59,6 +59,7 @@ import {
   type NodeType,
 } from './shared';
 import { NodeConfigForm } from './forms/node-config-form';
+import { NodeHelpDisclosure } from './node-doc-panel';
 import { NodeKeySelect } from './forms/fields';
 import { IssueLine } from './validation-panel';
 import { useFlowEditor, type BuilderState } from './flow-editor-state';
@@ -530,6 +531,7 @@ function NodeConfigWithAdvanced({
     node.node_type === 'send_buttons' || node.node_type === 'send_list';
   return (
     <div className="flex flex-col gap-3">
+      <NodeHelpDisclosure type={node.node_type} />
       <NodeConfigForm
         node={node}
         allNodes={allNodes}

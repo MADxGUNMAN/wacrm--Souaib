@@ -15,10 +15,20 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
+import {
+  filterOptedOutPhones,
+  isMarketingCategory,
+  recordOptOutFromSendError,
+} from '@/lib/whatsapp/marketing-opt-out'
 
 interface BroadcastResult {
   phone: string
-  status: 'sent' | 'failed'
+  /**
+   * 'skipped' means suppressed before sending because the recipient opted
+   * out of marketing. Deliberately distinct from 'failed': a respected
+   * opt-out is not a delivery failure and must not be counted as one.
+   */
+  status: 'sent' | 'failed' | 'skipped'
   whatsapp_message_id?: string
   error?: string
 }
@@ -175,9 +185,30 @@ export async function POST(request: Request) {
     }
     const templateRow = rawTemplateRow ?? null
 
+    // ── Marketing opt-out suppression ────────────────────────────
+    // This endpoint takes a PHONE ARRAY from the caller and never reads
+    // `contacts`, so a filter applied only in the broadcast wizard would
+    // be cosmetic — any authenticated user could POST straight past it.
+    // The gate has to live here.
+    //
+    // Only marketing is suppressed; utility and authentication templates
+    // still go out. isMarketingCategory fails closed when templateRow is
+    // null (exists at Meta, never synced locally), where the category is
+    // unknowable.
+    const suppressedPhones = isMarketingCategory(templateRow?.category)
+      ? (
+          await filterOptedOutPhones(
+            supabase,
+            accountId,
+            recipients.map((r) => r.phone),
+          )
+        ).suppressed
+      : new Set<string>()
+
     const results: BroadcastResult[] = []
     let sentCount = 0
     let failedCount = 0
+    let skippedCount = 0
 
     for (const recipient of recipients) {
       const sanitized = sanitizePhoneForMeta(recipient.phone)
@@ -192,11 +223,27 @@ export async function POST(request: Request) {
         continue
       }
 
+      // `sanitizePhoneForMeta` and `normalizePhone` both reduce to
+      // digits-only, so `sanitized` is already the suppression key.
+      if (suppressedPhones.has(sanitized)) {
+        results.push({
+          phone: recipient.phone,
+          status: 'skipped',
+          error: 'Recipient opted out of marketing messages',
+        })
+        skippedCount++
+        continue
+      }
+
       // Retry with phone variants on "not in allowed list" so numbers
       // that differ only in a trunk-prefix 0 still reach recipients.
       const variants = phoneVariants(sanitized)
       let sentMessageId: string | null = null
       let lastError: string | null = null
+      // The error OBJECT as well as its message: MetaApiError carries the
+      // numeric code, which is what identifies a 131050 (customer opted
+      // out at Meta) among ordinary failures.
+      let lastErrorObject: unknown = null
 
       for (const variant of variants) {
         try {
@@ -216,6 +263,7 @@ export async function POST(request: Request) {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : 'Unknown error'
+          lastErrorObject = error
           if (!isRecipientNotAllowedError(errorMessage)) {
             lastError = errorMessage
             break
@@ -237,6 +285,14 @@ export async function POST(request: Request) {
           `Failed to send broadcast to ${recipient.phone}:`,
           lastError
         )
+        // Meta error 131050 means the customer opted out at the platform
+        // level. Recording it locally is what stops the next broadcast
+        // rediscovering the same fact one wasted send at a time.
+        await recordOptOutFromSendError(supabase, {
+          accountId,
+          phone: sanitized,
+          error: lastErrorObject ?? lastError,
+        })
         results.push({
           phone: recipient.phone,
           status: 'failed',
@@ -251,6 +307,7 @@ export async function POST(request: Request) {
       total: recipients.length,
       sent: sentCount,
       failed: failedCount,
+      skipped: skippedCount,
       results,
     })
   } catch (error) {

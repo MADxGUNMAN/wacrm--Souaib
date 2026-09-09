@@ -7,24 +7,24 @@
 // with granular section permissions.
 // ============================================================
 
-import { NextResponse } from "next/server";
+import { NextResponse } from 'next/server';
 
-import { requireRole, toErrorResponse } from "@/lib/auth/account";
-import { supabaseAdmin } from "@/lib/auth/admin-client";
+import { requireRole, toErrorResponse } from '@/lib/auth/account';
+import { supabaseAdmin } from '@/lib/auth/admin-client';
 import {
   checkRateLimit,
   rateLimitResponse,
   RATE_LIMITS,
-} from "@/lib/rate-limit";
-import type { AccountMember, AccountRole, MemberPermissions } from "@/types";
+} from '@/lib/rate-limit';
+import type { AccountMember, AccountRole, MemberPermissions } from '@/types';
 
 export async function POST(request: Request) {
   try {
-    const ctx = await requireRole("owner");
+    const ctx = await requireRole('owner');
 
     const limit = checkRateLimit(
       `admin:memberCreate:${ctx.userId}`,
-      RATE_LIMITS.adminAction,
+      RATE_LIMITS.adminAction
     );
     if (!limit.success) return rateLimitResponse(limit);
 
@@ -37,28 +37,27 @@ export async function POST(request: Request) {
 
     const { fullName, email, password, permissions } = body ?? {};
 
-    if (!fullName || typeof fullName !== "string" || !fullName.trim()) {
+    if (!fullName || typeof fullName !== 'string' || !fullName.trim()) {
       return NextResponse.json(
-        { error: "Full name is required" },
-        { status: 400 },
+        { error: 'Full name is required' },
+        { status: 400 }
       );
     }
-    if (!email || typeof email !== "string" || !email.includes("@")) {
+    if (!email || typeof email !== 'string' || !email.includes('@')) {
       return NextResponse.json(
-        { error: "Valid email is required" },
-        { status: 400 },
+        { error: 'Valid email is required' },
+        { status: 400 }
       );
     }
-    if (!password || typeof password !== "string" || password.length < 6) {
+    if (!password || typeof password !== 'string' || password.length < 6) {
       return NextResponse.json(
-        { error: "Password must be at least 6 characters" },
-        { status: 400 },
+        { error: 'Password must be at least 6 characters' },
+        { status: 400 }
       );
     }
-
 
     let validPermissions: MemberPermissions | null = null;
-    if (permissions && typeof permissions === "object") {
+    if (permissions && typeof permissions === 'object') {
       const p = permissions as Record<string, unknown>;
       validPermissions = {
         inbox: Boolean(p.inbox ?? true),
@@ -75,32 +74,41 @@ export async function POST(request: Request) {
         settings_deals: Boolean(p.settings_deals ?? true),
         settings_members: Boolean(p.settings_members ?? false),
         settings_api: Boolean(p.settings_api ?? false),
+        // Usage alerts: owner-only unless explicitly granted. This
+        // whitelist is field-by-field, so a key missing here is silently
+        // dropped on member creation.
+        settings_alerts: Boolean(p.settings_alerts ?? false),
+        settings_opt_out: Boolean(p.settings_opt_out ?? true),
       };
     }
 
     const adminClient = supabaseAdmin();
 
     // 1. Create Supabase Auth user with confirmed email
-    const { data: newUser, error: createError } = await adminClient.auth.admin.createUser({
-      email: email.trim(),
-      password: password,
-      email_confirm: true,
-      user_metadata: {
-        full_name: fullName.trim(),
-      },
-    });
+    const { data: newUser, error: createError } =
+      await adminClient.auth.admin.createUser({
+        email: email.trim(),
+        password: password,
+        email_confirm: true,
+        user_metadata: {
+          full_name: fullName.trim(),
+        },
+      });
 
     if (createError) {
-      console.error("[POST /api/account/members/create] createUser error:", createError);
+      console.error(
+        '[POST /api/account/members/create] createUser error:',
+        createError
+      );
       return NextResponse.json(
-        { error: createError.message || "Failed to create user account" },
-        { status: 400 },
+        { error: createError.message || 'Failed to create user account' },
+        { status: 400 }
       );
     }
     if (!newUser.user) {
       return NextResponse.json(
-        { error: "Failed to create user account" },
-        { status: 500 },
+        { error: 'Failed to create user account' },
+        { status: 500 }
       );
     }
 
@@ -108,35 +116,43 @@ export async function POST(request: Request) {
     // Notice that service_role bypasses the enforce_profile_privilege_columns
     // trigger in migration 034.
     const { data: updatedProfile, error: profileError } = await adminClient
-      .from("profiles")
+      .from('profiles')
       .update({
         account_id: ctx.accountId,
         account_role: 'member' as const,
         permissions: validPermissions,
         full_name: fullName.trim(),
       })
-      .eq("user_id", newUser.user.id)
-      .select("user_id, full_name, email, avatar_url, account_role, permissions, created_at")
+      .eq('user_id', newUser.user.id)
+      .select(
+        'user_id, full_name, email, avatar_url, account_role, permissions, created_at'
+      )
       .single();
 
     if (profileError || !updatedProfile) {
-      console.error("[POST /api/account/members/create] update profile error:", profileError);
+      console.error(
+        '[POST /api/account/members/create] update profile error:',
+        profileError
+      );
       // Clean up the created auth user if workspace assignment fails
       await adminClient.auth.admin.deleteUser(newUser.user.id).catch(() => {});
       return NextResponse.json(
-        { error: "Failed to assign workspace membership" },
-        { status: 500 },
+        { error: 'Failed to assign workspace membership' },
+        { status: 500 }
       );
     }
 
     // 3. Clean up the temporary orphan personal account generated by signup trigger
     try {
       await adminClient
-        .from("accounts")
+        .from('accounts')
         .delete()
-        .eq("owner_user_id", newUser.user.id);
+        .eq('owner_user_id', newUser.user.id);
     } catch (err) {
-      console.error("[POST /api/account/members/create] orphan account cleanup error:", err);
+      console.error(
+        '[POST /api/account/members/create] orphan account cleanup error:',
+        err
+      );
     }
 
     const member: AccountMember = {

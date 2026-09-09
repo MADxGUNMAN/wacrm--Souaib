@@ -1,6 +1,6 @@
-"use client";
+'use client';
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from 'react';
 import {
   MessageSquare,
   Users,
@@ -15,20 +15,20 @@ import {
   TrendingUp,
   Bot,
   UserPlus,
-} from "lucide-react";
+} from 'lucide-react';
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
   CardDescription,
-} from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+} from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import type {
   HealthDashboardData,
   ActivityLogEntry,
   TableStat,
-} from "@/types/super-admin";
+} from '@/types/super-admin';
 import {
   AreaChart,
   Area,
@@ -39,7 +39,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-} from "recharts";
+} from 'recharts';
 
 // ────────────────────────────────────────────────────────────
 // Helpers
@@ -66,29 +66,29 @@ function formatNumber(n: number): string {
   return String(n);
 }
 
-function activityIcon(type: ActivityLogEntry["type"]) {
+function activityIcon(type: ActivityLogEntry['type']) {
   switch (type) {
-    case "account_created":
+    case 'account_created':
       return <UserPlus className="h-4 w-4 text-emerald-500" />;
-    case "broadcast_sent":
+    case 'broadcast_sent':
       return <Megaphone className="h-4 w-4 text-blue-500" />;
-    case "automation_triggered":
+    case 'automation_triggered':
       return <Bot className="h-4 w-4 text-purple-500" />;
     default:
       return <MessageSquare className="h-4 w-4 text-slate-400" />;
   }
 }
 
-function activityBadgeColor(type: ActivityLogEntry["type"]) {
+function activityBadgeColor(type: ActivityLogEntry['type']) {
   switch (type) {
-    case "account_created":
-      return "bg-emerald-50 text-emerald-700 border-emerald-200";
-    case "broadcast_sent":
-      return "bg-blue-50 text-blue-700 border-blue-200";
-    case "automation_triggered":
-      return "bg-purple-50 text-purple-700 border-purple-200";
+    case 'account_created':
+      return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    case 'broadcast_sent':
+      return 'bg-blue-50 text-blue-700 border-blue-200';
+    case 'automation_triggered':
+      return 'bg-purple-50 text-purple-700 border-purple-200';
     default:
-      return "bg-slate-50 text-slate-700 border-slate-200";
+      return 'bg-slate-50 text-slate-700 border-slate-200';
   }
 }
 
@@ -100,10 +100,15 @@ function ChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-lg">
-      <p className="text-xs font-medium text-slate-500 mb-1">
-        {new Date(label).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+      <p className="mb-1 text-xs font-medium text-slate-500">
+        {new Date(label).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+        })}
       </p>
-      <p className="text-sm font-bold text-slate-900">{payload[0].value.toLocaleString()}</p>
+      <p className="text-sm font-bold text-slate-900">
+        {payload[0].value.toLocaleString()}
+      </p>
     </div>
   );
 }
@@ -122,8 +127,8 @@ export default function HealthPage() {
   const fetchData = useCallback(async (showRefreshSpinner = false) => {
     if (showRefreshSpinner) setIsRefreshing(true);
     try {
-      const res = await fetch("/api/super-admin/health");
-      if (!res.ok) throw new Error("Failed to fetch health data");
+      const res = await fetch('/api/super-admin/health');
+      if (!res.ok) throw new Error('Failed to fetch health data');
       const json = await res.json();
       setData(json.data);
       setLastRefresh(new Date());
@@ -158,81 +163,74 @@ export default function HealthPage() {
   // ──────────────────────────────────────────────────────────
   const kpis = [
     {
-      title: "Total Messages",
+      title: 'Total Messages',
       value: m?.total_messages ?? 0,
       sub: `${formatNumber(m?.messages_today ?? 0)} today`,
       icon: MessageSquare,
-      iconColor: "text-blue-500",
-      iconBg: "bg-blue-50",
+      iconColor: 'text-blue-500',
+      iconBg: 'bg-blue-50',
     },
     {
-      title: "Total Contacts",
+      title: 'Total Contacts',
       value: m?.total_contacts ?? 0,
       sub: `${formatNumber(m?.total_conversations ?? 0)} conversations`,
       icon: Users,
-      iconColor: "text-emerald-500",
-      iconBg: "bg-emerald-50",
+      iconColor: 'text-emerald-500',
+      iconBg: 'bg-emerald-50',
     },
     {
-      title: "Active Accounts",
+      title: 'Active Accounts',
       value: m?.active_accounts ?? 0,
       sub: `${m?.banned_accounts ?? 0} banned · ${m?.connected_whatsapp ?? 0} WhatsApp connected`,
       icon: Building2,
-      iconColor: "text-violet-500",
-      iconBg: "bg-violet-50",
+      iconColor: 'text-violet-500',
+      iconBg: 'bg-violet-50',
     },
     {
-      title: "AI Tokens Used",
+      title: 'AI Tokens Used',
       value: m?.total_ai_tokens ?? 0,
       sub: `${formatNumber(m?.ai_requests_today ?? 0)} requests today`,
       icon: Brain,
-      iconColor: "text-amber-500",
-      iconBg: "bg-amber-50",
+      iconColor: 'text-amber-500',
+      iconBg: 'bg-amber-50',
     },
     {
-      title: "Automations Run",
+      title: 'Automations Run',
       value: m?.total_automation_runs ?? 0,
       sub: `${formatNumber(m?.automation_runs_today ?? 0)} today`,
       icon: Zap,
-      iconColor: "text-pink-500",
-      iconBg: "bg-pink-50",
+      iconColor: 'text-pink-500',
+      iconBg: 'bg-pink-50',
     },
   ];
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-            System Health & Logs
-          </h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Real-time platform performance and activity monitoring
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchData(true)}
-            disabled={isRefreshing}
-            className="gap-2"
-          >
-            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </div>
+      {/* Action Bar */}
+      <div className="flex items-center justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => fetchData(true)}
+          disabled={isRefreshing}
+          className="gap-2 bg-white"
+        >
+          <RefreshCw
+            className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`}
+          />
+          Refresh
+        </Button>
       </div>
 
-
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {kpis.map((kpi) => {
           const Icon = kpi.icon;
           return (
-            <Card key={kpi.title} className="bg-white border-slate-200 shadow-sm">
+            <Card
+              key={kpi.title}
+              className="border-slate-200 bg-white shadow-sm"
+            >
               <CardContent className="pt-0 pb-0">
                 {isLoading ? (
                   <div className="space-y-3">
@@ -242,18 +240,18 @@ export default function HealthPage() {
                   </div>
                 ) : (
                   <>
-                    <div className="flex items-center justify-between mb-3">
-                      <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-xs font-medium tracking-wider text-slate-500 uppercase">
                         {kpi.title}
                       </p>
-                      <div className={`p-2 rounded-lg ${kpi.iconBg}`}>
+                      <div className={`rounded-lg p-2 ${kpi.iconBg}`}>
                         <Icon className={`h-4 w-4 ${kpi.iconColor}`} />
                       </div>
                     </div>
-                    <p className="text-2xl font-bold text-slate-900 tracking-tight">
+                    <p className="text-2xl font-bold tracking-tight text-slate-900">
                       {formatNumber(kpi.value)}
                     </p>
-                    <p className="text-xs text-slate-400 mt-1">{kpi.sub}</p>
+                    <p className="mt-1 text-xs text-slate-400">{kpi.sub}</p>
                   </>
                 )}
               </CardContent>
@@ -263,11 +261,11 @@ export default function HealthPage() {
       </div>
 
       {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Message Volume Chart */}
-        <Card className="bg-white border-slate-200 shadow-sm">
+        <Card className="border-slate-200 bg-white shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base text-slate-900 flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2 text-base text-slate-900">
               <TrendingUp className="h-4 w-4 text-emerald-500" />
               Message Volume
             </CardTitle>
@@ -291,15 +289,18 @@ export default function HealthPage() {
                   <XAxis
                     dataKey="date"
                     tickFormatter={(v) =>
-                      new Date(v).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                      new Date(v).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                      })
                     }
-                    tick={{ fontSize: 11, fill: "#94a3b8" }}
+                    tick={{ fontSize: 11, fill: '#94a3b8' }}
                     tickLine={false}
-                    axisLine={{ stroke: "#e2e8f0" }}
+                    axisLine={{ stroke: '#e2e8f0' }}
                     interval="preserveStartEnd"
                   />
                   <YAxis
-                    tick={{ fontSize: 11, fill: "#94a3b8" }}
+                    tick={{ fontSize: 11, fill: '#94a3b8' }}
                     tickLine={false}
                     axisLine={false}
                     width={40}
@@ -312,7 +313,12 @@ export default function HealthPage() {
                     strokeWidth={2.5}
                     fill="url(#msgGrad)"
                     dot={false}
-                    activeDot={{ r: 5, fill: "#25D366", stroke: "#fff", strokeWidth: 2 }}
+                    activeDot={{
+                      r: 5,
+                      fill: '#25D366',
+                      stroke: '#fff',
+                      strokeWidth: 2,
+                    }}
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -325,11 +331,11 @@ export default function HealthPage() {
       </div>
 
       {/* Bottom Row: Activity Feed + Table Stats */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Activity Feed */}
-        <Card className="bg-white border-slate-200 shadow-sm">
+        <Card className="border-slate-200 bg-white shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base text-slate-900 flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2 text-base text-slate-900">
               <Clock className="h-4 w-4 text-blue-500" />
               Recent Activity
             </CardTitle>
@@ -351,36 +357,36 @@ export default function HealthPage() {
                 ))}
               </div>
             ) : (
-              <div className="max-h-[400px] overflow-y-auto pr-2 -mr-2 space-y-1">
+              <div className="-mr-2 max-h-[400px] space-y-1 overflow-y-auto pr-2">
                 {(data?.activity_feed ?? []).length === 0 ? (
-                  <p className="text-sm text-slate-400 text-center py-8">
+                  <p className="py-8 text-center text-sm text-slate-400">
                     No recent activity to display.
                   </p>
                 ) : (
                   (data?.activity_feed ?? []).map((entry, idx) => (
                     <div
                       key={idx}
-                      className="flex items-start gap-3 px-3 py-2.5 rounded-lg hover:bg-slate-50 transition-colors"
+                      className="flex items-start gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-slate-50"
                     >
-                      <div className="mt-0.5 p-1.5 rounded-full bg-slate-100 flex-shrink-0">
+                      <div className="mt-0.5 flex-shrink-0 rounded-full bg-slate-100 p-1.5">
                         {activityIcon(entry.type)}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-slate-700 leading-snug truncate">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm leading-snug text-slate-700">
                           {entry.description}
                         </p>
-                        <div className="flex items-center gap-2 mt-1">
+                        <div className="mt-1 flex items-center gap-2">
                           <span
-                            className={`inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded border ${activityBadgeColor(entry.type)}`}
+                            className={`inline-flex rounded border px-1.5 py-0.5 text-[10px] font-medium ${activityBadgeColor(entry.type)}`}
                           >
-                            {entry.type.replace(/_/g, " ")}
+                            {entry.type.replace(/_/g, ' ')}
                           </span>
                           <span className="text-[10px] text-slate-400">
                             {entry.account_name}
                           </span>
                         </div>
                       </div>
-                      <span className="text-[10px] text-slate-400 flex-shrink-0 mt-1">
+                      <span className="mt-1 flex-shrink-0 text-[10px] text-slate-400">
                         {relativeTime(entry.timestamp)}
                       </span>
                     </div>
@@ -392,9 +398,9 @@ export default function HealthPage() {
         </Card>
 
         {/* Database Table Stats */}
-        <Card className="bg-white border-slate-200 shadow-sm">
+        <Card className="border-slate-200 bg-white shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base text-slate-900 flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2 text-base text-slate-900">
               <Database className="h-4 w-4 text-violet-500" />
               Database Tables
             </CardTitle>
@@ -406,43 +412,48 @@ export default function HealthPage() {
             {isLoading ? (
               <div className="h-[400px] animate-pulse rounded bg-slate-100" />
             ) : (
-              <div className="max-h-[400px] overflow-y-auto pr-2 -mr-2">
+              <div className="-mr-2 max-h-[400px] overflow-y-auto pr-2">
                 <table className="w-full">
-                  <thead className="sticky top-0 bg-white z-10">
+                  <thead className="sticky top-0 z-10 bg-white">
                     <tr className="border-b border-slate-100">
-                      <th className="text-left text-xs font-medium text-slate-500 uppercase tracking-wider py-2 pr-4">
+                      <th className="py-2 pr-4 text-left text-xs font-medium tracking-wider text-slate-500 uppercase">
                         Table
                       </th>
-                      <th className="text-right text-xs font-medium text-slate-500 uppercase tracking-wider py-2 pr-4">
+                      <th className="py-2 pr-4 text-right text-xs font-medium tracking-wider text-slate-500 uppercase">
                         Rows
                       </th>
-                      <th className="text-right text-xs font-medium text-slate-500 uppercase tracking-wider py-2">
+                      <th className="py-2 text-right text-xs font-medium tracking-wider text-slate-500 uppercase">
                         Status
                       </th>
                     </tr>
                   </thead>
                   <tbody>
                     {(data?.table_stats ?? [])
-                      .sort((a: TableStat, b: TableStat) => b.row_count - a.row_count)
+                      .sort(
+                        (a: TableStat, b: TableStat) =>
+                          b.row_count - a.row_count
+                      )
                       .map((t: TableStat) => (
                         <tr
                           key={t.table_name}
-                          className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors"
+                          className="border-b border-slate-50 transition-colors hover:bg-slate-50/50"
                         >
                           <td className="py-2 pr-4">
-                            <code className="text-xs font-mono text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">
+                            <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">
                               {t.table_name}
                             </code>
                           </td>
-                          <td className="text-right py-2 pr-4">
+                          <td className="py-2 pr-4 text-right">
                             <span className="text-sm font-semibold text-slate-900 tabular-nums">
                               {t.row_count.toLocaleString()}
                             </span>
                           </td>
-                          <td className="text-right py-2">
+                          <td className="py-2 text-right">
                             <div className="flex items-center justify-end gap-1.5">
                               <div className="h-2 w-2 rounded-full bg-emerald-400" />
-                              <span className="text-[10px] text-emerald-600 font-medium">OK</span>
+                              <span className="text-[10px] font-medium text-emerald-600">
+                                OK
+                              </span>
                             </div>
                           </td>
                         </tr>
@@ -469,7 +480,7 @@ function SignupsChart() {
   useEffect(() => {
     async function fetchGrowth() {
       try {
-        const res = await fetch("/api/super-admin/growth?days=30");
+        const res = await fetch('/api/super-admin/growth?days=30');
         if (!res.ok) return;
         const json = await res.json();
         setGrowthData(json.growth ?? []);
@@ -483,9 +494,9 @@ function SignupsChart() {
   }, []);
 
   return (
-    <Card className="bg-white border-slate-200 shadow-sm">
+    <Card className="border-slate-200 bg-white shadow-sm">
       <CardHeader>
-        <CardTitle className="text-base text-slate-900 flex items-center gap-2">
+        <CardTitle className="flex items-center gap-2 text-base text-slate-900">
           <UserPlus className="h-4 w-4 text-blue-500" />
           Account Signups
         </CardTitle>
@@ -503,15 +514,18 @@ function SignupsChart() {
               <XAxis
                 dataKey="date"
                 tickFormatter={(v) =>
-                  new Date(v).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                  new Date(v).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                  })
                 }
-                tick={{ fontSize: 11, fill: "#94a3b8" }}
+                tick={{ fontSize: 11, fill: '#94a3b8' }}
                 tickLine={false}
-                axisLine={{ stroke: "#e2e8f0" }}
+                axisLine={{ stroke: '#e2e8f0' }}
                 interval="preserveStartEnd"
               />
               <YAxis
-                tick={{ fontSize: 11, fill: "#94a3b8" }}
+                tick={{ fontSize: 11, fill: '#94a3b8' }}
                 tickLine={false}
                 axisLine={false}
                 width={40}

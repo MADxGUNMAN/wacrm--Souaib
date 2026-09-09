@@ -4,12 +4,15 @@
 // Trial banner — the strip above dashboard content that counts down the
 // free trial and offers an upgrade.
 //
-// Renders nothing unless the account is genuinely in trial. Three states
-// deliberately produce no banner:
+// Renders nothing unless the account is genuinely in trial with nothing
+// lined up behind it. Five states deliberately produce no banner:
 //   - initial load (avoids a flash of "null days left")
 //   - billing disabled platform-wide
 //   - already blocked (Proxy is redirecting to /upgrade-plan, so a
 //     banner would be noise on a page that's about to unmount)
+//   - active paid user
+//   - ANY queued second window — the customer is already covered, so
+//     there is no action to prompt. See the guard below.
 //
 // The wording comes from `subscription_settings.trial_banner_template`
 // and is resolved server-side, so an operator can reword or translate it
@@ -31,15 +34,16 @@ export function TrialBanner() {
   const isOwner = data?.isOwner ?? false;
   const daysLeft = data?.state.daysLeft ?? null;
   const pendingPayment = data?.pendingPayment ?? null;
+  const pendingWindow = data?.state.pendingWindow ?? null;
 
   // A submitted payment awaiting verification outranks the countdown:
   // the useful message is "we're checking", not "you have 3 days left".
   if (pendingPayment && data) {
     return (
-      <div className="mb-4 flex flex-col gap-3 rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mx-4 mt-3 flex shrink-0 flex-col gap-3 rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-4 py-2.5 sm:mx-6 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-2.5 sm:items-center">
           <Clock className="mt-0.5 size-4 shrink-0 text-amber-500 sm:mt-0" />
-          <p className="text-sm text-foreground">
+          <p className="text-foreground text-sm">
             {data.copy.pendingReviewMessage ??
               'Your payment is under review. We will activate your subscription once it is verified.'}
           </p>
@@ -51,6 +55,25 @@ export function TrialBanner() {
     );
   }
 
+  // ---- A second window is already queued: NO BANNER ----
+  //
+  // This bar exists to create urgency and drive an upgrade. Once a
+  // second window is queued there is no urgency left to create: the
+  // customer has already paid (trial -> paid queued) or has already been
+  // given bonus time (paid -> trial queued), and access continues
+  // without them lifting a finger.
+  //
+  // It used to render "7 days trial · Subscription starts Aug 29 / ✓
+  // Plan activated" here, which is a status report, not a call to
+  // action — and it sat on top of every single page in the app telling
+  // someone who had just paid that they were still on a trial. That is
+  // exactly the moment a customer wonders whether their money went
+  // through. The full picture (both windows, dates, what happens when)
+  // belongs on the Billing & plan screen and on /upgrade-plan, where
+  // someone has gone LOOKING for it — and that is where it now lives.
+  if (pendingWindow) return null;
+
+  // ---- Standard trial banner (no queued window) ----
   if (!showTrialBanner || !data || daysLeft === null) return null;
 
   // Escalate the styling as the deadline closes in. Three days is the
@@ -61,19 +84,19 @@ export function TrialBanner() {
   return (
     <div
       className={cn(
-        'mb-4 flex flex-col gap-3 rounded-xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between',
+        'mx-4 mt-3 flex shrink-0 flex-col gap-3 rounded-xl border px-4 py-2.5 sm:mx-6 sm:flex-row sm:items-center sm:justify-between',
         isUrgent
           ? 'border-destructive/25 bg-destructive/[0.06]'
-          : 'border-border bg-muted/40',
+          : 'border-border bg-muted/40'
       )}
     >
       <div className="flex items-start gap-2.5 sm:items-center">
         {isUrgent ? (
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive sm:mt-0" />
+          <AlertTriangle className="text-destructive mt-0.5 size-4 shrink-0 sm:mt-0" />
         ) : (
-          <Clock className="mt-0.5 size-4 shrink-0 text-primary sm:mt-0" />
+          <Clock className="text-primary mt-0.5 size-4 shrink-0 sm:mt-0" />
         )}
-        <p className="text-sm font-medium text-foreground">
+        <p className="text-foreground text-sm font-medium">
           {data.copy.trialBanner}
         </p>
       </div>
@@ -82,16 +105,16 @@ export function TrialBanner() {
         <Link
           href="/upgrade-plan"
           className={cn(
-            'inline-flex shrink-0 items-center justify-center rounded-lg px-4 py-2 text-sm font-semibold transition-colors',
+            'inline-flex shrink-0 items-center justify-center rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors',
             isUrgent
-              ? 'bg-destructive text-white hover:bg-destructive/90'
-              : 'bg-primary text-primary-foreground hover:bg-primary/90',
+              ? 'bg-destructive hover:bg-destructive/90 text-white'
+              : 'bg-primary text-primary-foreground hover:bg-primary/90'
           )}
         >
           {data.copy.trialBannerCta}
         </Link>
       ) : (
-        <span className="shrink-0 text-xs text-muted-foreground">
+        <span className="text-muted-foreground shrink-0 text-xs">
           Ask your workspace owner to upgrade
         </span>
       )}

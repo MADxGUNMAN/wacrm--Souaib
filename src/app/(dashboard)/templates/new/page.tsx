@@ -2,12 +2,14 @@ import type { Metadata } from 'next';
 
 import { TemplateWizard } from '@/components/templates/template-wizard';
 import { supabaseAdmin } from '@/lib/auth/admin-client';
+import { createClient } from '@/lib/supabase/server';
 import {
   resolveStarterTemplateType,
   toAppCategory,
   type StarterTemplate,
 } from '@/lib/templates/starter-library';
 import {
+  draftFromRow,
   starterTemplateToDraft,
   type StarterWizardSeed,
 } from '@/components/templates/wizard-draft';
@@ -15,6 +17,10 @@ import {
 export const metadata: Metadata = {
   title: 'Create template',
 };
+
+/** Guard `?copyFrom=` before it reaches PostgREST as a uuid filter. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Create a template, optionally pre-filled from the starter library.
@@ -55,11 +61,24 @@ export default async function NewTemplatePage({
   const raw = params.library;
   const library = Array.isArray(raw) ? raw[0] : raw;
 
+  // `?copyFrom=<templateId>` — start a NEW template pre-filled from an
+  // existing one.
+  //
+  // This is the only route out of Meta's "you can only delete or add
+  // templates" refusal: an approved template's content is locked, so the
+  // fix is always a new template with the same content under a different
+  // name. Retyping a long body by hand (and re-adding every button and
+  // example value) is where that goes wrong, so it is copied instead.
+  //
+  // The NAME is deliberately NOT copied — see the wizard seed below.
+  const rawCopy = params.copyFrom;
+  const copyFrom = Array.isArray(rawCopy) ? rawCopy[0] : rawCopy;
+
   // TEMPORARY DIAGNOSTIC — remove once the prefill is confirmed working.
   // Prints on every render so a blank wizard can be told apart from a
   // missing query string without guessing.
   console.log(
-    `[templates/new] library param = ${library === undefined ? 'UNDEFINED (no ?library= reached the server)' : `"${library}"`}`,
+    `[templates/new] library param = ${library === undefined ? 'UNDEFINED (no ?library= reached the server)' : `"${library}"`}`
   );
 
   let initial: StarterWizardSeed | undefined = undefined;
@@ -82,13 +101,13 @@ export default async function NewTemplatePage({
       if (error) {
         console.error(
           `[templates/new] could not load starter template "${library}":`,
-          error.message,
+          error.message
         );
       }
 
       // TEMPORARY DIAGNOSTIC — remove with the one above.
       console.log(
-        `[templates/new] row for "${library}" = ${data ? `FOUND (${data.meta_category}/${data.template_type})` : 'NOT FOUND'}`,
+        `[templates/new] row for "${library}" = ${data ? `FOUND (${data.meta_category}/${data.template_type})` : 'NOT FOUND'}`
       );
 
       if (data) {
@@ -101,14 +120,60 @@ export default async function NewTemplatePage({
           // value would drop step 2 into the wrong editor.
           templateType: resolveStarterTemplateType(
             category,
-            data.template_type,
+            data.template_type
           ),
         };
       }
     } catch (err) {
       console.error(
         `[templates/new] starter library unavailable for "${library}":`,
-        err instanceof Error ? err.message : err,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  // ---- Copy an existing template ----
+  // Runs only when no library slug was given, so the two prefills cannot
+  // fight over the same seed.
+  if (!initial && copyFrom && UUID_RE.test(copyFrom)) {
+    try {
+      // Cookie client, NOT the service role: unlike the starter library
+      // this reads the caller's OWN tenant data, so RLS must apply. The
+      // service role here would let any signed-in user seed a wizard from
+      // another workspace's template by guessing an id.
+      const supabase = await createClient();
+      const { data, error } = await supabase
+        .from('message_templates')
+        .select('*')
+        .eq('id', copyFrom)
+        .maybeSingle();
+
+      if (error) {
+        console.error(
+          `[templates/new] could not load template "${copyFrom}" to copy:`,
+          error.message
+        );
+      }
+
+      if (data) {
+        const seed = draftFromRow(data);
+        initial = {
+          ...seed,
+          draft: {
+            ...seed.draft,
+            // Cleared on purpose. Meta identifies a template by
+            // name + language, so reusing the name is exactly what the
+            // original refusal was about — copying it would reproduce the
+            // failure. An empty field also makes the operator choose a
+            // name deliberately rather than submitting `..._copy`.
+            name: '',
+          },
+        };
+      }
+    } catch (err) {
+      console.error(
+        `[templates/new] copy source unavailable for "${copyFrom}":`,
+        err instanceof Error ? err.message : err
       );
     }
   }
@@ -119,7 +184,7 @@ export default async function NewTemplatePage({
     // without this a client-side navigation from one library template to
     // another would keep the first one's draft on screen.
     <TemplateWizard
-      key={library ?? 'blank'}
+      key={library ?? copyFrom ?? 'blank'}
       initialDraft={initial}
       libraryMissing={Boolean(library) && !initial}
     />

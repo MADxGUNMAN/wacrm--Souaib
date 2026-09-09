@@ -9,6 +9,8 @@ import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
+import { sendTypingIndicator } from '@/lib/whatsapp/meta-api'
+import { decrypt } from '@/lib/whatsapp/encryption'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -105,6 +107,35 @@ export async function dispatchInboundToAiReply(
       config,
       latestUserMessage(messages),
     )
+
+    // Trigger typing indicator while the LLM generates its response
+    const { data: latestInbound } = await db
+      .from('messages')
+      .select('message_id')
+      .eq('conversation_id', conversationId)
+      .eq('sender_type', 'customer')
+      .not('message_id', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (latestInbound?.message_id) {
+      const { data: waConfig } = await db
+        .from('whatsapp_config')
+        .select('phone_number_id, access_token, status')
+        .eq('account_id', accountId)
+        .maybeSingle()
+
+      if (waConfig?.phone_number_id && waConfig?.access_token && waConfig.status === 'connected') {
+        void sendTypingIndicator({
+          phoneNumberId: waConfig.phone_number_id,
+          accessToken: decrypt(waConfig.access_token),
+          messageId: latestInbound.message_id,
+        }).catch((err) => {
+          console.warn('[ai auto-reply] typing indicator warning:', err)
+        })
+      }
+    }
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,

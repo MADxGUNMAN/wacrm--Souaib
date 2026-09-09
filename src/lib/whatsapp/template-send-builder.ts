@@ -33,6 +33,11 @@
 import type { MessageTemplate, TemplateButton } from '@/types';
 import { MPM_LIMITS, ORDER_DETAILS_LIMITS } from './template-limits';
 import {
+  DEFAULT_OPT_OUT_KEYWORDS,
+  RESERVED_OPT_OUT_PAYLOAD,
+  matchesKeyword,
+} from './opt-out-keywords';
+import {
   extractNamedParams,
   extractVariableIndices,
 } from './template-variables';
@@ -292,7 +297,7 @@ type MetaSendParameter =
 
 function buildHeaderComponent(
   template: MessageTemplate,
-  params: SendTimeParams,
+  params: SendTimeParams
 ): MetaSendComponent | null {
   const headerType = template.header_type;
   if (!headerType) return null;
@@ -301,12 +306,14 @@ function buildHeaderComponent(
     // TEXT header with {{1}} → need a value. Static text headers
     // (no variables) just ride along inside the template itself; no
     // header component required on send.
-    const varCount = extractVariableIndices(template.header_content ?? '').length;
+    const varCount = extractVariableIndices(
+      template.header_content ?? ''
+    ).length;
     if (varCount === 0) return null;
     const value = params.headerText;
     if (!value || !value.trim()) {
       throw new Error(
-        'Header text variable {{1}} requires a value — pass headerText.',
+        'Header text variable {{1}} requires a value — pass headerText.'
       );
     }
     return {
@@ -326,7 +333,7 @@ function buildHeaderComponent(
       .map((k) => k);
     if (!loc || missing.length > 0) {
       throw new Error(
-        `A location header needs latitude, longitude, name and address — missing ${missing.join(', ')}.`,
+        `A location header needs latitude, longitude, name and address — missing ${missing.join(', ')}.`
       );
     }
     return {
@@ -358,7 +365,7 @@ function buildHeaderComponent(
   const id = params.headerMediaId;
   if (!link && !id) {
     throw new Error(
-      `${headerType} header requires a media link or id at send time — set header_media_url on the template or pass headerMediaUrl/headerMediaId.`,
+      `${headerType} header requires a media link or id at send time — set header_media_url on the template or pass headerMediaUrl/headerMediaId.`
     );
   }
   const mediaPayload: { link?: string; id?: string } = id ? { id } : { link };
@@ -376,7 +383,7 @@ function buildHeaderComponent(
 
 function buildBodyComponent(
   template: MessageTemplate,
-  params: SendTimeParams,
+  params: SendTimeParams
 ): MetaSendComponent | null {
   // NAMED templates are matched by parameter NAME, not by position, so
   // they take a separate path — a positional array sent for a named
@@ -388,7 +395,7 @@ function buildBodyComponent(
     const missing = names.filter((n) => !supplied[n]?.trim());
     if (missing.length > 0) {
       throw new Error(
-        `Missing value(s) for ${missing.map((n) => `{{${n}}}`).join(', ')}.`,
+        `Missing value(s) for ${missing.map((n) => `{{${n}}}`).join(', ')}.`
       );
     }
     return {
@@ -406,7 +413,7 @@ function buildBodyComponent(
   if (varCount === 0 && body.length === 0) return null;
   if (body.length < varCount) {
     throw new Error(
-      `Body has ${varCount} variable(s) but only ${body.length} value(s) were supplied.`,
+      `Body has ${varCount} variable(s) but only ${body.length} value(s) were supplied.`
     );
   }
   // Trim to the variable count — extra values are dropped silently so
@@ -420,7 +427,7 @@ function buildBodyComponent(
 
 function buttonNeedsSendParam(
   button: TemplateButton,
-  override: string | undefined,
+  override: string | undefined
 ): boolean {
   switch (button.type) {
     case 'URL':
@@ -431,6 +438,11 @@ function buttonNeedsSendParam(
       // template's example as a default).
       return true;
     case 'QUICK_REPLY':
+      // An explicit override always wins. Failing that, an opt-out button
+      // gets the reserved payload attached so the tap keeps working even
+      // if the account later edits its keyword list — see
+      // isOptOutQuickReply for why that test is deliberately narrow.
+      return override !== undefined || isOptOutQuickReply(button);
     case 'PHONE_NUMBER':
       return override !== undefined;
     case 'VOICE_CALL':
@@ -439,10 +451,36 @@ function buttonNeedsSendParam(
   }
 }
 
+/**
+ * Is this quick reply an opt-out button?
+ *
+ * Matched against the DEFAULT opt-out keyword only — in practice the
+ * single word "STOP" — and NOT against the wider suggested list.
+ *
+ * That narrowness is the whole point. "END", "CANCEL" and "QUIT" are all
+ * plausible opt-out words AND plausible labels for something else
+ * entirely ("End quiz", "Cancel order"), and this function's answer
+ * decides whether tapping the button unsubscribes somebody. Guessing
+ * wrong here would opt a customer out of marketing because they cancelled
+ * an order, which is worse than the button it is trying to fix.
+ *
+ * A label the account's keywords would not match — "Unsubscribe" when the
+ * keyword list says STOP, or a translated label — is therefore still not
+ * recognised here. The template wizard catches that case at authoring
+ * time, where it can be explained and corrected, rather than being
+ * silently guessed at send time.
+ */
+function isOptOutQuickReply(button: TemplateButton): boolean {
+  return (
+    button.type === 'QUICK_REPLY' &&
+    matchesKeyword(button.text, DEFAULT_OPT_OUT_KEYWORDS)
+  );
+}
+
 function buildButtonComponent(
   button: TemplateButton,
   index: number,
-  override: string | undefined,
+  override: string | undefined
 ): MetaSendComponent | null {
   if (!buttonNeedsSendParam(button, override)) return null;
 
@@ -452,7 +490,7 @@ function buildButtonComponent(
       // the button's index in the template's buttons array.
       if (!override || !override.trim()) {
         throw new Error(
-          `URL button #${index + 1} uses {{1}} — requires a buttonParams[${index}] value.`,
+          `URL button #${index + 1} uses {{1}} — requires a buttonParams[${index}] value.`
         );
       }
       return {
@@ -472,13 +510,19 @@ function buildButtonComponent(
       };
     }
     case 'QUICK_REPLY': {
-      // Only included when the caller explicitly overrides the
-      // payload (rare — usually QR buttons use their default text).
+      // The caller's override wins; an opt-out button falls back to the
+      // reserved payload. Without either, no component is emitted and
+      // Meta echoes the button's label back as the payload, which is the
+      // long-standing behaviour for ordinary quick replies.
+      const payload =
+        override?.trim() ||
+        (isOptOutQuickReply(button) ? RESERVED_OPT_OUT_PAYLOAD : '');
+      if (!payload) return null;
       return {
         type: 'button',
         sub_type: 'quick_reply',
         index: String(index),
-        parameters: [{ type: 'payload', payload: override! }],
+        parameters: [{ type: 'payload', payload }],
       };
     }
     case 'PHONE_NUMBER':
@@ -515,7 +559,7 @@ function buildButtonComponent(
  */
 export function buildCarouselSendComponents(
   definition: TemplateDefinition,
-  params: SendTimeParams = {},
+  params: SendTimeParams = {}
 ): MetaSendComponent[] {
   const out: MetaSendComponent[] = [];
   const cards = getCarouselCards(definition.components);
@@ -527,7 +571,7 @@ export function buildCarouselSendComponents(
     const values = (params.body ?? []).slice(0, topVarCount);
     if (values.length < topVarCount) {
       throw new Error(
-        `Message body has ${topVarCount} variable(s) but ${values.length} value(s) were supplied.`,
+        `Message body has ${topVarCount} variable(s) but ${values.length} value(s) were supplied.`
       );
     }
     out.push({
@@ -550,7 +594,7 @@ export function buildCarouselSendComponents(
         : null;
     if (!mediaHeader) {
       throw new Error(
-        `Card ${cardIndex + 1} has no media header — a carousel card cannot be sent without one.`,
+        `Card ${cardIndex + 1} has no media header — a carousel card cannot be sent without one.`
       );
     }
     const format = mediaHeader.format;
@@ -558,7 +602,7 @@ export function buildCarouselSendComponents(
     const id = given.headerMediaId;
     if (!link && !id) {
       throw new Error(
-        `Card ${cardIndex + 1} needs a media link or id at send time.`,
+        `Card ${cardIndex + 1} needs a media link or id at send time.`
       );
     }
     const media: { link?: string; id?: string } = id ? { id } : { link };
@@ -580,7 +624,7 @@ export function buildCarouselSendComponents(
       const values = (given.body ?? []).slice(0, cardVarCount);
       if (values.length < cardVarCount) {
         throw new Error(
-          `Card ${cardIndex + 1} text has ${cardVarCount} variable(s) but ${values.length} value(s) were supplied.`,
+          `Card ${cardIndex + 1} text has ${cardVarCount} variable(s) but ${values.length} value(s) were supplied.`
         );
       }
       components.push({
@@ -599,7 +643,7 @@ export function buildCarouselSendComponents(
         if (extractVariableIndices(button.url).length === 0) return;
         if (!override?.trim()) {
           throw new Error(
-            `Card ${cardIndex + 1}, button ${buttonIndex + 1} has a URL variable and needs a value.`,
+            `Card ${cardIndex + 1}, button ${buttonIndex + 1} has a URL variable and needs a value.`
           );
         }
         components.push({
@@ -645,7 +689,7 @@ export function buildCarouselSendComponents(
 export function buildLtoSendComponents(
   template: MessageTemplate,
   definition: TemplateDefinition,
-  params: SendTimeParams = {},
+  params: SendTimeParams = {}
 ): MetaSendComponent[] {
   const out: MetaSendComponent[] = [];
 
@@ -658,14 +702,14 @@ export function buildLtoSendComponents(
   const expiresAt = params.offerExpiresAtMs;
   if (!expiresAt || !Number.isFinite(expiresAt)) {
     throw new Error(
-      'A limited-time offer needs an expiry time (offerExpiresAtMs, a UNIX timestamp in milliseconds).',
+      'A limited-time offer needs an expiry time (offerExpiresAtMs, a UNIX timestamp in milliseconds).'
     );
   }
   if (expiresAt <= Date.now()) {
     // Meta would accept it and the customer would receive an offer that
     // is already dead. Better to refuse.
     throw new Error(
-      'The offer expiry is in the past — the customer would receive an already-expired offer.',
+      'The offer expiry is in the past — the customer would receive an already-expired offer.'
     );
   }
   out.push({
@@ -699,7 +743,7 @@ export function buildLtoSendComponents(
       const value = params.buttonParams?.[index];
       if (!value?.trim()) {
         throw new Error(
-          'The website button URL has a variable and needs a value.',
+          'The website button URL has a variable and needs a value.'
         );
       }
       out.push({
@@ -746,7 +790,7 @@ export function buildLtoSendComponents(
 export function buildFlowSendComponents(
   template: MessageTemplate,
   definition: TemplateDefinition,
-  params: SendTimeParams = {},
+  params: SendTimeParams = {}
 ): MetaSendComponent[] {
   const out: MetaSendComponent[] = [];
 
@@ -771,7 +815,7 @@ export function buildFlowSendComponents(
       const component = buildButtonComponent(
         button as TemplateButton,
         index,
-        params.buttonParams?.[index],
+        params.buttonParams?.[index]
       );
       if (component) out.push(component);
       return;
@@ -794,7 +838,7 @@ export function buildFlowSendComponents(
       const screen = button.navigate_screen?.trim();
       if (!screen) {
         throw new Error(
-          'This Flow template has no starting screen recorded, so it cannot be sent. Re-create it with the first screen from your Flow JSON.',
+          'This Flow template has no starting screen recorded, so it cannot be sent. Re-create it with the first screen from your Flow JSON.'
         );
       }
       action.flow_action_data = {
@@ -838,7 +882,10 @@ interface MetaOrderDetails {
     shipping?: MetaMoney;
     discount?: MetaMoney;
   };
-  payment_settings?: { type: 'payment_gateway'; payment_gateway: { configuration_name: string } }[];
+  payment_settings?: {
+    type: 'payment_gateway';
+    payment_gateway: { configuration_name: string };
+  }[];
 }
 
 /**
@@ -862,7 +909,7 @@ function toMetaMoney(majorUnits: number): MetaMoney {
  */
 export function buildCatalogSendComponents(
   template: MessageTemplate,
-  params: SendTimeParams = {},
+  params: SendTimeParams = {}
 ): MetaSendComponent[] {
   const out: MetaSendComponent[] = [];
   const body = buildBodyComponent(template, params);
@@ -876,9 +923,7 @@ export function buildCatalogSendComponents(
     parameters: [
       {
         type: 'action',
-        action: thumbnail
-          ? { thumbnail_product_retailer_id: thumbnail }
-          : {},
+        action: thumbnail ? { thumbnail_product_retailer_id: thumbnail } : {},
       },
     ],
   });
@@ -897,7 +942,7 @@ export function buildCatalogSendComponents(
  */
 export function buildMpmSendComponents(
   template: MessageTemplate,
-  params: SendTimeParams = {},
+  params: SendTimeParams = {}
 ): MetaSendComponent[] {
   const out: MetaSendComponent[] = [];
 
@@ -916,18 +961,18 @@ export function buildMpmSendComponents(
 
   if (sections.length === 0) {
     throw new Error(
-      'A multi-product message needs at least one section with at least one product.',
+      'A multi-product message needs at least one section with at least one product.'
     );
   }
   if (sections.length > MPM_LIMITS.maxSections) {
     throw new Error(
-      `At most ${MPM_LIMITS.maxSections} sections are allowed (got ${sections.length}).`,
+      `At most ${MPM_LIMITS.maxSections} sections are allowed (got ${sections.length}).`
     );
   }
   const productCount = sections.reduce((n, s) => n + s.productIds.length, 0);
   if (productCount > MPM_LIMITS.maxProductsTotal) {
     throw new Error(
-      `At most ${MPM_LIMITS.maxProductsTotal} products are allowed across all sections (got ${productCount}).`,
+      `At most ${MPM_LIMITS.maxProductsTotal} products are allowed across all sections (got ${productCount}).`
     );
   }
   const missingTitle = sections.findIndex((s) => s.title === '');
@@ -970,7 +1015,7 @@ export function buildMpmSendComponents(
  */
 export function buildOrderDetailsSendComponents(
   template: MessageTemplate,
-  params: SendTimeParams = {},
+  params: SendTimeParams = {}
 ): MetaSendComponent[] {
   const out: MetaSendComponent[] = [];
 
@@ -982,7 +1027,7 @@ export function buildOrderDetailsSendComponents(
   const order = params.orderDetails;
   if (!order) {
     throw new Error(
-      'An order details message needs the invoice — reference id, currency and at least one item.',
+      'An order details message needs the invoice — reference id, currency and at least one item.'
     );
   }
   if (!order.referenceId?.trim()) {
@@ -992,14 +1037,16 @@ export function buildOrderDetailsSendComponents(
     throw new Error('The invoice needs a currency, e.g. INR.');
   }
   const items = (order.items ?? []).filter(
-    (i) => i.name?.trim() && Number.isFinite(i.amount) && i.quantity > 0,
+    (i) => i.name?.trim() && Number.isFinite(i.amount) && i.quantity > 0
   );
   if (items.length === 0) {
-    throw new Error('The invoice needs at least one item with a name, price and quantity.');
+    throw new Error(
+      'The invoice needs at least one item with a name, price and quantity.'
+    );
   }
   if (items.length > ORDER_DETAILS_LIMITS.maxItems) {
     throw new Error(
-      `At most ${ORDER_DETAILS_LIMITS.maxItems} items are allowed (got ${items.length}).`,
+      `At most ${ORDER_DETAILS_LIMITS.maxItems} items are allowed (got ${items.length}).`
     );
   }
 
@@ -1010,7 +1057,7 @@ export function buildOrderDetailsSendComponents(
   const total = subtotal + tax + shipping - discount;
   if (total <= 0) {
     throw new Error(
-      'The invoice total must be more than zero — check the discount is not larger than the order.',
+      'The invoice total must be more than zero — check the discount is not larger than the order.'
     );
   }
 
@@ -1079,7 +1126,7 @@ export function buildOrderDetailsSendComponents(
  */
 export function buildOrderStatusSendComponents(
   template: MessageTemplate,
-  params: SendTimeParams = {},
+  params: SendTimeParams = {}
 ): MetaSendComponent[] {
   const out: MetaSendComponent[] = [];
 
@@ -1089,13 +1136,13 @@ export function buildOrderStatusSendComponents(
   const referenceId = params.orderReferenceId?.trim();
   if (!referenceId) {
     throw new Error(
-      'An order status update needs the reference id of the order it refers to.',
+      'An order status update needs the reference id of the order it refers to.'
     );
   }
   const status = params.orderStatus;
   if (!status || !ORDER_STATUS_VALUES.includes(status)) {
     throw new Error(
-      `An order status update needs a status — one of ${ORDER_STATUS_VALUES.join(', ')}.`,
+      `An order status update needs a status — one of ${ORDER_STATUS_VALUES.join(', ')}.`
     );
   }
 
@@ -1118,7 +1165,7 @@ export function buildOrderStatusSendComponents(
 
 export function buildSendComponents(
   template: MessageTemplate,
-  params: SendTimeParams = {},
+  params: SendTimeParams = {}
 ): MetaSendComponent[] {
   // AUTHENTICATION templates take a fixed shape that shares nothing with
   // the standard path — see buildAuthSendComponents.
@@ -1138,7 +1185,7 @@ export function buildSendComponents(
   // not on template_type, so a row synced from Meta (which carries none of
   // our types) still sends correctly.
   const buttonTypes = new Set(
-    getButtons(definitionFromRow(template).components).map((b) => b.type),
+    getButtons(definitionFromRow(template).components).map((b) => b.type)
   );
   if (buttonTypes.has('CATALOG')) {
     return buildCatalogSendComponents(template, params);
@@ -1200,12 +1247,12 @@ export function buildSendComponents(
  * https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-message-templates/auth-otp-template-messages
  */
 export function buildAuthSendComponents(
-  params: SendTimeParams,
+  params: SendTimeParams
 ): MetaSendComponent[] {
   const code = params.body?.[0]?.trim();
   if (!code) {
     throw new Error(
-      'Authentication templates need the one-time code as the first body parameter.',
+      'Authentication templates need the one-time code as the first body parameter.'
     );
   }
 

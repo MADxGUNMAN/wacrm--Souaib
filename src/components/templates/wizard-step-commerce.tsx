@@ -1,18 +1,18 @@
-"use client";
+﻿'use client';
 
 // ============================================================
 // Wizard step 2 for the three shapes whose button is fixed by their type:
 //
-//   catalogue     — one CATALOG button, opens the whole product catalogue
-//   multi_product — one MPM button, opens a curated product list
-//   order_details — one ORDER_DETAILS button, an invoice paid in WhatsApp
+//   catalogue     â€” one CATALOG button, opens the whole product catalogue
+//   multi_product â€” one MPM button, opens a curated product list
+//   order_details â€” one ORDER_DETAILS button, an invoice paid in WhatsApp
 //
 // One step, not three, because they differ only in which components Meta
 // permits and what the button says. Three near-copies would be three
 // places to fix when a rule changes.
 //
 // Each carries an ACCOUNT REQUIREMENT the template cannot satisfy on its
-// own — a linked catalogue, or WhatsApp Pay. Meta approves the template
+// own â€” a linked catalogue, or WhatsApp Pay. Meta approves the template
 // regardless and the button then fails, so the requirement is stated here
 // rather than discovered from a customer complaint.
 // ============================================================
@@ -23,6 +23,8 @@ import { Info, ShoppingBag } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { RequiredMark } from '@/components/templates/required-mark';
+import { MediaUploadField } from '@/components/media/media-upload-field';
 import {
   Select,
   SelectContent,
@@ -49,7 +51,7 @@ const COPY: Record<
     note: string;
     buttonLabel: string;
     buttonPlaceholder: string;
-    /** 'none' — Meta builds it; 'required' — Meta rejects without it. */
+    /** 'none' â€” Meta builds it; 'required' â€” Meta rejects without it. */
     header: 'none' | 'required' | 'optional';
   }
 > = {
@@ -62,14 +64,14 @@ const COPY: Record<
   },
   multi_product: {
     title: 'Multi-product message',
-    note: 'Needs a linked catalogue with inventory. You choose which products appear each time you send — the template stores only the button, up to 30 products across 10 sections.',
+    note: 'Needs a linked catalogue with inventory. You choose which products appear each time you send â€” the template stores only the button, up to 30 products across 10 sections.',
     buttonLabel: 'Button label',
     buttonPlaceholder: 'View items',
     header: 'required',
   },
   order_details: {
     title: 'Order details (invoice)',
-    note: 'Needs WhatsApp Pay set up and approved on your WhatsApp Business account. The invoice itself — items, totals, reference id — is filled in each time you send, because it differs per customer.',
+    note: 'Needs WhatsApp Pay set up and approved on your WhatsApp Business account. The invoice itself â€” items, totals, reference id â€” is filled in each time you send, because it differs per customer.',
     buttonLabel: 'Button label',
     buttonPlaceholder: 'Review and pay',
     header: 'optional',
@@ -92,14 +94,14 @@ export function WizardStepCommerce({
   const bodyVarCount = extractVariableIndices(draft.bodyText).length;
   const bodySamples = Array.from(
     { length: bodyVarCount },
-    (_, i) => draft.bodySamples[i] ?? '',
+    (_, i) => draft.bodySamples[i] ?? ''
   );
   const headerVarCount = useMemo(
     () =>
       draft.headerFormat === 'text'
         ? extractVariableIndices(draft.headerContent).length
         : 0,
-    [draft.headerFormat, draft.headerContent],
+    [draft.headerFormat, draft.headerContent]
   );
 
   const templateType =
@@ -114,19 +116,22 @@ export function WizardStepCommerce({
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="min-w-0 space-y-5">
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
-          <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">{copy.note}</p>
+        <div className="border-border bg-muted/40 flex items-start gap-3 rounded-lg border p-3">
+          <Info className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+          <p className="text-muted-foreground text-sm">{copy.note}</p>
         </div>
 
         {/* ---- Name + language ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Template name and language
           </h2>
           <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_200px]">
             <div className="space-y-1.5">
-              <Label htmlFor="cm-name">Name your template</Label>
+              <Label htmlFor="cm-name">
+                Name your template
+                <RequiredMark />
+              </Label>
               <Input
                 id="cm-name"
                 value={draft.name}
@@ -139,12 +144,17 @@ export function WizardStepCommerce({
                   })
                 }
                 placeholder={
-                  kind === 'order_details' ? 'payment_request' : 'shop_our_range'
+                  kind === 'order_details'
+                    ? 'payment_request'
+                    : 'shop_our_range'
                 }
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="cm-lang">Select language</Label>
+              <Label htmlFor="cm-lang">
+                Select language
+                <RequiredMark />
+              </Label>
               <Input
                 id="cm-lang"
                 value={draft.language}
@@ -155,10 +165,10 @@ export function WizardStepCommerce({
         </section>
 
         {/* ---- Content ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
+        <section className="border-border bg-card rounded-xl border p-5">
           <div className="flex items-center gap-2">
-            <ShoppingBag className="size-4 text-primary" />
-            <h2 className="text-base font-semibold text-foreground">
+            <ShoppingBag className="text-primary size-4" />
+            <h2 className="text-foreground text-base font-semibold">
               {copy.title}
             </h2>
           </div>
@@ -167,20 +177,26 @@ export function WizardStepCommerce({
               details may have text or media. */}
           {copy.header === 'required' ? (
             <div className="mt-4 space-y-2">
-              <Label htmlFor="cm-header">Header text</Label>
+              <Label htmlFor="cm-header">
+                Header text
+                <RequiredMark />
+              </Label>
               <Input
                 id="cm-header"
                 value={draft.headerContent}
                 onChange={(e) =>
                   // Forced to 'text': Meta requires a text header on this
                   // shape, so the format is not a choice to offer.
-                  onChange({ headerFormat: 'text', headerContent: e.target.value })
+                  onChange({
+                    headerFormat: 'text',
+                    headerContent: e.target.value,
+                  })
                 }
                 maxLength={TEMPLATE_LIMITS.headerTextMaxLength}
                 placeholder="Forget something, {{1}}?"
               />
-              <p className="text-xs text-muted-foreground">
-                Required — Meta rejects a multi-product template without one.
+              <p className="text-muted-foreground text-xs">
+                Required â€” Meta rejects a multi-product template without one.
                 One variable allowed.
               </p>
               {headerVarCount > 0 ? (
@@ -197,7 +213,8 @@ export function WizardStepCommerce({
           {copy.header === 'optional' ? (
             <div className="mt-4 space-y-2">
               <Label htmlFor="cm-header-format">
-                Header <span className="text-muted-foreground">· optional</span>
+                Header{' '}
+                <span className="text-muted-foreground">Â· optional</span>
               </Label>
               <Select
                 value={draft.headerFormat}
@@ -228,18 +245,23 @@ export function WizardStepCommerce({
               ) : null}
               {draft.headerFormat === 'image' ||
               draft.headerFormat === 'document' ? (
-                <Input
+                <MediaUploadField
+                  kind={draft.headerFormat}
+                  purpose="review"
+                  compact
                   value={draft.headerMediaUrl}
-                  onChange={(e) => onChange({ headerMediaUrl: e.target.value })}
-                  placeholder={`https://example.com/sample.${draft.headerFormat === 'image' ? 'jpg' : 'pdf'}`}
-                  aria-label="Header media sample URL"
+                  onChange={(url) => onChange({ headerMediaUrl: url })}
+                  urlPlaceholder={`https://example.com/sample.${draft.headerFormat === 'image' ? 'jpg' : 'pdf'}`}
                 />
               ) : null}
             </div>
           ) : null}
 
           <div className="mt-5 space-y-2">
-            <Label htmlFor="cm-body">Body</Label>
+            <Label htmlFor="cm-body">
+              Body
+              <RequiredMark />
+            </Label>
             <Textarea
               id="cm-body"
               rows={4}
@@ -253,13 +275,13 @@ export function WizardStepCommerce({
               }
               className="resize-none"
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-xs">
               {draft.bodyText.length}/{TEMPLATE_LIMITS.bodyMaxLength}
             </p>
 
             {bodyVarCount > 0 ? (
-              <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
-                <p className="text-xs font-medium text-foreground">
+              <div className="border-border bg-muted/40 space-y-2 rounded-lg border p-3">
+                <p className="text-foreground text-xs font-medium">
                   Example values
                 </p>
                 {bodySamples.map((val, i) => (
@@ -281,7 +303,7 @@ export function WizardStepCommerce({
 
           <div className="mt-5 space-y-1.5">
             <Label htmlFor="cm-footer">
-              Footer <span className="text-muted-foreground">· optional</span>
+              Footer <span className="text-muted-foreground">Â· optional</span>
             </Label>
             <Input
               id="cm-footer"
@@ -293,7 +315,10 @@ export function WizardStepCommerce({
           </div>
 
           <div className="mt-5 space-y-1.5">
-            <Label htmlFor="cm-button">{copy.buttonLabel}</Label>
+            <Label htmlFor="cm-button">
+              {copy.buttonLabel}
+              <RequiredMark />
+            </Label>
             <Input
               id="cm-button"
               value={draft.commerceButtonText}
@@ -302,8 +327,8 @@ export function WizardStepCommerce({
               placeholder={copy.buttonPlaceholder}
               className="w-full sm:w-64"
             />
-            <p className="text-xs text-muted-foreground">
-              This is the only button — Meta does not allow others alongside
+            <p className="text-muted-foreground text-xs">
+              This is the only button â€” Meta does not allow others alongside
               it.
             </p>
           </div>
@@ -312,8 +337,8 @@ export function WizardStepCommerce({
 
       {/* ---- Preview ---- */}
       <aside className="lg:sticky lg:top-4 lg:self-start">
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground">
+        <div className="border-border bg-card rounded-xl border p-5">
+          <h3 className="text-foreground text-sm font-semibold">
             Template preview
           </h3>
           <WhatsAppPreview
@@ -322,7 +347,7 @@ export function WizardStepCommerce({
             headerValues={draftHeaderValues(draft)}
             className="mt-3"
           />
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
             {kind === 'order_details'
               ? 'The invoice card the customer taps through to is drawn by WhatsApp from the order you send, so it is not previewed here.'
               : 'The product list WhatsApp shows when the button is tapped comes from your catalogue, so it is not previewed here.'}

@@ -40,7 +40,11 @@
     "defaultAvatar": "Avatar",
     "menuProfile": "Profile",
     "menuSettings": "Settings",
-    "menuSignOut": "Sign out"
+    "menuSignOut": "Sign out",
+    "confirmSignOutTitle": "Sign out of your account?",
+    "confirmSignOutDesc": "Are you sure you want to sign out? You will need to sign in again to access your workspace.",
+    "confirmSignOutBtn": "Sign out",
+    "confirmCancelBtn": "Cancel"
   },
   "Header": {
     "dashboard": "Dashboard",
@@ -51,6 +55,8 @@
     "broadcasts": "Broadcasts",
     "templates": "Templates",
     "automations": "Automations",
+    "flows": "Flows",
+    "agents": "AI Agents",
     "settings": "Settings",
     "openMenu": "Open menu",
     "openAccountMenu": "Open account menu",
@@ -58,7 +64,11 @@
     "defaultAvatar": "Avatar",
     "menuProfile": "Profile",
     "menuSettings": "Settings",
-    "menuSignOut": "Sign out"
+    "menuSignOut": "Sign out",
+    "confirmSignOutTitle": "Sign out of your account?",
+    "confirmSignOutDesc": "Are you sure you want to sign out? You will need to sign in again to access your workspace.",
+    "confirmSignOutBtn": "Sign out",
+    "confirmCancelBtn": "Cancel"
   },
   "ModeToggle": {
     "switchMode": "Switch to {mode} mode"
@@ -75,6 +85,12 @@
       "vsYesterday": "vs yesterday",
       "openDeals": "{count} open {count, plural, =1 {deal} other {deals}}",
       "noChange": "No change {suffix}"
+    },
+    "whatsappBanner": {
+      "title": "Connect WhatsApp Business API",
+      "description": "Your WhatsApp account is not connected yet. Connect your WhatsApp Business API to activate real-time inbox conversations, customer broadcasts, and automated workflows.",
+      "connectButton": "Connect WhatsApp",
+      "contactOwner": "Please ask your workspace owner to connect WhatsApp."
     },
     "quickActions": {
       "newContact": "New Contact",
@@ -158,6 +174,7 @@
       "searchPlaceholder": "Search conversations...",
       "filterAll": "All",
       "filterUnread": "Unread",
+      "filterStarred": "Starred",
       "filterOpen": "Open",
       "filterPending": "Pending",
       "filterClosed": "Closed",
@@ -166,6 +183,7 @@
       "allCompanies": "All companies",
       "clearAll": "Clear all",
       "noConversations": "No conversations found",
+      "noStarredConversations": "You haven't starred any messages yet",
       "noMessagesYet": "No messages yet",
       "unknown": "Unknown"
     },
@@ -243,7 +261,14 @@
       "interactiveReply": "[Interactive reply]",
       "unsupported": "[Unsupported message type]",
       "aiBadge": "AI",
-      "aiBadgeTitle": "Sent automatically by the AI assistant"
+      "aiBadgeTitle": "Sent automatically by the AI assistant",
+      "ownerBadge": "Owner",
+      "ownerBadgeTitle": "Sent from this CRM by the account owner",
+      "personBadgeTitle": "Sent from this CRM by {name}",
+      "automationBadge": "Automation",
+      "automationBadgeTitle": "Sent automatically by a flow or automation rule, not by a person",
+      "phoneBadge": "Phone",
+      "phoneBadgeTitle": "Typed in the WhatsApp Business App on your phone, not in this CRM"
     },
     "actions": {
       "reply": "Reply",
@@ -333,6 +358,7 @@
       "deleteAction": "Delete",
       "showingPagination": "Showing {start}-{end} of {total}",
       "pageCount": "Page {page} of {total}",
+      "goToPage": "Go to page",
       "deleteContactTitle": "Delete Contact",
       "deleteContactDesc": "Are you sure you want to delete {name}? This action cannot be undone.",
       "cancel": "Cancel",
@@ -386,9 +412,9 @@
         "custom": "Custom Fields",
         "deals": "Deals",
         "tags": "Tags",
-      "noTags": "No tags",
-      "noDeals": "No deals",
-      "addNotePlaceholder": "Add a note..."
+        "noTags": "No tags",
+        "noDeals": "No deals",
+        "addNotePlaceholder": "Add a note..."
       },
       "actions": {
         "edit": "Edit",
@@ -456,6 +482,10 @@
       "resultImported": "{count} imported",
       "resultTags": "{count} tag assigned",
       "resultTags_plural": "{count} tags assigned",
+      "resultCustomValues": "{count} custom field value saved",
+      "resultCustomValues_plural": "{count} custom field values saved",
+      "resultCustomFields": "{count} new custom field created",
+      "resultCustomFields_plural": "{count} new custom fields created",
       "resultSkipped": "{count} skipped",
       "resultFailed": "{count} failed",
       "willBeCreated": "{name} (will be created on import)",
@@ -484,15 +514,26 @@
       "toastError": "Import failed"
     },
     "customFields": {
-      "title": "Custom fields",
-      "desc": "Define extra contact fields (e.g. ZIP code, lead source). They appear on every contact and in the “Update Contact Field” automation action.",
+      "title": "Contact Fields",
+      "desc": "Manage standard fields (Email, Company) and create dynamic custom fields for your CRM.",
+      "standardFieldsTitle": "Standard Fields",
+      "customFieldsTitle": "Custom Fields",
+      "systemRequired": "System Required",
+      "phoneLockedHint": "Required for WhatsApp messaging and identity",
+      "nameLockedHint": "Primary contact identity",
+      "visibleToggle": "Visible in CRM",
       "addField": "Add",
-      "fieldName": "New field name…",
+      "fieldName": "New custom field name…",
       "loading": "Loading…",
       "empty": "No custom fields yet.",
       "renameAria": "Rename {name}",
       "deleteTitle": "Delete field",
-      "deleteConfirm": "Delete \"{name}\"? This also removes its stored value on every contact. This cannot be undone.",
+      "deleteDialogTitle": "Delete Custom Field: \"{name}\"",
+      "deleteWarningDesc": "This field currently contains data for {count} contact(s). Deleting this field will permanently remove all stored values from every contact in your account.",
+      "deleteSafeDesc": "Are you sure you want to delete \"{name}\"? This action cannot be undone.",
+      "deleteWithDataBtn": "Delete Field & Stored Data ({count})",
+      "deleteBtn": "Delete Field",
+      "cancel": "Cancel",
       "toastNoAccount": "Your profile is not linked to an account.",
       "toastDuplicate": "A field named \"{name}\" already exists.",
       "toastCreateFailed": "Could not create field. You may not have permission.",
@@ -644,6 +685,7 @@
       "delivered": "Delivered",
       "read": "Read",
       "replied": "Replied",
+      "skipped": "Skipped",
       "unknown": "Unknown"
     },
     "detail": {
@@ -743,6 +785,7 @@
         "csvContactsFound": "{count} valid contact(s) found in CSV.",
         "errorLoadTags": "Failed to load tags",
         "errorLoadFields": "Failed to load custom fields",
+        "noCustomFieldsFound": "No custom fields found. You can create custom fields in Contacts or Settings to filter your audience.",
         "errorCsvParse": "Could not parse CSV file.",
         "errorCsvMissingPhone": "CSV must have a 'phone' column."
       },
@@ -770,7 +813,8 @@
         "fieldMap": {
           "name": "Name",
           "phone": "Phone",
-          "email": "Email"
+          "email": "Email",
+          "company": "Company"
         }
       },
       "scheduleSend": {
@@ -1369,13 +1413,13 @@
       "deleteLocallyAria": "Delete template locally",
       "deleteMetaLocallyTitle": "Delete from Meta and locally",
       "deleteLocallyTitle": "Delete locally",
-      
+
       "dialogEditTitle": "Edit Message Template",
       "dialogNewTitle": "New Message Template",
       "dialogEditDesc": "Save your changes to re-submit to Meta. Status will flip back to PENDING during review.",
       "dialogNewDesc": "Build a template and submit it to Meta for approval. Once approved, you can use it in broadcasts and the inbox.",
       "authWarning": "AUTHENTICATION templates have a fixed body + OTP button shape that needs a different builder. Create them in Meta WhatsApp Manager for now and use <bold>Sync from Meta</bold> to bring them in.",
-      
+
       "templateName": "Template Name",
       "namePlaceholder": "e.g. order_confirmation",
       "nameFixed": "Name is fixed once a template exists on Meta — create a new template to change it.",
@@ -1384,7 +1428,7 @@
       "language": "Language",
       "langFixed": "Language is fixed once a template exists on Meta.",
       "langHint": "Must match the exact code on Meta — <code>en_US</code> and <code>en</code> are distinct.",
-      
+
       "header": "Header",
       "headerNone": "None",
       "headerText": "Text",
@@ -1394,7 +1438,7 @@
       "headerTextPlaceholder": "Header text (max 60 chars, optional '{{1}}')",
       "headerSampleAria": "Sample value for header variable",
       "headerSamplePlaceholder": "Sample value for '{{1}}' (required for Meta review)",
-      
+
       "uploadImage": "Upload image",
       "uploadHint": "JPEG or PNG, ≤5 MB",
       "mediaUrlPlaceholder": "https://… (or paste a public {format} link)",
@@ -1402,17 +1446,17 @@
       "mediaHint": "Must be a publicly accessible HTTPS link. Meta fetches it once during review, so it needs to stay live for ~24 hrs.",
       "videoHint": " Recommended: MP4 / 3GPP, ≤16 MB, ≤60 seconds.",
       "documentHint": " Recommended: PDF, ≤100 MB.",
-      
+
       "bodyText": "Body Text",
       "bodyPlaceholder": "Hello '{{1}}', your order '{{2}}' is confirmed.",
       "bodyHint": "Use '{{1}}', '{{2}}' for variables (must be contiguous starting at '{{1}}').",
       "sampleValues": "Sample values (Meta uses these to review your template)",
       "sampleAria": "Sample value for body variable {var}",
       "samplePlaceholder": "Sample for {var}",
-      
+
       "footer": "Footer (optional)",
       "footerPlaceholder": "Optional footer text (max 60 chars)",
-      
+
       "buttons": "Buttons (optional)",
       "addButton": "Add Button",
       "buttonsLimit": "Up to {max} buttons. QUICK_REPLY buttons must come before URL / phone / copy-code buttons.",
@@ -1425,19 +1469,19 @@
       "urlSamplePlaceholder": "Example value for '{{1}}' (required when URL has a variable)",
       "phonePlaceholder": "+15551234567",
       "codePlaceholder": "Example code (e.g. SUMMER20)",
-      
+
       "cancel": "Cancel",
       "saving": "Saving…",
       "submitting": "Submitting…",
       "saveResubmit": "Save & Resubmit",
       "submitApproval": "Submit for Approval",
-      
+
       "deleteDialogTitle": "Delete template?",
       "deleteMetaDesc": "\"{name}\" will be deleted from Meta and from wacrm. Active broadcasts using this template will start failing on their next send. This can't be undone.",
       "deleteLocalDesc": "\"{name}\" will be deleted from wacrm. It was never submitted to Meta, so no remote cleanup is needed.",
       "deleting": "Deleting…",
       "delete": "Delete",
-      
+
       "toastLoadFailed": "Failed to load templates",
       "toastSubmitFailed": "Failed to submit",
       "toastSubmitEditSuccess": "Edit submitted — Meta typically reviews within 24 hours.",
@@ -1547,7 +1591,9 @@
       "fields": "Fields & tags",
       "deals": "Deals & currency",
       "members": "Team members",
-      "api": "API keys"
+      "api": "API keys",
+      "alerts": "Usage alerts",
+      "opt-out": "Opt-in / opt-out"
     },
     "groups": {
       "account": "Account",
@@ -1587,7 +1633,7 @@
       "profileSaved": "Profile saved",
       "emailChangeFailed": "Email change failed: {message}",
       "profileSavedEmailCheck": "Profile saved — check your email to confirm the address change",
-      
+
       "passwordTitle": "Password",
       "passwordDesc": "Use at least {min} characters. You will stay signed in on this device after changing it.",
       "currentPassword": "Current password",
@@ -1601,7 +1647,7 @@
       "currentPasswordIncorrect": "Current password is incorrect",
       "passwordUpdateFailed": "Password update failed: {message}",
       "passwordUpdated": "Password updated",
-      
+
       "sessionsTitle": "Active sessions",
       "sessionsDesc": "Sign out of every device where you're logged in — including this one. Useful if you lost a laptop or shared your password.",
       "signOutAll": "Sign out of all devices",

@@ -5,7 +5,11 @@ import {
   type ChatMessage,
   type GenerateResult,
 } from './types'
-import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
+import {
+  HANDOFF_SENTINEL,
+  MAX_OUTPUT_TOKENS,
+  aiRequestTimeoutMs,
+} from './defaults'
 import { generateOpenAi } from './providers/openai'
 import { generateAnthropic } from './providers/anthropic'
 import { generateGemini } from './providers/gemini'
@@ -18,22 +22,40 @@ export interface GenerateArgs {
   systemPrompt: string
   /** Recent conversation turns, oldest first. */
   messages: ChatMessage[]
+  /**
+   * Output cap. Defaults to `MAX_OUTPUT_TOKENS` (1024), which is sized
+   * for a WhatsApp reply. Callers that need a structured document — the
+   * flow-authoring agent — must raise it, or the answer is truncated
+   * mid-token and arrives as unparseable text.
+   */
+  maxOutputTokens?: number
+  /** Overrides the 30s default. A large generation needs longer. */
+  timeoutMs?: number
 }
 
 /**
- * Generate the next reply from the account's configured provider.
- * Dispatches to the right adapter, then parses the handoff sentinel out
- * of the raw text. Throws `AiError` on any provider/network failure.
+ * Raw provider call: dispatches to the right adapter and returns its
+ * text untouched.
+ *
+ * Split out from `generateReply` because `parseGeneration` is not
+ * safe for structured output — it scans the whole answer for the
+ * literal `[[HANDOFF]]` and truncates there. Harmless for chat replies,
+ * silently destructive for a JSON document that happens to mention the
+ * marker (a flow's own AI-agent system prompt legitimately can).
+ *
+ * Throws `AiError` on any provider/network failure.
  */
-export async function generateReply(args: GenerateArgs): Promise<GenerateResult> {
+export async function generateRawText(
+  args: GenerateArgs
+): Promise<{ text: string; usage: AiUsage | null }> {
   const { config, systemPrompt, messages } = args
-  const timeoutMs = aiRequestTimeoutMs()
   const providerArgs = {
     apiKey: config.apiKey,
     model: config.model,
     systemPrompt,
     messages,
-    timeoutMs,
+    timeoutMs: args.timeoutMs ?? aiRequestTimeoutMs(),
+    maxOutputTokens: args.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
   }
 
   let result: { text: string; usage: AiUsage | null }
@@ -72,6 +94,16 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
       })
   }
 
+  return result
+}
+
+/**
+ * Generate the next reply from the account's configured provider, then
+ * parse the handoff sentinel out of the raw text. Throws `AiError` on
+ * any provider/network failure.
+ */
+export async function generateReply(args: GenerateArgs): Promise<GenerateResult> {
+  const result = await generateRawText(args)
   return parseGeneration(result.text, result.usage)
 }
 

@@ -1,22 +1,26 @@
-import { NextResponse } from 'next/server'
-import type { SupabaseClient } from '@supabase/supabase-js'
-import { createClient } from '@/lib/supabase/server'
-import { decrypt } from '@/lib/whatsapp/encryption'
-import { submitMessageTemplate } from '@/lib/whatsapp/meta-api'
+import { NextResponse } from 'next/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/server';
+import { decrypt } from '@/lib/whatsapp/encryption';
+import { submitMessageTemplate } from '@/lib/whatsapp/meta-api';
 import {
   validateTemplatePayload,
   type TemplatePayload,
-} from '@/lib/whatsapp/template-validators'
-import { buildMetaTemplatePayload } from '@/lib/whatsapp/template-components'
+} from '@/lib/whatsapp/template-validators';
+import { buildMetaTemplatePayload } from '@/lib/whatsapp/template-components';
 import {
   ensureCarouselCardHandles,
   ensureMediaHeaderHandle,
-} from '@/lib/whatsapp/template-header-handle'
+} from '@/lib/whatsapp/template-header-handle';
 import {
   deriveFlatColumns,
   type TemplateComponent,
-} from '@/lib/whatsapp/template-definition'
-import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
+} from '@/lib/whatsapp/template-definition';
+import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize';
+import {
+  describeTemplateFailure,
+  templateFailureBody,
+} from '@/lib/whatsapp/template-error';
 
 /**
  * Shared upsert payload builder — both the Meta-failure path and the
@@ -28,22 +32,22 @@ import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
  * reopen the right form instead of re-deriving it from components.
  */
 function resolveTemplateType(payload: TemplatePayload) {
-  if (payload.category === 'Authentication') return 'authentication'
+  if (payload.category === 'Authentication') return 'authentication';
   // Checked before the rest because an order-status template's components
   // are indistinguishable from a plain Utility template's — the
   // sub_category is the only signal, and losing it here would reopen the
   // template in the wrong editor.
-  if (payload.sub_category === 'ORDER_STATUS') return 'order_status'
+  if (payload.sub_category === 'ORDER_STATUS') return 'order_status';
   if (payload.sub_category === 'CALL_PERMISSION_REQUEST') {
-    return 'calling_permission_request'
+    return 'calling_permission_request';
   }
-  if (payload.catalog) return 'catalogue'
-  if (payload.mpm) return 'multi_product'
-  if (payload.order_details) return 'order_details'
-  if (payload.offer) return 'limited_time_offer'
-  if (payload.cards && payload.cards.length > 0) return 'carousel'
-  if (payload.flow) return 'flows'
-  return 'default'
+  if (payload.catalog) return 'catalogue';
+  if (payload.mpm) return 'multi_product';
+  if (payload.order_details) return 'order_details';
+  if (payload.offer) return 'limited_time_offer';
+  if (payload.cards && payload.cards.length > 0) return 'carousel';
+  if (payload.flow) return 'flows';
+  return 'default';
 }
 
 function buildUpsertRow(
@@ -51,12 +55,12 @@ function buildUpsertRow(
   userId: string,
   payload: TemplatePayload,
   extras: {
-    status: 'DRAFT' | string
-    metaTemplateId: string | null
-    submissionError: string | null
+    status: 'DRAFT' | string;
+    metaTemplateId: string | null;
+    submissionError: string | null;
     /** Exactly what was (or would be) POSTed to Meta. */
-    components: unknown[]
-  },
+    components: unknown[];
+  }
 ) {
   return {
     // Account tenancy — required NOT NULL on message_templates as
@@ -78,7 +82,25 @@ function buildUpsertRow(
     // payload at all.
     components: extras.components,
     template_type: resolveTemplateType(payload),
-    parameter_format: 'POSITIONAL',
+    // Read from the payload, NOT hardcoded.
+    //
+    // This was pinned to 'POSITIONAL' for every template, including
+    // NAMED ones. Meta itself received the right thing —
+    // `buildMetaTemplatePayload` sets `parameter_format: 'NAMED'` and
+    // emits `body_text_named_params` — so creation and review worked.
+    // The damage was to OUR row, and it surfaced later at SEND time:
+    // `template-send-builder.ts` branches on this column, so a template
+    // Meta knows as NAMED got a positional parameter array built for it,
+    // which Meta rejects with "The parameter name is required" (the exact
+    // error template-components.ts warns about). Broadcast and inbox
+    // variable inputs read the same column and were wrong too.
+    //
+    // It self-healed on "Sync from Meta", which reads the real value back
+    // — which is why existing named templates in the DB look correct and
+    // the bug stayed hidden: it only bit between submitting a named
+    // template and the next sync.
+    parameter_format:
+      payload.parameter_format === 'NAMED' ? 'NAMED' : 'POSITIONAL',
     message_send_ttl_seconds: payload.message_send_ttl_seconds ?? null,
     // ---- Derived cache of the above (see template-definition.ts).
     ...deriveFlatColumns({
@@ -86,7 +108,8 @@ function buildUpsertRow(
       category: payload.category,
       language: payload.language,
       template_type: resolveTemplateType(payload),
-      parameter_format: 'POSITIONAL',
+      parameter_format:
+        payload.parameter_format === 'NAMED' ? 'NAMED' : 'POSITIONAL',
       components: extras.components as TemplateComponent[],
     }),
     status: extras.status,
@@ -96,12 +119,12 @@ function buildUpsertRow(
     // webhook will set it again if Meta still rejects.
     rejection_reason: extras.submissionError ? null : null,
     last_submitted_at: new Date().toISOString(),
-  }
+  };
 }
 
 async function upsertTemplateRow(
   supabase: SupabaseClient,
-  row: ReturnType<typeof buildUpsertRow>,
+  row: ReturnType<typeof buildUpsertRow>
 ) {
   // Conflict target must match the unique index from migration 060.
   // Account-scoped, because Meta allows exactly one template per
@@ -113,7 +136,7 @@ async function upsertTemplateRow(
     .from('message_templates')
     .upsert(row, { onConflict: 'account_id,name,language' })
     .select()
-    .single()
+    .single();
 }
 
 /**
@@ -132,13 +155,13 @@ async function upsertTemplateRow(
  */
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
+    const supabase = await createClient();
     const {
       data: { user },
       error: authError,
-    } = await supabase.auth.getUser()
+    } = await supabase.auth.getUser();
     if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Resolve the caller's account_id — whatsapp_config + the
@@ -147,20 +170,23 @@ export async function POST(request: Request) {
       .from('profiles')
       .select('account_id')
       .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
+      .maybeSingle();
+    const accountId = profile?.account_id as string | undefined;
     if (!accountId) {
       return NextResponse.json(
         { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
+        { status: 403 }
+      );
     }
 
-    let payload: TemplatePayload
+    let payload: TemplatePayload;
     try {
-      payload = (await request.json()) as TemplatePayload
+      payload = (await request.json()) as TemplatePayload;
     } catch {
-      return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 })
+      return NextResponse.json(
+        { error: 'Invalid JSON body.' },
+        { status: 400 }
+      );
     }
 
     // AUTHENTICATION used to be rejected here. It is supported now — the
@@ -172,38 +198,38 @@ export async function POST(request: Request) {
     // cannot check that from here, so a rejection surfaces as Meta's own
     // error message rather than something we invent.
     try {
-      validateTemplatePayload(payload)
+      validateTemplatePayload(payload);
     } catch (e) {
       return NextResponse.json(
         { error: e instanceof Error ? e.message : 'Validation failed.' },
-        { status: 400 },
-      )
+        { status: 400 }
+      );
     }
 
     const dryRun =
       process.env.WHATSAPP_TEMPLATES_DRY_RUN === 'true' ||
-      process.env.WHATSAPP_TEMPLATES_DRY_RUN === '1'
+      process.env.WHATSAPP_TEMPLATES_DRY_RUN === '1';
 
-    let metaTemplateId: string
-    let metaStatus: string
+    let metaTemplateId: string;
+    let metaStatus: string;
 
     if (dryRun) {
-      metaTemplateId = `dry-run-${crypto.randomUUID()}`
-      metaStatus = 'PENDING'
+      metaTemplateId = `dry-run-${crypto.randomUUID()}`;
+      metaStatus = 'PENDING';
     } else {
       const { data: config, error: configError } = await supabase
         .from('whatsapp_config')
         .select('*')
         .eq('account_id', accountId)
-        .single()
+        .single();
       if (configError || !config) {
         return NextResponse.json(
           {
             error:
               'WhatsApp not configured. Connect your WhatsApp Business account in Settings first.',
           },
-          { status: 400 },
-        )
+          { status: 400 }
+        );
       }
       if (!config.waba_id) {
         return NextResponse.json(
@@ -211,11 +237,11 @@ export async function POST(request: Request) {
             error:
               'WABA (WhatsApp Business Account) ID missing. Re-connect your account in Settings.',
           },
-          { status: 400 },
-        )
+          { status: 400 }
+        );
       }
 
-      const accessToken = decrypt(config.access_token)
+      const accessToken = decrypt(config.access_token);
 
       // Media headers (image, video, document) need a Resumable-Upload
       // handle — Meta rejects a plain URL at creation. Derive it from
@@ -223,33 +249,41 @@ export async function POST(request: Request) {
       // with an actionable message (missing META_APP_ID, unreachable
       // URL, wrong type/size).
       try {
-        await ensureMediaHeaderHandle(payload, accessToken)
+        await ensureMediaHeaderHandle(payload, accessToken);
         // Carousel cards each carry their own media asset, so a 10-card
         // carousel performs 10 uploads. Sequential by design — see the
         // helper.
-        await ensureCarouselCardHandles(payload, accessToken)
+        await ensureCarouselCardHandles(payload, accessToken);
       } catch (e) {
         return NextResponse.json(
-          { error: e instanceof Error ? e.message : 'Header media upload failed.' },
-          { status: 400 },
-        )
+          {
+            error:
+              e instanceof Error ? e.message : 'Header media upload failed.',
+          },
+          { status: 400 }
+        );
       }
 
       // Recomputed here rather than reusing the outer `storedComponents`
       // because ensureMediaHeaderHandle has just mutated `payload` with a
       // fresh header handle, and the handle must be part of what Meta
       // receives.
-      const metaPayload = buildMetaTemplatePayload(payload)
+      const metaPayload = buildMetaTemplatePayload(payload);
       try {
         const meta = await submitMessageTemplate({
           wabaId: config.waba_id,
           accessToken,
           payload: metaPayload,
-        })
-        metaTemplateId = meta.id
-        metaStatus = meta.status
+        });
+        metaTemplateId = meta.id;
+        metaStatus = meta.status;
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Meta submit failed.'
+        // `describeTemplateFailure` reads MetaApiError's specific fields
+        // (error_user_msg, error_data.details, code, subcode, fbtrace_id)
+        // instead of the generic `e.message` this used to send. Meta names
+        // the offending field in `details`; discarding it was why a
+        // rejection read as an unexplained "Invalid parameter".
+        const failure = describeTemplateFailure(e, 'submit');
         // Persist the failure so the user can retry; row stays DRAFT
         // until they fix and re-submit.
         await upsertTemplateRow(
@@ -257,25 +291,19 @@ export async function POST(request: Request) {
           buildUpsertRow(accountId, user.id, payload, {
             status: 'DRAFT',
             metaTemplateId: null,
-            submissionError: message,
+            submissionError: failure.message,
             components: metaPayload.components,
-          }),
-        )
-        const isRateLimit = /\b429\b/.test(message)
-        return NextResponse.json(
-          {
-            error: isRateLimit
-              ? 'Meta rate limit hit (100 template creates per hour). Try again later.'
-              : message,
-          },
-          { status: isRateLimit ? 429 : 502 },
-        )
+          })
+        );
+        return NextResponse.json(templateFailureBody(failure), {
+          status: failure.httpStatus,
+        });
       }
     }
 
     // Built from the final payload — after any header handle was derived
     // — so what is stored is what Meta was asked to approve.
-    const storedComponents = buildMetaTemplatePayload(payload).components
+    const storedComponents = buildMetaTemplatePayload(payload).components;
 
     const { data: row, error: upsertErr } = await upsertTemplateRow(
       supabase,
@@ -284,8 +312,8 @@ export async function POST(request: Request) {
         metaTemplateId,
         submissionError: null,
         components: storedComponents,
-      }),
-    )
+      })
+    );
 
     if (upsertErr) {
       // The submit succeeded on Meta's side but we failed to persist
@@ -296,23 +324,23 @@ export async function POST(request: Request) {
           error: `Submitted to Meta but failed to save locally: ${upsertErr.message}. Run "Sync from Meta" to recover.`,
           meta_template_id: metaTemplateId,
         },
-        { status: 500 },
-      )
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({
       success: true,
       template: row,
       dry_run: dryRun,
-    })
+    });
   } catch (error) {
-    console.error('Error submitting template:', error)
+    console.error('Error submitting template:', error);
     return NextResponse.json(
       {
         error:
           error instanceof Error ? error.message : 'Failed to submit template.',
       },
-      { status: 500 },
-    )
+      { status: 500 }
+    );
   }
 }

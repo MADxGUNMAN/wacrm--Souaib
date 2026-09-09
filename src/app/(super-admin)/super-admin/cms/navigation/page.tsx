@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,13 +54,13 @@ export default function NavigationSettingsPage() {
         site_description: siteDescription
       });
       if (res.error) {
-        alert("Failed to save settings: " + res.error);
+        toast.error("Failed to save settings: " + res.error);
       } else {
-        alert("Navigation saved successfully!");
+        toast.success("Navigation saved successfully!");
         router.refresh();
       }
     } catch (err: any) {
-      alert("An error occurred while saving.");
+      toast.error("An error occurred while saving.");
     } finally {
       setIsSaving(false);
     }

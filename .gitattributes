@@ -1,0 +1,22 @@
+# Force LF on everything that a Linux server executes or parses.
+#
+# core.autocrlf=true is set on the Windows dev machine, so the working
+# copy of every text file has CRLF even though the committed blob is LF
+# (`git ls-files --eol` shows `i/lf w/crlf`). That is harmless until a file
+# is copied to the server DIRECTLY FROM THE WORKING TREE with scp instead
+# of being checked out there.
+#
+# On 20 Aug 2026 `deploy/cron-ping.sh` was about to be scp'd that way. With
+# CRLF, `#!/bin/bash\r` fails as "bad interpreter: /bin/bash^M", and
+# `BASE_URL=http://localhost:3000\r` puts a carriage return inside the URL
+# curl is given. It would have broken all three cron endpoints, not just
+# the new one, and the shebang error would have pointed at bash rather than
+# at line endings.
+#
+# `eol=lf` makes the working copy LF too, so the trap disappears whether a
+# file arrives by checkout or by scp.
+*.sh text eol=lf
+*.conf text eol=lf
+Dockerfile text eol=lf
+deploy/crontab text eol=lf
+*.sql text eol=lf

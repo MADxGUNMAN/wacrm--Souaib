@@ -25,10 +25,11 @@
  */
 
 import { useEffect, useState } from "react";
-import { GitFork, List } from "lucide-react";
+import { GitFork, List, Play } from "lucide-react";
 
 import { FlowBuilder } from "./flow-builder";
 import { FlowCanvas } from "./flow-canvas";
+import { FlowPlayground } from "./flow-playground";
 import { FlowEditorProvider } from "./flow-editor-state";
 import { EditorHeader } from "./header";
 import { ValidationPanel } from "./validation-panel";
@@ -45,7 +46,15 @@ import { useTranslations } from "next-intl";
  */
 const MOBILE_BREAKPOINT = "(max-width: 767px)";
 
-type View = "canvas" | "list";
+/**
+ * `playground` runs the flow as currently edited, in the browser, with
+ * nothing sent to WhatsApp. It sits beside canvas and list rather than
+ * behind a dialog because testing is not a one-off act: you run it,
+ * spot a dead end, switch to canvas, fix it, run it again. A modal
+ * would make that loop cost two extra clicks each time, and a separate
+ * route would drop the unsaved edits you are trying to test.
+ */
+type View = "canvas" | "list" | "playground";
 
 const STORAGE_KEY = "wacrm.flowEditor.view";
 
@@ -70,6 +79,9 @@ export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
   const [view, setView] = useState<View>(() => {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
+      // Playground is deliberately NOT restored from storage. It holds a
+      // half-finished test conversation; landing in it on a fresh page
+      // load would look like the editor failed to open the flow.
       if (saved === "canvas" || saved === "list") return saved;
     } catch {
       // Private browsing / disabled storage — fall through to default.
@@ -82,12 +94,18 @@ export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
   // intact so the user's preference comes back when they widen
   // again (e.g. rotating a tablet, resizing a window).
   const isMobile = useMatchMedia(MOBILE_BREAKPOINT);
-  const effectiveView: View = isMobile ? "list" : view;
+  // Only canvas is unusable on a phone; the playground is a chat, which
+  // is the one thing a phone is good at.
+  const effectiveView: View =
+    isMobile && view === "canvas" ? "list" : view;
 
   const choose = (next: View) => {
     setView(next);
     try {
-      window.localStorage.setItem(STORAGE_KEY, next);
+      // See the note in the initializer — the playground is per-visit.
+      if (next !== "playground") {
+        window.localStorage.setItem(STORAGE_KEY, next);
+      }
     } catch {
       // ignore
     }
@@ -102,26 +120,36 @@ export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
             Omitted entirely on mobile (canvas is unavailable there and
             the legend is lg-only), so there's no empty band above the
             stage on small screens. */}
-        {!isMobile && (
-          <div className="flex items-center gap-4 px-6 py-3.5">
-            <div
-              role="group"
-              aria-label="Editor view"
-              className="inline-flex gap-0.5 rounded-lg border border-border bg-muted p-0.5"
-            >
+        <div className="flex items-center gap-4 px-6 py-3.5">
+          <div
+            role="group"
+            aria-label="Editor view"
+            className="inline-flex gap-0.5 rounded-lg border border-border bg-muted p-0.5"
+          >
+            {!isMobile && (
               <SegButton
                 active={effectiveView === "canvas"}
                 onClick={() => choose("canvas")}
                 icon={<GitFork className="h-3.5 w-3.5" />}
                 label={t("canvasView")}
               />
-              <SegButton
-                active={effectiveView === "list"}
-                onClick={() => choose("list")}
-                icon={<List className="h-3.5 w-3.5" />}
-                label={t("listView")}
-              />
-            </div>
+            )}
+            <SegButton
+              active={effectiveView === "list"}
+              onClick={() => choose("list")}
+              icon={<List className="h-3.5 w-3.5" />}
+              label={t("listView")}
+            />
+            <SegButton
+              active={effectiveView === "playground"}
+              onClick={() => choose("playground")}
+              icon={<Play className="h-3.5 w-3.5" />}
+              label="Playground"
+            />
+          </div>
+          {/* The legend decodes the canvas hues, so it only earns its
+              space next to the canvas. */}
+          {effectiveView === "canvas" && (
             <div className="ml-auto hidden flex-wrap items-center gap-x-3.5 gap-y-1.5 lg:flex">
               {LEGEND_TYPES.map((t_type) => (
                 <span
@@ -136,13 +164,20 @@ export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
                 </span>
               ))}
             </div>
-          </div>
-        )}
+          )}
+          {effectiveView === "playground" && (
+            <p className="ml-auto hidden text-[11.5px] text-muted-foreground sm:block">
+              Runs the flow as edited right now. Nothing is sent to WhatsApp.
+            </p>
+          )}
+        </div>
 
         {/* ---- stage: the active view, owning its own overflow ---- */}
         <div className="relative mx-6 min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card-2">
           {effectiveView === "canvas" ? (
             <FlowCanvas />
+          ) : effectiveView === "playground" ? (
+            <FlowPlayground />
           ) : (
             <div className="absolute inset-0 overflow-y-auto">
               <FlowBuilder />
@@ -150,10 +185,15 @@ export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
           )}
         </div>
 
-        {/* ---- validation / activate-readiness bar ---- */}
-        <div className="px-6 pb-5 pt-3">
-          <ValidationPanel />
-        </div>
+        {/* ---- validation / activate-readiness bar ----
+            Hidden in the playground: it answers "can this be activated",
+            which is a different question from "does this conversation
+            work", and the playground needs the vertical space more. */}
+        {effectiveView !== "playground" && (
+          <div className="px-6 pb-5 pt-3">
+            <ValidationPanel />
+          </div>
+        )}
       </div>
     </FlowEditorProvider>
   );

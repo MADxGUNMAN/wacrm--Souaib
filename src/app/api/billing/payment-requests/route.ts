@@ -18,14 +18,22 @@ import { after, NextResponse } from 'next/server';
 
 import { getCurrentAccount } from '@/lib/auth/account';
 import { sendPaymentSubmittedEmail } from '@/lib/email/billing';
-import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit';
+import {
+  checkRateLimit,
+  rateLimitResponse,
+  RATE_LIMITS,
+} from '@/lib/rate-limit';
 import { supabaseAdmin } from '@/lib/auth/admin-client';
-import { requireBillingOwner, toBillingErrorResponse } from '@/lib/subscription/guard';
+import {
+  requireBillingOwner,
+  toBillingErrorResponse,
+} from '@/lib/subscription/guard';
 import {
   getPendingPaymentRequest,
   listPaymentRequestsForAccount,
   logSubscriptionEvent,
   resolveQuote,
+  toCustomerPaymentRecord,
 } from '@/lib/subscription/queries';
 import { buildReferenceNote } from '@/lib/subscription/upi';
 import {
@@ -38,25 +46,14 @@ export async function GET() {
     const ctx = await getCurrentAccount();
     const requests = await listPaymentRequestsForAccount(ctx.accountId);
 
-    // Project rather than spreading the rows: `reviewed_by_user_id` is
-    // an internal id a customer has no use for.
+    // Projected, never spread: `reviewed_by_user_id` is an internal id a
+    // customer has no use for. The projection lives in
+    // `toCustomerPaymentRecord` so this route and /api/billing/history
+    // cannot drift apart — two hand-written copies of a
+    // security-relevant projection is how an operator-only column ends
+    // up on the wire.
     return NextResponse.json({
-      requests: requests.map((r) => ({
-        id: r.id,
-        planName: r.plan_name_snapshot,
-        cycleLabel: r.cycle_label_snapshot,
-        expectedAmount: r.expected_amount,
-        paidAmount: r.paid_amount,
-        currency: r.currency,
-        transactionRef: r.transaction_ref,
-        payerName: r.payer_name,
-        status: r.status,
-        reviewNote: r.review_note,
-        reviewedAt: r.reviewed_at,
-        activatedFrom: r.activated_from,
-        activatedUntil: r.activated_until,
-        createdAt: r.created_at,
-      })),
+      requests: requests.map(toCustomerPaymentRecord),
     });
   } catch (err) {
     return toBillingErrorResponse(err);
@@ -69,7 +66,7 @@ export async function POST(request: Request) {
 
     const limit = checkRateLimit(
       `billing:submit:${ctx.accountId}`,
-      RATE_LIMITS.paymentSubmit,
+      RATE_LIMITS.paymentSubmit
     );
     if (!limit.success) return rateLimitResponse(limit);
 
@@ -95,7 +92,7 @@ export async function POST(request: Request) {
           code: 'payment_already_pending',
           pendingId: existing.id,
         },
-        { status: 409 },
+        { status: 409 }
       );
     }
 
@@ -148,7 +145,7 @@ export async function POST(request: Request) {
         if (detail.includes('txn_ref')) {
           throw new ValidationError(
             'That transaction ID has already been submitted. Check the UTR, or contact support if you think this is a mistake.',
-            'transactionRef',
+            'transactionRef'
           );
         }
         if (detail.includes('one_pending')) {
@@ -157,14 +154,14 @@ export async function POST(request: Request) {
               error: 'You already have a payment under review.',
               code: 'payment_already_pending',
             },
-            { status: 409 },
+            { status: 409 }
           );
         }
       }
       console.error('[billing] payment submission failed:', error.message);
       return NextResponse.json(
         { error: 'Could not save your payment details. Please try again.' },
-        { status: 500 },
+        { status: 500 }
       );
     }
 
@@ -218,13 +215,13 @@ export async function POST(request: Request) {
         planName: quote.planName,
         cycleLabel: quote.cycleLabel,
       },
-      { status: 201 },
+      { status: 201 }
     );
   } catch (err) {
     if (err instanceof ValidationError) {
       return NextResponse.json(
         { error: err.message, field: err.field },
-        { status: err.status },
+        { status: err.status }
       );
     }
     return toBillingErrorResponse(err);

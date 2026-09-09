@@ -710,7 +710,7 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
   }
 
   return (
-    <div className="fixed inset-0 flex flex-col bg-background">
+    <div className="fixed inset-y-0 right-0 left-0 lg:left-64 z-20 flex flex-col bg-background">
       {/* Top bar. At sub-sm widths the "Active" label is hidden and the
           switch moves to the right of the save button, so the name input
           gets maximum width. */}
@@ -718,8 +718,9 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
         <button
           type="button"
           onClick={() => router.push("/automations")}
-          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/40 text-muted-foreground transition-all hover:bg-muted hover:text-foreground hover:border-border"
           aria-label={t("backToAutomations")}
+          title={t("backToAutomations")}
         >
           <ArrowLeft className="h-4 w-4" />
         </button>

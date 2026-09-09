@@ -32,6 +32,7 @@ import {
   Download,
   ChevronDown,
   Trash2,
+  BellOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -119,6 +120,7 @@ const RECIPIENT_STATUSES: readonly RecipientStatus[] = [
   'read',
   'replied',
   'failed',
+  'skipped',
 ];
 
 /**
@@ -158,6 +160,8 @@ export default function BroadcastDetailPage() {
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  /** Recipients withheld because they opted out of marketing. */
+  const [skippedCount, setSkippedCount] = useState(0);
 
   useEffect(() => {
     async function fetchData() {
@@ -181,6 +185,19 @@ export default function BroadcastDetailPage() {
 
         if (recsError) throw recsError;
         setRecipients(recs ?? []);
+
+        // Suppressed-for-opt-out total, as an EXACT count rather than a
+        // tally of `recs`. The select above has no range, so PostgREST
+        // caps it at ~1000 rows and counting in JS would quietly
+        // undercount a large campaign. `skipped` is also absent from the
+        // broadcasts aggregate trigger by design (a respected opt-out is
+        // not a delivery failure), so there is no column to read it from.
+        const { count: skipped } = await supabase
+          .from('broadcast_recipients')
+          .select('id', { count: 'exact', head: true })
+          .eq('broadcast_id', broadcastId)
+          .eq('status', 'skipped');
+        setSkippedCount(skipped ?? 0);
       } catch (err) {
         setError(err instanceof Error ? err.message : t('notFound'));
       } finally {
@@ -304,49 +321,87 @@ export default function BroadcastDetailPage() {
           </div>
         </div>
 
-        {/* Delete — inline-confirm pattern matches the pipeline-settings
-            "Delete Pipeline" flow. Mid-send broadcasts can't be deleted
-            because orphaning in-flight Meta messages would leave the
-            funnel inconsistent. */}
-        {confirmDelete ? (
-          <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-sm">
-            <span className="text-red-300">{t('deletePrompt')}</span>
+        <div className="flex items-center gap-2">
+          {broadcast.status === 'draft' && (
+            <Button
+              onClick={() => router.push(`/broadcasts/new?draftId=${broadcast.id}`)}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 gap-1.5 shadow-xs font-medium"
+            >
+              <Send className="size-4" />
+              <span>Resume & Send Draft</span>
+            </Button>
+          )}
+
+          {/* Delete — inline-confirm pattern matches the pipeline-settings
+              "Delete Pipeline" flow. Mid-send broadcasts can't be deleted
+              because orphaning in-flight Meta messages would leave the
+              funnel inconsistent. */}
+          {confirmDelete ? (
+            <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-sm">
+              <span className="text-red-300">{t('deletePrompt')}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmDelete(false)}
+                disabled={deleting}
+                className="h-7 border-border bg-transparent text-muted-foreground hover:bg-muted"
+              >
+                {t('cancel')}
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="h-7 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? t('deleting') : t('confirm')}
+              </Button>
+            </div>
+          ) : (
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setConfirmDelete(false)}
-              disabled={deleting}
-              className="h-7 border-border bg-transparent text-muted-foreground hover:bg-muted"
+              disabled={broadcast.status === 'sending'}
+              onClick={() => setConfirmDelete(true)}
+              title={
+                broadcast.status === 'sending'
+                  ? t('cannotDeleteSending')
+                  : t('deleteHover')
+              }
+              className="border-red-500/30 bg-transparent text-red-400 hover:bg-red-500/10 disabled:opacity-40"
             >
-              {t('cancel')}
+              <Trash2 className="h-3.5 w-3.5" />
+              {t('delete')}
             </Button>
-            <Button
-              size="sm"
-              onClick={handleDelete}
-              disabled={deleting}
-              className="h-7 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
-            >
-              {deleting ? t('deleting') : t('confirm')}
-            </Button>
-          </div>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={broadcast.status === 'sending'}
-            onClick={() => setConfirmDelete(true)}
-            title={
-              broadcast.status === 'sending'
-                ? t('cannotDeleteSending')
-                : t('deleteHover')
-            }
-            className="border-red-500/30 bg-transparent text-red-400 hover:bg-red-500/10 disabled:opacity-40"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {t('delete')}
-          </Button>
-        )}
+          )}
+        </div>
       </div>
+
+      {/* Draft Alert Banner */}
+      {broadcast.status === 'draft' && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className="size-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+              <Send className="size-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">
+                Draft Broadcast Ready to Send
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5 max-w-xl">
+                This broadcast is currently saved as a draft. Click <strong>Resume & Send</strong> to review your audience, personalize template variables, and launch the broadcast.
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={() => router.push(`/broadcasts/new?draftId=${broadcast.id}`)}
+            className="bg-primary text-primary-foreground hover:bg-primary/90 gap-1.5 shrink-0"
+          >
+            <Send className="size-4" />
+            <span>Resume & Send</span>
+          </Button>
+        </div>
+      )}
 
       {/* Stats — 6 cards: Total / Sent / Delivered / Read / Replied / Failed */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -393,6 +448,26 @@ export default function BroadcastDetailPage() {
           color="bg-red-500/10 text-red-400"
         />
       </div>
+
+      {/* Shown only when something was actually withheld. A permanently
+          zero card on every broadcast would be noise, and amber rather
+          than red because respecting an opt-out is the system working.
+          This also explains the gap between Total and Sent + Failed —
+          otherwise the numbers look like they have lost recipients. */}
+      {skippedCount > 0 ? (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+          <BellOff className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+          <p className="text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">
+              {skippedCount.toLocaleString()}{' '}
+              {skippedCount === 1 ? 'recipient' : 'recipients'} skipped
+            </span>{' '}
+            because they opted out of marketing messages. They are not counted
+            as sent or failed. Utility and authentication templates still reach
+            them.
+          </p>
+        </div>
+      ) : null}
 
       <FunnelChart steps={funnelSteps} />
 

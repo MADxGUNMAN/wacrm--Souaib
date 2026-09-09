@@ -10,6 +10,18 @@ export interface ProviderArgs {
   systemPrompt: string
   messages: ChatMessage[]
   timeoutMs: number
+  /**
+   * Output cap for this one call.
+   *
+   * Was a module constant (1024) baked into every adapter, which is the
+   * right budget for a WhatsApp reply and far too small for anything
+   * structured: a task that has to emit a whole JSON document gets
+   * silently cut mid-string and the caller sees invalid JSON with no
+   * indication why. Per-call now, defaulted by `generateReply`, so the
+   * reply paths keep their tight cap and the flow-authoring agent can
+   * ask for the room it needs.
+   */
+  maxOutputTokens: number
 }
 
 /**

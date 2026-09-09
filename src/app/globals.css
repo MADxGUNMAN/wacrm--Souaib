@@ -1,6 +1,6 @@
-@import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -87,7 +87,7 @@
 /* ---- MODE: neutral surfaces ---- */
 
 :root,
-html[data-mode="dark"] {
+html[data-mode='dark'] {
   --background: oklch(0.13 0.01 260);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.18 0.01 260);
@@ -116,8 +116,8 @@ html[data-mode="dark"] {
   --sidebar-border: oklch(0.28 0.01 260);
 }
 
-html[data-mode="light"],
-[data-mode="light"] {
+html[data-mode='light'],
+[data-mode='light'] {
   --background: oklch(0.99 0.002 260);
   --foreground: oklch(0.21 0.01 260);
   --card: oklch(1 0 0);
@@ -148,7 +148,7 @@ html[data-mode="light"],
 
 /* ---- ACCENT: primary color ---- */
 
-html[data-theme="violet"] {
+html[data-theme='violet'] {
   --primary: oklch(0.526 0.247 293);
   --primary-foreground: oklch(0.985 0 0);
   --primary-hover: oklch(0.6 0.22 293);
@@ -162,21 +162,21 @@ html[data-theme="violet"] {
 }
 
 :root,
-html[data-theme="emerald"] {
-  --primary: #25D366;
+html[data-theme='emerald'] {
+  --primary: #25d366;
   --primary-foreground: #ffffff;
   --primary-hover: #20b958;
-  --primary-soft: #25D3661f; /* ~12% opacity */
-  --primary-soft-2: #25D36638; /* ~22% opacity */
-  --ring: #25D366;
-  --chart-1: #25D366;
-  --chart-2: #128C7E;
-  --sidebar-primary: #25D366;
+  --primary-soft: #25d3661f; /* ~12% opacity */
+  --primary-soft-2: #25d36638; /* ~22% opacity */
+  --ring: #25d366;
+  --chart-1: #25d366;
+  --chart-2: #128c7e;
+  --sidebar-primary: #25d366;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-ring: #25D366;
+  --sidebar-ring: #25d366;
 }
 
-html[data-theme="cobalt"] {
+html[data-theme='cobalt'] {
   --primary: oklch(0.585 0.2 254);
   --primary-foreground: oklch(0.985 0 0);
   --primary-hover: oklch(0.66 0.18 254);
@@ -190,7 +190,7 @@ html[data-theme="cobalt"] {
   --sidebar-ring: oklch(0.585 0.2 254);
 }
 
-html[data-theme="amber"] {
+html[data-theme='amber'] {
   --primary: oklch(0.745 0.16 65);
   --primary-foreground: oklch(0.18 0.03 65);
   --primary-hover: oklch(0.8 0.15 65);
@@ -204,7 +204,7 @@ html[data-theme="amber"] {
   --sidebar-ring: oklch(0.745 0.16 65);
 }
 
-html[data-theme="rose"] {
+html[data-theme='rose'] {
   --primary: oklch(0.645 0.22 16);
   --primary-foreground: oklch(0.985 0 0);
   --primary-hover: oklch(0.71 0.2 16);
@@ -230,6 +230,36 @@ html[data-theme="rose"] {
   }
 }
 
+/* Recharts & SVG Chart Interaction Cleanup: Prevents green focus outline and accidental text selection on click */
+.recharts-wrapper,
+.recharts-surface,
+.recharts-responsive-container,
+.recharts-wrapper:focus,
+.recharts-surface:focus,
+.recharts-responsive-container:focus,
+.recharts-wrapper:focus-visible,
+.recharts-surface:focus-visible,
+.recharts-responsive-container:focus-visible,
+svg.recharts-surface,
+svg.recharts-surface:focus,
+svg.recharts-surface:focus-visible,
+[tremor-id='tremor-raw'],
+[tremor-id='tremor-raw']:focus,
+[tremor-id='tremor-raw']:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.recharts-cartesian-axis text,
+.recharts-text,
+.recharts-legend-item text,
+.recharts-cartesian-axis-tick-value,
+.recharts-cartesian-axis-tick text {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  pointer-events: none;
+}
+
 /* Custom Scrollbar */
 @layer utilities {
   .scrollbar-sleek {
@@ -248,7 +278,7 @@ html[data-theme="rose"] {
     border-radius: 10px;
   }
   .scrollbar-sleek::-webkit-scrollbar-thumb:hover {
-    background: #25D366;
+    background: #25d366;
   }
 }
 
@@ -264,5 +294,72 @@ html[data-theme="rose"] {
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #25D366;
+  background: #25d366;
+}
+
+/* Autofill normalization: prevents browser autofill from breaking input backgrounds and text colors */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus,
+select:-webkit-autofill,
+select:-webkit-autofill:hover,
+select:-webkit-autofill:focus {
+  -webkit-text-fill-color: #0f172a !important;
+  -webkit-box-shadow: 0 0 0px 1000px #ffffff inset !important;
+  box-shadow: 0 0 0px 1000px #ffffff inset !important;
+  transition: background-color 5000s ease-in-out 0s;
+  border-radius: inherit;
+}
+
+html[data-mode='dark'] input:-webkit-autofill,
+html[data-mode='dark'] input:-webkit-autofill:hover,
+html[data-mode='dark'] input:-webkit-autofill:focus,
+html[data-mode='dark'] input:-webkit-autofill:active,
+.dark input:-webkit-autofill,
+.dark input:-webkit-autofill:hover,
+.dark input:-webkit-autofill:focus,
+.dark input:-webkit-autofill:active {
+  -webkit-text-fill-color: #f8fafc !important;
+  -webkit-box-shadow: 0 0 0px 1000px #1e293b inset !important;
+  box-shadow: 0 0 0px 1000px #1e293b inset !important;
+}
+
+.auth-input:-webkit-autofill,
+.auth-input:-webkit-autofill:hover,
+.auth-input:-webkit-autofill:focus,
+.auth-input:-webkit-autofill:active {
+  -webkit-text-fill-color: #0f172a !important;
+  -webkit-box-shadow: 0 0 0px 1000px #ffffff inset !important;
+  box-shadow: 0 0 0px 1000px #ffffff inset !important;
+}
+
+/* High-contrast cursor and grabber for the Inbox contact-panel resizer. */
+.contact-panel-resize-handle {
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23111827' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 5 3 12l5 7M16 5l5 7-5 7M3 12h18'/%3E%3C/svg%3E")
+      12 12,
+    col-resize;
+}
+
+.contact-panel-resize-icon {
+  color: #111827;
+  background-color: #ffffff;
+  border-color: #d1d5db;
+}
+
+html[data-mode='dark'] .contact-panel-resize-handle {
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 5 3 12l5 7M16 5l5 7-5 7M3 12h18'/%3E%3C/svg%3E")
+      12 12,
+    col-resize;
+}
+
+html[data-mode='dark'] .contact-panel-resize-icon {
+  color: #ffffff;
+  background-color: #0a0a0a;
+  border-color: #404040;
 }

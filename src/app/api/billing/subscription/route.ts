@@ -19,28 +19,38 @@
 
 import { NextResponse } from 'next/server';
 
-import { fillTemplate, formatCopyDate, ownerDisplayName } from '@/lib/subscription/copy';
-import { getBillingContext, toBillingErrorResponse } from '@/lib/subscription/guard';
+import {
+  fillTemplate,
+  formatCopyDate,
+  ownerDisplayName,
+} from '@/lib/subscription/copy';
+import {
+  getBillingContext,
+  toBillingErrorResponse,
+} from '@/lib/subscription/guard';
 import {
   getAccountOwnerContact,
   getAccountSubscription,
   getLatestPaymentRequest,
   getPendingPaymentRequest,
+  getSelectedPlan,
   getSubscriptionSettings,
 } from '@/lib/subscription/queries';
-import { formatTrialBanner } from '@/lib/subscription/status';
+import { formatTrialBadge, formatTrialBanner } from '@/lib/subscription/status';
 
 export async function GET() {
   try {
     const { ctx, state } = await getBillingContext();
 
-    const [settings, row, owner, pending, latest] = await Promise.all([
-      getSubscriptionSettings(),
-      getAccountSubscription(ctx.accountId),
-      getAccountOwnerContact(ctx.accountId),
-      getPendingPaymentRequest(ctx.accountId),
-      getLatestPaymentRequest(ctx.accountId),
-    ]);
+    const [settings, row, owner, pending, latest, selectedPlan] =
+      await Promise.all([
+        getSubscriptionSettings(),
+        getAccountSubscription(ctx.accountId),
+        getAccountOwnerContact(ctx.accountId),
+        getPendingPaymentRequest(ctx.accountId),
+        getLatestPaymentRequest(ctx.accountId),
+        getSelectedPlan(ctx.accountId),
+      ]);
 
     const isOwner = ctx.role === 'owner';
 
@@ -75,6 +85,14 @@ export async function GET() {
         billingDisabled: state.billingDisabled,
         daysLeft: state.daysLeft,
         endsAt: state.endsAt ? state.endsAt.toISOString() : null,
+        pendingWindow: state.pendingWindow
+          ? {
+              type: state.pendingWindow.type,
+              startsAt: state.pendingWindow.startsAt.toISOString(),
+              endsAt: state.pendingWindow.endsAt.toISOString(),
+              durationDays: state.pendingWindow.durationDays,
+            }
+          : null,
       },
 
       subscription: row
@@ -87,6 +105,25 @@ export async function GET() {
           }
         : null,
 
+      // ---- The plan they picked but have not paid for ----
+      //
+      // Distinct from `subscription` above, which is what they HOLD. This
+      // is what they chose on /upgrade-plan, and it is what Billing's
+      // "upcoming plan" card and the trial-end redirect both key on.
+      //
+      // Null when there is no usable choice — including when the plan or
+      // cycle has since been deleted or unpriced, which `getSelectedPlan`
+      // checks. A null here means "ask them to choose again", never
+      // "render a Pay button that cannot be honoured".
+      selectedPlan,
+
+      /**
+       * TRUE while this account still has to pick a plan before using the
+       * CRM. Only ever true for accounts created after the plan-selection
+       * migration — every pre-existing account was grandfathered out.
+       */
+      planSelectionRequired: row?.plan_selection_required === true,
+
       // Only what the screens actually render, not the whole settings
       // row — no reason to ship the UPI id to a member who cannot pay.
       copy: {
@@ -97,6 +134,25 @@ export async function GET() {
         trialBannerCta: settings.trial_banner_cta,
         freePlanLabel: settings.free_plan_label,
         freePlanSubtitle: settings.free_plan_subtitle,
+
+        // ---- Trial-first onboarding + upcoming-plan card ----
+        // Resolved here so /upgrade-plan and Settings -> Billing render
+        // the same words, and neither has to know the placeholder
+        // vocabulary. `trialBadge` is filled from `trial_days`, NOT from
+        // this account's remaining days — it describes the offer, not the
+        // account.
+        showTrialBadges: settings.show_trial_badges,
+        trialBadge: formatTrialBadge(
+          settings.trial_badge_template,
+          settings.trial_days
+        ),
+        noCardLabel: settings.no_card_label,
+        trialCtaLabel: settings.trial_cta_label,
+        trialCtaNote: settings.trial_cta_note,
+        upcomingPlanLabel: settings.upcoming_plan_label,
+        upcomingUnpaidLabel: settings.upcoming_unpaid_label,
+        payNowLabel: settings.pay_now_label,
+        changePlanLabel: settings.change_plan_label,
         expiredHeading: settings.expired_heading,
         pendingReviewMessage: settings.pending_review_message,
         supportNote: settings.support_note,

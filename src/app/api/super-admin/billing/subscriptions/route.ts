@@ -25,9 +25,12 @@ import { supabaseAdmin } from '@/lib/auth/admin-client';
 import { requireSuperAdmin } from '@/lib/super-admin/guard';
 import {
   activateSubscription,
+  expireBothWindows,
   expireNow,
+  expireWindow,
   revokeSubscription,
   setSubscriptionState,
+  setTrialEndDate,
   SubscriptionMutationError,
 } from '@/lib/subscription/activate';
 import { getGateConfig } from '@/lib/subscription/queries';
@@ -58,14 +61,17 @@ export async function GET(request: Request) {
       admin
         .from('accounts')
         .select(
-          'id, name, owner_user_id, is_banned, created_at, subscription_status, trial_started_at, trial_ends_at, subscription_plan_id, subscription_plan_name, subscription_cycle_label, subscription_started_at, subscription_ends_at, subscription_note',
+          'id, name, owner_user_id, is_banned, created_at, subscription_status, trial_started_at, trial_ends_at, subscription_plan_id, subscription_plan_name, subscription_cycle_label, subscription_started_at, subscription_ends_at, subscription_note'
         )
         .order('created_at', { ascending: false }),
       getGateConfig(),
     ]);
 
     if (accountsRes.error) {
-      return NextResponse.json({ error: accountsRes.error.message }, { status: 500 });
+      return NextResponse.json(
+        { error: accountsRes.error.message },
+        { status: 500 }
+      );
     }
 
     const allRows = accountsRes.data ?? [];
@@ -81,7 +87,7 @@ export async function GET(request: Request) {
       : { data: [] };
 
     const ownersById = new Map(
-      (owners ?? []).map((o: Record<string, unknown>) => [o.user_id, o]),
+      (owners ?? []).map((o: Record<string, unknown>) => [o.user_id, o])
     );
 
     // ---- Drop the platform's own workspaces ----
@@ -104,8 +110,7 @@ export async function GET(request: Request) {
     // problem and must stay visible rather than being silently hidden.
     const rows = allRows.filter((row) => {
       const owner = ownersById.get(row.owner_user_id) as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       return owner?.is_super_admin !== true;
     });
 
@@ -113,8 +118,7 @@ export async function GET(request: Request) {
     let subscribers = rows.map((row) => {
       const state = resolveSubscriptionState(row, config, now);
       const owner = ownersById.get(row.owner_user_id) as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
 
       return {
         accountId: row.id,
@@ -139,6 +143,14 @@ export async function GET(request: Request) {
         subscriptionStartedAt: row.subscription_started_at,
         subscriptionEndsAt: row.subscription_ends_at,
         note: row.subscription_note,
+        pendingWindow: state.pendingWindow
+          ? {
+              type: state.pendingWindow.type,
+              startsAt: state.pendingWindow.startsAt.toISOString(),
+              endsAt: state.pendingWindow.endsAt.toISOString(),
+              durationDays: state.pendingWindow.durationDays,
+            }
+          : null,
       };
     });
 
@@ -155,7 +167,7 @@ export async function GET(request: Request) {
         (s) =>
           s.accountName?.toLowerCase().includes(needle) ||
           s.ownerName?.toLowerCase().includes(needle) ||
-          s.ownerEmail?.toLowerCase().includes(needle),
+          s.ownerEmail?.toLowerCase().includes(needle)
       );
     }
 
@@ -179,7 +191,10 @@ export async function GET(request: Request) {
   } catch (err) {
     if (err instanceof NextResponse) return err;
     console.error('[super-admin/billing/subscriptions] GET failed:', err);
-    return NextResponse.json({ error: 'Failed to load subscribers' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to load subscribers' },
+      { status: 500 }
+    );
   }
 }
 
@@ -191,10 +206,15 @@ export async function PATCH(request: Request) {
     const accountId = typeof body.accountId === 'string' ? body.accountId : '';
     const action = typeof body.action === 'string' ? body.action : '';
     const note =
-      typeof body.note === 'string' && body.note.trim() ? body.note.trim() : null;
+      typeof body.note === 'string' && body.note.trim()
+        ? body.note.trim()
+        : null;
 
     if (!accountId) {
-      return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'accountId is required' },
+        { status: 400 }
+      );
     }
 
     switch (action) {
@@ -206,7 +226,7 @@ export async function PATCH(request: Request) {
         if (!duration) {
           return NextResponse.json(
             { error: 'Specify durationMonths or durationDays' },
-            { status: 400 },
+            { status: 400 }
           );
         }
 
@@ -214,7 +234,8 @@ export async function PATCH(request: Request) {
           accountId,
           planId: typeof body.planId === 'string' ? body.planId : null,
           planName: typeof body.planName === 'string' ? body.planName : null,
-          cycleLabel: typeof body.cycleLabel === 'string' ? body.cycleLabel : null,
+          cycleLabel:
+            typeof body.cycleLabel === 'string' ? body.cycleLabel : null,
           duration,
           actorUserId: adminCtx.userId,
           note,
@@ -227,15 +248,23 @@ export async function PATCH(request: Request) {
         });
       }
 
-      // Set an exact end date, for negotiated or corrected terms.
+      // Set an exact end date, for negotiated or corrected terms. No
+      // duration is recorded on purpose — the operator chose a date, not a
+      // span, and inventing "+37 days" would misreport the intent.
       case 'set_end_date': {
         const raw = typeof body.endsAt === 'string' ? body.endsAt : '';
         if (!raw) {
-          return NextResponse.json({ error: 'endsAt is required' }, { status: 400 });
+          return NextResponse.json(
+            { error: 'endsAt is required' },
+            { status: 400 }
+          );
         }
         const endsAt = new Date(raw);
         if (Number.isNaN(endsAt.getTime())) {
-          return NextResponse.json({ error: 'endsAt is not a valid date' }, { status: 400 });
+          return NextResponse.json(
+            { error: 'endsAt is not a valid date' },
+            { status: 400 }
+          );
         }
         if (endsAt.getTime() <= Date.now()) {
           // A past end date would block the customer instantly — if
@@ -246,7 +275,7 @@ export async function PATCH(request: Request) {
                 'That end date is in the past, which would block the account immediately. Use Revoke if that is what you intend.',
               field: 'endsAt',
             },
-            { status: 400 },
+            { status: 400 }
           );
         }
 
@@ -254,8 +283,10 @@ export async function PATCH(request: Request) {
           accountId,
           status: 'active',
           endsAt,
-          planName: typeof body.planName === 'string' ? body.planName : undefined,
-          cycleLabel: typeof body.cycleLabel === 'string' ? body.cycleLabel : undefined,
+          planName:
+            typeof body.planName === 'string' ? body.planName : undefined,
+          cycleLabel:
+            typeof body.cycleLabel === 'string' ? body.cycleLabel : undefined,
           actorUserId: adminCtx.userId,
           note,
         });
@@ -267,42 +298,84 @@ export async function PATCH(request: Request) {
         const days = Number(body.durationDays);
         if (!Number.isInteger(days) || days <= 0 || days > 3650) {
           return NextResponse.json(
-            { error: 'durationDays must be a whole number between 1 and 3650', field: 'durationDays' },
-            { status: 400 },
+            {
+              error: 'durationDays must be a whole number between 1 and 3650',
+              field: 'durationDays',
+            },
+            { status: 400 }
           );
         }
-        // Extend from the later of now and the existing trial end, so a
-        // top-up on a live trial adds days instead of shortening it.
+
         const admin = supabaseAdmin();
         const { data: current } = await admin
           .from('accounts')
-          .select('trial_ends_at')
+          .select('trial_ends_at, subscription_ends_at, subscription_status')
           .eq('id', accountId)
           .maybeSingle();
 
-        const base =
-          current?.trial_ends_at && new Date(current.trial_ends_at) > new Date()
-            ? new Date(current.trial_ends_at)
-            : new Date();
-        const trialEndsAt = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+        const nowMs = Date.now();
+        const paidEnd = current?.subscription_ends_at
+          ? new Date(current.subscription_ends_at)
+          : null;
+        const paidIsOpen =
+          paidEnd !== null &&
+          paidEnd.getTime() > nowMs &&
+          current?.subscription_status === 'active';
 
+        // ---- Window-stacking ----
+        // If a paid subscription is active, queue the trial AFTER it.
+        // Otherwise, extend from the later of now and the existing trial.
+        let base: Date;
+        if (paidIsOpen) {
+          // Queue behind the paid window. If a trial is already queued
+          // after the paid end, extend from that instead.
+          const existingTrialEnd = current?.trial_ends_at
+            ? new Date(current.trial_ends_at)
+            : null;
+          base =
+            existingTrialEnd && existingTrialEnd.getTime() > paidEnd!.getTime()
+              ? existingTrialEnd
+              : paidEnd!;
+        } else {
+          // No active paid window — extend from now or existing trial.
+          base =
+            current?.trial_ends_at &&
+            new Date(current.trial_ends_at) > new Date()
+              ? new Date(current.trial_ends_at)
+              : new Date();
+        }
+
+        const trialEndsAt = new Date(
+          base.getTime() + days * 24 * 60 * 60 * 1000
+        );
+
+        // When a paid window is open, keep the status as 'active' so
+        // the resolver shows the user in their paid window, with the
+        // trial exposed as a pendingWindow.
         await setSubscriptionState({
           accountId,
-          status: 'trialing',
+          status: paidIsOpen ? 'active' : 'trialing',
           trialEndsAt,
           actorUserId: adminCtx.userId,
-          note,
+          note: paidIsOpen
+            ? (note ??
+              `${days} trial day(s) queued after subscription (starts ${paidEnd!.toISOString().slice(0, 10)})`)
+            : note,
+          durationDays: days,
         });
 
-        return NextResponse.json({ trialEndsAt: trialEndsAt.toISOString() });
+        return NextResponse.json({
+          trialEndsAt: trialEndsAt.toISOString(),
+          queuedBehindPaid: paidIsOpen,
+        });
       }
 
       // End the current window through the natural date path — the
       // faithful simulation of the day a trial or subscription runs out.
-      // Handles both; see expireNow(). `expire_trial` is accepted as an
-      // alias so any saved request or bookmark keeps working.
-      case 'expire_now':
-      case 'expire_trial': {
+      // Auto-detects which window is primary; see expireNow(). Kept for
+      // the common single-window case and for any saved request that
+      // still sends it.
+      case 'expire_now': {
         const result = await expireNow({
           accountId,
           actorUserId: adminCtx.userId,
@@ -314,8 +387,81 @@ export async function PATCH(request: Request) {
         });
       }
 
+      // Explicit, window-specific expiry. Unlike `expire_now`, the
+      // caller names which window to end — needed once an account can
+      // have BOTH a trial and a queued/active paid window at the same
+      // time, where auto-detection can pick the wrong one.
+      case 'expire_trial':
+      case 'expire_paid': {
+        const result = await expireWindow({
+          accountId,
+          which: action === 'expire_trial' ? 'trial' : 'paid',
+          actorUserId: adminCtx.userId,
+          note,
+        });
+        return NextResponse.json({
+          which: result.which,
+          endsAt: result.endsAt.toISOString(),
+        });
+      }
+
+      // End trial AND paid access at once — e.g. shutting a workspace
+      // down entirely rather than just letting one window lapse.
+      case 'expire_both': {
+        const result = await expireBothWindows({
+          accountId,
+          actorUserId: adminCtx.userId,
+          note,
+        });
+        return NextResponse.json({ endsAt: result.endsAt.toISOString() });
+      }
+
+      // Correct the trial's end date directly — the trial-side
+      // counterpart of `set_end_date`, which only ever touched the paid
+      // window's date.
+      case 'set_trial_end_date': {
+        const raw =
+          typeof body.trialEndsAt === 'string' ? body.trialEndsAt : '';
+        if (!raw) {
+          return NextResponse.json(
+            { error: 'trialEndsAt is required' },
+            { status: 400 }
+          );
+        }
+        const trialEndsAt = new Date(raw);
+        if (Number.isNaN(trialEndsAt.getTime())) {
+          return NextResponse.json(
+            { error: 'trialEndsAt is not a valid date' },
+            { status: 400 }
+          );
+        }
+        if (trialEndsAt.getTime() <= Date.now()) {
+          return NextResponse.json(
+            {
+              error:
+                'That date is in the past, which would end the trial immediately. Use Expire trial if that is what you intend.',
+              field: 'trialEndsAt',
+            },
+            { status: 400 }
+          );
+        }
+
+        await setTrialEndDate({
+          accountId,
+          trialEndsAt,
+          actorUserId: adminCtx.userId,
+          note,
+        });
+
+        return NextResponse.json({ trialEndsAt: trialEndsAt.toISOString() });
+      }
+
       case 'revoke': {
-        await revokeSubscription({ accountId, actorUserId: adminCtx.userId, note });
+        await revokeSubscription({
+          accountId,
+          actorUserId: adminCtx.userId,
+          note,
+        });
         return NextResponse.json({ success: true });
       }
 
@@ -326,7 +472,7 @@ export async function PATCH(request: Request) {
         if (!VALID_STATUSES.includes(status as SubscriptionStatus)) {
           return NextResponse.json(
             { error: `status must be one of: ${VALID_STATUSES.join(', ')}` },
-            { status: 400 },
+            { status: 400 }
           );
         }
         await setSubscriptionState({
@@ -342,9 +488,9 @@ export async function PATCH(request: Request) {
         return NextResponse.json(
           {
             error:
-              "action must be one of: grant, set_end_date, extend_trial, expire_now, revoke, set_status",
+              'action must be one of: grant, set_end_date, set_trial_end_date, extend_trial, expire_now, expire_trial, expire_paid, expire_both, revoke, set_status',
           },
-          { status: 400 },
+          { status: 400 }
         );
     }
   } catch (err) {
@@ -353,9 +499,15 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     if (err instanceof ValidationError) {
-      return NextResponse.json({ error: err.message, field: err.field }, { status: 400 });
+      return NextResponse.json(
+        { error: err.message, field: err.field },
+        { status: 400 }
+      );
     }
     console.error('[super-admin/billing/subscriptions] PATCH failed:', err);
-    return NextResponse.json({ error: 'Failed to update the subscription' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to update the subscription' },
+      { status: 500 }
+    );
   }
 }

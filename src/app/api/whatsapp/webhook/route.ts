@@ -1,19 +1,25 @@
-import { NextResponse, after } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
-import { normalizePhone } from '@/lib/whatsapp/phone-utils'
-import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
-import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
-import { parseFlowResponse } from '@/lib/whatsapp/flow-response'
-import { runAutomationsForTrigger } from '@/lib/automations/engine'
-import { dispatchInboundToFlows } from '@/lib/flows/engine'
-import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
-import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
+import { NextResponse, after } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
+import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api';
+import { normalizePhone } from '@/lib/whatsapp/phone-utils';
+import { normalizeContentType } from '@/lib/whatsapp/content-types';
+import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
+import {
+  betterContactName,
+  isPlaceholderName,
+} from '@/lib/contacts/placeholder-name';
+import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature';
+import { parseFlowResponse } from '@/lib/whatsapp/flow-response';
+import { runAutomationsForTrigger } from '@/lib/automations/engine';
+import { dispatchInboundToFlows } from '@/lib/flows/engine';
+import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
+import { handleInboundOptOutKeyword } from '@/lib/whatsapp/opt-out-inbound';
+import { dispatchWebhookEvent } from '@/lib/webhooks/deliver';
 import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
-} from '@/lib/whatsapp/template-webhook'
+} from '@/lib/whatsapp/template-webhook';
 import {
   historyStatusToMessageStatus,
   isAccountUpdateField,
@@ -27,40 +33,88 @@ import {
   parseRevoke,
   type HistoryThread,
   type MessageEcho,
-} from '@/lib/whatsapp/coexistence'
+} from '@/lib/whatsapp/coexistence';
 
 // The `after()` callback in POST runs within this route's max duration.
 // Inbound processing can fan out to per-media Meta verification calls, so
 // give it headroom beyond the platform default (Vercel clamps this to the
 // plan's ceiling). Tune as needed.
-export const maxDuration = 60
+export const maxDuration = 60;
 
 // Lazy-initialized to avoid build-time crash when env vars are missing
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _adminClient: any = null
+let _adminClient: any = null;
 function supabaseAdmin() {
   if (!_adminClient) {
     _adminClient = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
+    );
   }
-  return _adminClient
+  return _adminClient;
 }
 
 interface WhatsAppMessage {
-  id: string
-  from: string
-  timestamp: string
-  type: string
-  text?: { body: string }
-  image?: { id: string; mime_type: string; caption?: string }
-  video?: { id: string; mime_type: string; caption?: string }
-  document?: { id: string; mime_type: string; filename?: string; caption?: string }
-  audio?: { id: string; mime_type: string }
-  sticker?: { id: string; mime_type: string }
-  location?: { latitude: number; longitude: number; name?: string; address?: string }
-  reaction?: { message_id: string; emoji: string }
+  id: string;
+  from: string;
+  timestamp: string;
+  type: string;
+  text?: { body: string };
+  image?: { id: string; mime_type: string; caption?: string };
+  video?: { id: string; mime_type: string; caption?: string };
+  document?: {
+    id: string;
+    mime_type: string;
+    filename?: string;
+    caption?: string;
+  };
+  audio?: { id: string; mime_type: string };
+  sticker?: { id: string; mime_type: string };
+  location?: {
+    latitude: number;
+    longitude: number;
+    name?: string;
+    address?: string;
+  };
+  contacts?: Array<{
+    addresses?: Array<{
+      city?: string;
+      country?: string;
+      country_code?: string;
+      state?: string;
+      street?: string;
+      type?: string;
+      zip?: string;
+    }>;
+    birthday?: string;
+    emails?: Array<{ email?: string; type?: string }>;
+    name: {
+      formatted_name: string;
+      first_name?: string;
+      last_name?: string;
+      middle_name?: string;
+      prefix?: string;
+      suffix?: string;
+    };
+    org?: { company?: string; department?: string; title?: string };
+    phones?: Array<{ phone?: string; type?: string; wa_id?: string }>;
+    urls?: Array<{ url?: string; type?: string }>;
+  }>;
+  reaction?: { message_id: string; emoji: string };
+  /**
+   * Set when the customer taps a QUICK-REPLY button on a TEMPLATE message.
+   *
+   * Easy to confuse with `interactive` below, and that confusion was the
+   * bug: Meta uses `interactive` for interactive-message buttons and list
+   * rows, but plain `button` for template quick replies. This field was
+   * missing from the type altogether, so template button taps fell to the
+   * default branch and were stored as "[Unsupported message type: button]"
+   * — discarding the option the customer actually chose.
+   *
+   * `text` is the visible label; `payload` is the value defined on the
+   * template, which is what automations should route on.
+   */
+  button?: { payload?: string; text?: string };
   /**
    * Set when the customer taps a button or list row on an interactive
    * message we sent. `button_reply.id` / `list_reply.id` is whatever id
@@ -68,9 +122,9 @@ interface WhatsAppMessage {
    * to advance the per-contact run.
    */
   interactive?: {
-    type: 'button_reply' | 'list_reply' | 'nfm_reply'
-    button_reply?: { id: string; title: string }
-    list_reply?: { id: string; title: string; description?: string }
+    type: 'button_reply' | 'list_reply' | 'nfm_reply';
+    button_reply?: { id: string; title: string };
+    list_reply?: { id: string; title: string; description?: string };
     /**
      * A completed META WhatsApp Flow — the multi-screen form opened by a
      * template's FLOW button. (Not this app's own Flows engine, which
@@ -79,50 +133,73 @@ interface WhatsAppMessage {
      * `response_json` is a JSON STRING, not an object, and contains the
      * flow_token we sent plus one entry per answered field.
      */
-    nfm_reply?: { response_json?: string; body?: string; name?: string }
-  }
+    nfm_reply?: { response_json?: string; body?: string; name?: string };
+  };
   /** Present when the customer swipe-replies to one of our messages. */
-  context?: { id: string }
+  context?: { id: string };
 }
 
 interface WhatsAppWebhookEntry {
-  id: string
+  id: string;
   changes: Array<{
     value: {
-      messaging_product: string
+      messaging_product: string;
       metadata: {
-        display_phone_number: string
-        phone_number_id: string
-      }
+        display_phone_number: string;
+        phone_number_id: string;
+      };
       contacts?: Array<{
-        profile: { name: string }
-        wa_id: string
-      }>
-      messages?: WhatsAppMessage[]
+        profile: { name: string };
+        wa_id: string;
+      }>;
+      messages?: WhatsAppMessage[];
       statuses?: Array<{
-        id: string
-        status: string
-        timestamp: string
-        recipient_id: string
-      }>
-    }
-    field: string
-  }>
+        id: string;
+        status: string;
+        timestamp: string;
+        recipient_id: string;
+        /**
+         * ONLY present when `status === 'failed'`, and the sole place Meta
+         * ever states why.
+         *
+         * This field was missing from the type, so the reason was being
+         * dropped on the floor: `handleStatusUpdate` wrote `{ status }` and
+         * nothing else. That is how a message ends up permanently marked
+         * failed with no recorded cause.
+         *
+         * It matters because a delivery-time failure is INVISIBLE at send
+         * time — Meta accepts the message, returns a wamid, and only later
+         * decides not to deliver it (marketing throttling, recipient
+         * opt-out, undeliverable handset). Nothing in the send response
+         * hints at it, so if this array is ignored the reason is gone for
+         * good.
+         */
+        errors?: Array<{
+          code?: number;
+          title?: string;
+          message?: string;
+          error_data?: { details?: string };
+          href?: string;
+        }>;
+      }>;
+    };
+    field: string;
+  }>;
 }
 
 // GET - Webhook verification
 export async function GET(request: Request) {
   try {
-    const { searchParams } = new URL(request.url)
-    const mode = searchParams.get('hub.mode')
-    const challenge = searchParams.get('hub.challenge')
-    const verifyToken = searchParams.get('hub.verify_token')
+    const { searchParams } = new URL(request.url);
+    const mode = searchParams.get('hub.mode');
+    const challenge = searchParams.get('hub.challenge');
+    const verifyToken = searchParams.get('hub.verify_token');
 
     if (mode !== 'subscribe' || !challenge || !verifyToken) {
       return NextResponse.json(
         { error: 'Missing verification parameters' },
         { status: 400 }
-      )
+      );
     }
 
     // App-level verify token (App Dashboard → WhatsApp → Configuration →
@@ -135,38 +212,38 @@ export async function GET(request: Request) {
     // legacy manual-entry form), so without this check the per-account
     // loop below has nothing to match against and dashboard verification
     // fails for every Embedded-Signup-only deployment.
-    const appVerifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN
+    const appVerifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN;
     if (appVerifyToken && verifyToken === appVerifyToken) {
       return new Response(challenge, {
         status: 200,
         headers: { 'Content-Type': 'text/plain' },
-      })
+      });
     }
 
     // Fetch all whatsapp configs to check verify tokens
     const { data: configs, error: configError } = await supabaseAdmin()
       .from('whatsapp_config')
-      .select('id, verify_token')
+      .select('id, verify_token');
 
     if (configError || !configs) {
-      console.error('Error fetching configs for verification:', configError)
+      console.error('Error fetching configs for verification:', configError);
       return NextResponse.json(
         { error: 'Verification failed' },
         { status: 403 }
-      )
+      );
     }
 
     // Check if any config's verify_token matches. Also collect the
     // matching row so we can opportunistically upgrade its token to
     // GCM if it was still in the legacy CBC format.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let matchedConfig: any = null
+    let matchedConfig: any = null;
     for (const config of configs) {
-      if (!config.verify_token) continue
+      if (!config.verify_token) continue;
       try {
         if (decrypt(config.verify_token) === verifyToken) {
-          matchedConfig = config
-          break
+          matchedConfig = config;
+          break;
         }
       } catch {
         // Malformed / wrong-key token row — skip it and keep checking.
@@ -185,28 +262,28 @@ export async function GET(request: Request) {
             if (error) {
               console.warn(
                 '[webhook] verify_token GCM upgrade failed:',
-                (error as { message?: string })?.message ?? error,
-              )
+                (error as { message?: string })?.message ?? error
+              );
             }
-          })
+          });
       }
       // Return challenge as plain text
       return new Response(challenge, {
         status: 200,
         headers: { 'Content-Type': 'text/plain' },
-      })
+      });
     }
 
     return NextResponse.json(
       { error: 'Verification token mismatch' },
       { status: 403 }
-    )
+    );
   } catch (error) {
-    console.error('Error in webhook GET verification:', error)
+    console.error('Error in webhook GET verification:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
-    )
+    );
   }
 }
 
@@ -214,22 +291,22 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   // Read raw body first so we can HMAC-verify the exact bytes Meta
   // signed. request.json() would re-encode and break the signature.
-  const rawBody = await request.text()
-  const signature = request.headers.get('x-hub-signature-256')
+  const rawBody = await request.text();
+  const signature = request.headers.get('x-hub-signature-256');
 
   if (!verifyMetaWebhookSignature(rawBody, signature)) {
     // 401 (not 200) — we want Meta's delivery dashboard to show failures
     // loudly if a misconfiguration causes signatures to stop matching,
     // rather than silently eating events.
-    console.warn('[webhook] rejected request with invalid signature')
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+    console.warn('[webhook] rejected request with invalid signature');
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
   }
 
-  let body: { entry?: WhatsAppWebhookEntry[] }
+  let body: { entry?: WhatsAppWebhookEntry[] };
   try {
-    body = JSON.parse(rawBody)
+    body = JSON.parse(rawBody);
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
   // Process AFTER the response so we ack Meta within their ~20s timeout
@@ -248,17 +325,17 @@ export async function POST(request: Request) {
   // maxDuration).
   after(async () => {
     try {
-      await processWebhook(body)
+      await processWebhook(body);
     } catch (error) {
-      console.error('Error processing webhook:', error)
+      console.error('Error processing webhook:', error);
     }
-  })
+  });
 
-  return NextResponse.json({ status: 'received' }, { status: 200 })
+  return NextResponse.json({ status: 'received' }, { status: 200 });
 }
 
 async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
-  if (!body.entry) return
+  if (!body.entry) return;
 
   for (const entry of body.entry) {
     for (const change of entry.changes) {
@@ -270,12 +347,12 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       if (isTemplateWebhookField(change.field)) {
         await handleTemplateWebhookChange(
           { field: change.field, value: change.value as unknown },
-          supabaseAdmin(),
-        )
-        continue
+          supabaseAdmin()
+        );
+        continue;
       }
 
-      const value = change.value
+      const value = change.value;
 
       // ── Account lifecycle ────────────────────────────────────
       // How Meta reports a BROKEN coexistence pairing (and other
@@ -283,8 +360,8 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       // because its `value` carries no metadata.phone_number_id, so it
       // resolves tenancy by waba_id instead.
       if (isAccountUpdateField(change.field)) {
-        await handleAccountUpdate(entry.id, value as unknown)
-        continue
+        await handleAccountUpdate(entry.id, value as unknown);
+        continue;
       }
 
       // ── Coexistence: messages sent from the WhatsApp Business App ──
@@ -293,14 +370,14 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       // !value.contacts) continue` gate dropped every one of them
       // silently. See @/lib/whatsapp/coexistence.
       if (isCoexistenceWebhookField(change.field)) {
-        await handleCoexistenceChange(change.field, value as unknown)
-        continue
+        await handleCoexistenceChange(change.field, value as unknown);
+        continue;
       }
 
       // Handle status updates
       if (value.statuses) {
         for (const status of value.statuses) {
-          await handleStatusUpdate(status)
+          await handleStatusUpdate(status);
         }
       }
 
@@ -313,22 +390,32 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       if (!value.messages || !value.contacts) {
         if (!value.statuses) {
           console.warn(
-            `[webhook] unhandled change.field "${change.field}" — no messages/contacts/statuses in payload`,
-          )
+            `[webhook] unhandled change.field "${change.field}" — no messages/contacts/statuses in payload`
+          );
         }
-        continue
+        continue;
       }
 
       const config = await resolveConfigByPhoneNumberId(
-        value.metadata.phone_number_id,
-      )
-      if (!config) continue
+        value.metadata.phone_number_id
+      );
+      if (!config) continue;
 
-      const decryptedAccessToken = decrypt(config.access_token)
+      // Every webhook carries the real number in its metadata, and we
+      // used to throw it away — which is why the UI had nothing to show
+      // but the phone_number_id. Recording it here makes the value
+      // self-healing: any account that misses it at connect time picks it
+      // up on the first message, with no extra Meta call.
+      await rememberDisplayPhoneNumber(
+        config,
+        value.metadata.display_phone_number
+      );
+
+      const decryptedAccessToken = decrypt(config.access_token);
 
       for (let i = 0; i < value.messages.length; i++) {
-        const message = value.messages[i]
-        const contact = value.contacts[i] || value.contacts[0]
+        const message = value.messages[i];
+        const contact = value.contacts[i] || value.contacts[0];
 
         // Edits and deletes CHANGE an existing message rather than
         // adding one. They must divert before processMessage, whose
@@ -336,8 +423,8 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         // insert a new row — showing an edited message twice, and a
         // deleted one as an empty bubble.
         if (isMessageMutation(message.type)) {
-          await handleMessageMutation(message, config.account_id)
-          continue
+          await handleMessageMutation(message, config.account_id);
+          continue;
         }
 
         await processMessage(
@@ -351,7 +438,7 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           // the admin who saved the WhatsApp config.
           config.user_id,
           decryptedAccessToken
-        )
+        );
       }
     }
   }
@@ -371,31 +458,66 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
  * constraint), but a row created before the constraint, or a race, would
  * still surface here.
  */
+/**
+ * Persist `metadata.display_phone_number` when it is new or has changed.
+ *
+ * Writes only on an actual difference. This runs on EVERY webhook event,
+ * and an unconditional UPDATE would add a pointless write to every
+ * inbound message on the platform.
+ *
+ * Best-effort by design: failing to record a display string must never
+ * cost us the message that carried it.
+ */
+async function rememberDisplayPhoneNumber(
+  config: { id: string; display_phone_number?: string | null },
+  incoming: string | undefined | null
+): Promise<void> {
+  const value = incoming?.trim();
+  if (!value) return;
+  if (config.display_phone_number === value) return;
+
+  const { error } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .update({ display_phone_number: value })
+    .eq('id', config.id);
+
+  if (error) {
+    console.warn(
+      '[webhook] could not record display_phone_number:',
+      error.message
+    );
+    return;
+  }
+  // Keep the in-memory copy honest for the rest of this request.
+  config.display_phone_number = value;
+}
+
 async function resolveConfigByPhoneNumberId(phoneNumberId: string): Promise<{
-  id: string
-  account_id: string
-  user_id: string
-  access_token: string
-  connection_mode?: string
-  coexistence_detected_at?: string | null
+  id: string;
+  account_id: string;
+  user_id: string;
+  access_token: string;
+  display_phone_number?: string | null;
+  connection_mode?: string;
+  coexistence_detected_at?: string | null;
 } | null> {
   const { data: configRows, error: configError } = await supabaseAdmin()
     .from('whatsapp_config')
     .select('*')
-    .eq('phone_number_id', phoneNumberId)
+    .eq('phone_number_id', phoneNumberId);
 
   if (configError) {
     console.error(
       'Error fetching whatsapp_config for phone_number_id:',
       phoneNumberId,
       configError
-    )
-    return null
+    );
+    return null;
   }
 
   if (!configRows || configRows.length === 0) {
-    console.error('No config found for phone_number_id:', phoneNumberId)
-    return null
+    console.error('No config found for phone_number_id:', phoneNumberId);
+    return null;
   }
 
   if (configRows.length > 1) {
@@ -404,12 +526,15 @@ async function resolveConfigByPhoneNumberId(phoneNumberId: string): Promise<{
       phoneNumberId,
       '— inbound event dropped. Resolve duplicates so each number maps to a single account.',
       'Account owners:',
-      configRows.map((r: { account_id: string; user_id: string }) => `${r.account_id} (admin ${r.user_id})`)
-    )
-    return null
+      configRows.map(
+        (r: { account_id: string; user_id: string }) =>
+          `${r.account_id} (admin ${r.user_id})`
+      )
+    );
+    return null;
   }
 
-  return configRows[0]
+  return configRows[0];
 }
 
 // ============================================================
@@ -431,21 +556,21 @@ async function resolveConfigByPhoneNumberId(phoneNumberId: string): Promise<{
 async function handleCoexistenceChange(field: string, value: unknown) {
   switch (field) {
     case 'smb_message_echoes':
-      await handleMessageEchoes(value)
-      return
+      await handleMessageEchoes(value);
+      return;
     case 'history':
-      await handleHistory(value)
-      return
+      await handleHistory(value);
+      return;
     case 'smb_app_state_sync':
-      await handleAppStateSync(value)
-      return
+      await handleAppStateSync(value);
+      return;
     default:
       // isCoexistenceWebhookField said yes but nothing handles it — that
       // means a field was added to the set without a handler. Loud, so it
       // cannot repeat the original silent-drop bug.
       console.warn(
-        `[webhook][coexistence] "${field}" is recognised but has no handler`,
-      )
+        `[webhook][coexistence] "${field}" is recognised but has no handler`
+      );
   }
 }
 
@@ -471,14 +596,14 @@ async function handleCoexistenceChange(field: string, value: unknown) {
  * conversation preview so the inbox list stays truthful.
  */
 async function handleMessageEchoes(value: unknown) {
-  const batch = parseMessageEchoes(value)
+  const batch = parseMessageEchoes(value);
   if (!batch) {
-    console.warn('[webhook][coexistence] unusable smb_message_echoes payload')
-    return
+    console.warn('[webhook][coexistence] unusable smb_message_echoes payload');
+    return;
   }
 
-  const config = await resolveConfigByPhoneNumberId(batch.phoneNumberId)
-  if (!config) return
+  const config = await resolveConfigByPhoneNumberId(batch.phoneNumberId);
+  if (!config) return;
 
   // An echo is PROOF of coexistence, regardless of what onboarding
   // reported. Onboarding detection relies on the browser telling us which
@@ -492,19 +617,19 @@ async function handleMessageEchoes(value: unknown) {
         connection_mode: 'coexistence',
         coexistence_detected_at: new Date().toISOString(),
       })
-      .eq('id', config.id)
+      .eq('id', config.id);
     if (markErr) {
       console.error(
         '[webhook][coexistence] could not mark config as coexistence:',
-        markErr.message,
-      )
+        markErr.message
+      );
     }
   }
 
-  const accessToken = decrypt(config.access_token)
+  const accessToken = decrypt(config.access_token);
 
   for (const echo of batch.echoes) {
-    await processEcho(echo, config.account_id, config.user_id, accessToken)
+    await processEcho(echo, config.account_id, config.user_id, accessToken);
   }
 }
 
@@ -512,12 +637,12 @@ async function processEcho(
   echo: MessageEcho,
   accountId: string,
   configOwnerUserId: string,
-  accessToken: string,
+  accessToken: string
 ) {
   // THE CUSTOMER IS `to`, NOT `from`. In an echo `from` is the business's
   // own number — resolving the contact from it would create a contact for
   // the business itself and a conversation with itself.
-  const customerPhone = normalizePhone(echo.to)
+  const customerPhone = normalizePhone(echo.to);
 
   // No profile name is included in an echo payload, so the phone number
   // is the only name available for a contact we have never seen. Passing
@@ -527,24 +652,29 @@ async function processEcho(
     accountId,
     configOwnerUserId,
     customerPhone,
-    '',
-  )
-  if (!contactOutcome) return
-  const contactRecord = contactOutcome.contact
+    ''
+  );
+  if (!contactOutcome) return;
+  const contactRecord = contactOutcome.contact;
 
   const convResult = await findOrCreateConversation(
     accountId,
     configOwnerUserId,
-    contactRecord.id,
-  )
-  if (!convResult) return
-  const conversation = convResult.conversation
+    contactRecord.id
+  );
+  if (!convResult) return;
+  const conversation = convResult.conversation;
 
   if (convResult.created) {
-    await dispatchWebhookEvent(supabaseAdmin(), accountId, 'conversation.created', {
-      conversation_id: conversation.id,
-      contact_id: contactRecord.id,
-    })
+    await dispatchWebhookEvent(
+      supabaseAdmin(),
+      accountId,
+      'conversation.created',
+      {
+        conversation_id: conversation.id,
+        contact_id: contactRecord.id,
+      }
+    );
   }
 
   // Already stored? Then this is Meta echoing back a message THIS CRM
@@ -559,34 +689,24 @@ async function processEcho(
     .select('id, sender_type')
     .eq('conversation_id', conversation.id)
     .eq('message_id', echo.id)
-    .maybeSingle()
+    .maybeSingle();
 
-  if (existing) return
+  if (existing) return;
 
   // Echo content is shaped exactly like inbound content — a property
   // named after `type` — so the existing parser is reused rather than
   // duplicated. Casting because parseMessageContent is typed for inbound
   // messages; the fields it reads are identical.
-  const { contentText, mediaUrl, interactiveReplyId } = await parseMessageContent(
-    echo as unknown as WhatsAppMessage,
-    accessToken,
-  )
+  const { contentText, mediaUrl, interactiveReplyId } =
+    await parseMessageContent(echo as unknown as WhatsAppMessage, accessToken);
 
-  const ALLOWED_CONTENT_TYPES = new Set([
-    'text', 'image', 'document', 'audio', 'video',
-    'location', 'template', 'interactive',
-  ])
-  const contentType = ALLOWED_CONTENT_TYPES.has(echo.type)
-    ? echo.type
-    : echo.type === 'sticker'
-      ? 'image'
-      : 'text'
+  const contentType = normalizeContentType(echo.type);
 
   // A missing timestamp falls back to now. Being a few seconds out beats
   // dropping a message the operator can see on their phone.
   const sentAt = echo.timestamp
     ? new Date(parseInt(echo.timestamp) * 1000).toISOString()
-    : new Date().toISOString()
+    : new Date().toISOString();
 
   const { error: msgError } = await supabaseAdmin().from('messages').insert({
     conversation_id: conversation.id,
@@ -603,14 +723,14 @@ async function processEcho(
     status: 'sent',
     created_at: sentAt,
     interactive_reply_id: interactiveReplyId,
-  })
+  });
 
   if (msgError) {
     // Lost a race with a concurrent delivery of the same echo. The unique
     // index did its job; nothing more to do.
-    if (isUniqueViolation(msgError)) return
-    console.error('[webhook][coexistence] error inserting echo:', msgError)
-    return
+    if (isUniqueViolation(msgError)) return;
+    console.error('[webhook][coexistence] error inserting echo:', msgError);
+    return;
   }
 
   // Refresh the preview so the conversation list is not stale, but do NOT
@@ -621,11 +741,23 @@ async function processEcho(
       last_message_text: contentText || `[${echo.type}]`,
       last_message_at: sentAt,
       updated_at: new Date().toISOString(),
+      // An echo means the business just typed in this chat on their phone,
+      // i.e. it is a conversation they are actively having RIGHT NOW. That
+      // is live activity, not backfill, so it belongs in the inbox even if
+      // the history import had parked it for review.
+      //
+      // Distinguishing this from history matters: both arrive on
+      // coexistence webhooks, but history is the past and an echo is the
+      // present.
+      import_state: 'live',
     })
-    .eq('id', conversation.id)
+    .eq('id', conversation.id);
 
   if (convError) {
-    console.error('[webhook][coexistence] error updating conversation:', convError)
+    console.error(
+      '[webhook][coexistence] error updating conversation:',
+      convError
+    );
   }
 
   // Public-API subscribers get told, with a sender that names where it
@@ -638,7 +770,51 @@ async function processEcho(
     content_type: contentType,
     text: contentText,
     sender_type: 'business_app',
-  })
+  });
+
+  // ── Pause flows + AI — the phone user IS a human stepping in ──────
+  // A message typed on the WhatsApp Business App is the same "human is
+  // here" signal as a message sent from the CRM dashboard. Without this,
+  // the bot kept replying after a human typed from the phone — the
+  // customer watched a human and a robot talk over each other.
+  //
+  // Mirrors the exact pattern from sendMessageToConversation (lines
+  // 595-616 in send-message.ts). Best-effort: a failure here must not
+  // lose the echo that was already stored above.
+  try {
+    const { error: pauseErr } = await supabaseAdmin()
+      .from('flow_runs')
+      .update({
+        status: 'paused_by_agent',
+        ended_at: new Date().toISOString(),
+        end_reason: 'business_app_replied',
+      })
+      .eq('account_id', accountId)
+      .eq('contact_id', contactRecord.id)
+      .eq('status', 'active');
+    if (pauseErr) {
+      console.error('[flows] pause-on-phone-echo failed:', pauseErr.message);
+    }
+  } catch (err) {
+    console.error(
+      '[flows] pause-on-phone-echo threw:',
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  // Disable AI auto-reply on this thread too — same reasoning. A human
+  // typed from their phone; the AI should not reply on top of them.
+  try {
+    await supabaseAdmin()
+      .from('conversations')
+      .update({ ai_autoreply_disabled: true })
+      .eq('id', conversation.id);
+  } catch (err) {
+    console.error(
+      '[ai] disable-on-phone-echo threw:',
+      err instanceof Error ? err.message : err
+    );
+  }
 }
 
 // ============================================================
@@ -660,37 +836,89 @@ async function processEcho(
  * path uses. If an id turns out to be dead the image simply fails to
  * load later, which is a far better outcome than dropping the import.
  */
+/**
+ * History entries that are METADATA, not messages.
+ *
+ * Meta's history stream interleaves records describing changes to other
+ * messages alongside the messages themselves. Storing those as rows put
+ * phantom entries in the thread — 28 messages reading literally "[edit]"
+ * appeared in one import, which is noise the customer never saw.
+ *
+ * `edit` is safe to drop because the history export already contains the
+ * CURRENT text of the message it refers to, so the edited content is not
+ * lost by skipping the edit record. `reaction` is dropped because a
+ * reaction is an annotation on a message, not a message; the live path
+ * stores those in their own table.
+ */
+const HISTORY_METADATA_TYPES = new Set([
+  'edit',
+  'reaction',
+  'revoke',
+  'unsupported',
+]);
+
 function historyContent(message: MessageEcho | Record<string, unknown>): {
-  contentType: string
-  contentText: string | null
-  mediaUrl: string | null
-} {
-  const type = String((message as Record<string, unknown>).type ?? 'text')
+  contentType: string;
+  contentText: string | null;
+  mediaUrl: string | null;
+} | null {
+  const type = String((message as Record<string, unknown>).type ?? 'text');
   const get = (key: string) =>
     (message as Record<string, unknown>)[key] as
-      | Record<string, unknown>
-      | undefined
+      Record<string, unknown> | undefined;
+
+  // Returning null means "do not store". See HISTORY_METADATA_TYPES.
+  if (HISTORY_METADATA_TYPES.has(type)) return null;
 
   // Meta omits the contents when it is not shipping the asset in this
   // chunk. For anything older than two weeks the follow-up webhook never
   // comes, so this is stored as a visible placeholder rather than waited
   // on or silently skipped — the message DID happen and the thread should
   // show that something was there.
+  //
+  // The ORIGINAL type is preserved when Meta names it, so the thread can
+  // say "Photo" rather than a generic sentence. Stored as content_type
+  // 'text' regardless: there is no media_url to render, and claiming
+  // content_type 'image' with nothing behind it makes the bubble attempt
+  // an image load that can only fail.
   if (type === 'media_placeholder') {
+    const placeholder = get('media_placeholder');
+    const originalType =
+      typeof placeholder?.type === 'string' ? placeholder.type : null;
+    const label = originalType
+      ? originalType.charAt(0).toUpperCase() + originalType.slice(1)
+      : 'Media';
     return {
       contentType: 'text',
-      contentText: '[Media message — not included in history export]',
+      contentText: `[${label} — not included in WhatsApp's history export]`,
       mediaUrl: null,
-    }
+    };
   }
 
   // Meta could not export this one (e.g. code 131051, unknown type).
-  if (type === 'errors' || Array.isArray((message as Record<string, unknown>).errors)) {
+  //
+  // Meta's own reason is included when it sends one. 54 of these landed in
+  // a single import reading only "[Unsupported message]", which tells the
+  // operator nothing about what the customer actually sent.
+  if (
+    type === 'errors' ||
+    Array.isArray((message as Record<string, unknown>).errors)
+  ) {
+    const errors = (message as Record<string, unknown>).errors;
+    const first = Array.isArray(errors)
+      ? (errors[0] as Record<string, unknown> | undefined)
+      : undefined;
+    const detail =
+      (first?.title as string)?.trim() ||
+      (first?.message as string)?.trim() ||
+      null;
     return {
       contentType: 'text',
-      contentText: '[Unsupported message]',
+      contentText: detail
+        ? `[WhatsApp could not export this message: ${detail}]`
+        : '[WhatsApp could not export this message]',
       mediaUrl: null,
-    }
+    };
   }
 
   switch (type) {
@@ -699,40 +927,95 @@ function historyContent(message: MessageEcho | Record<string, unknown>): {
         contentType: 'text',
         contentText: (get('text')?.body as string) ?? null,
         mediaUrl: null,
-      }
+      };
     case 'image':
     case 'video':
     case 'document':
     case 'audio':
     case 'sticker': {
-      const media = get(type)
-      const mediaId = media?.id as string | undefined
+      const media = get(type);
+      const mediaId = media?.id as string | undefined;
       return {
         // Stickers have no content_type of their own in our CHECK, and
         // they are images — same mapping the live path uses.
         contentType: type === 'sticker' ? 'image' : type,
         contentText: (media?.caption as string) ?? null,
         mediaUrl: mediaId ? `/api/whatsapp/media/${mediaId}` : null,
-      }
+      };
     }
     case 'location': {
-      const loc = get('location')
-      const name = (loc?.name as string) ?? ''
+      const loc = get('location');
+      const name = (loc?.name as string) ?? '';
+      const address = (loc?.address as string) ?? '';
+      // Name and address are both optional on a pin drop. Falling straight
+      // to "[Location]" threw away an address Meta had actually sent.
+      const label = [name, address].filter(Boolean).join(' — ');
       return {
         contentType: 'location',
-        contentText: name || '[Location]',
+        contentText: label || 'Location shared',
         mediaUrl: null,
-      }
+      };
     }
+
+    // A customer tapping a QUICK-REPLY button on a template we sent.
+    //
+    // Distinct from `interactive`: Meta uses `button` for template quick
+    // replies and `interactive` for interactive-message buttons and list
+    // rows. Only the latter was handled, so template button taps rendered
+    // as the bare word "[button]" and the customer's actual choice — the
+    // whole point of the message — was thrown away.
+    case 'button': {
+      const button = get('button');
+      const label =
+        (button?.text as string)?.trim() || (button?.payload as string)?.trim();
+      return {
+        contentType: 'text',
+        contentText: label || '[Button reply]',
+        mediaUrl: null,
+      };
+    }
+
+    // Contact cards. Previously fell through to the default and rendered as
+    // the bare word "[contacts]", losing every name in the card.
+    case 'contacts': {
+      const raw = (message as Record<string, unknown>).contacts;
+      const list = Array.isArray(raw) ? raw : [];
+      const names = list
+        .map((c) => {
+          const entry = c as Record<string, unknown>;
+          const name = entry?.name as Record<string, unknown> | undefined;
+          return (
+            (name?.formatted_name as string) ??
+            (name?.first_name as string) ??
+            null
+          );
+        })
+        .filter((n): n is string => Boolean(n));
+
+      return {
+        contentType: 'text',
+        contentText:
+          names.length > 0
+            ? `[Contact card: ${names.join(', ')}]`
+            : '[Contact card]',
+        mediaUrl: null,
+      };
+    }
+
     default:
       // Anything unrecognised is kept as text with a marker rather than
       // dropped. Losing a message from someone's history is worse than
-      // rendering it plainly.
+      // rendering it plainly. The type is named so an unhandled kind shows
+      // up in the data instead of hiding behind generic wording — that is
+      // how `edit` and `contacts` were found.
+      console.warn(
+        `[webhook][coexistence] unhandled history message type "${type}" — stored as text`
+      );
       return {
         contentType: 'text',
-        contentText: `[${type}]`,
+        contentText: `[Unsupported message type: ${type}]`,
         mediaUrl: null,
-      }
+      };
   }
 }
 
@@ -751,21 +1034,21 @@ function historyContent(message: MessageEcho | Record<string, unknown>): {
  * has its own insert path rather than reusing processMessage.
  */
 async function handleHistory(value: unknown) {
-  const parsed = parseHistory(value)
+  const parsed = parseHistory(value);
   if (!parsed) {
-    console.warn('[webhook][coexistence] unusable history payload')
-    return
+    console.warn('[webhook][coexistence] unusable history payload');
+    return;
   }
 
-  const config = await resolveConfigByPhoneNumberId(parsed.phoneNumberId)
-  if (!config) return
+  const config = await resolveConfigByPhoneNumberId(parsed.phoneNumberId);
+  if (!config) return;
 
   // Chunks can arrive out of order, so sort by chunk_order before
   // applying. Progress is monotonic per phase and processing a later
   // chunk first would make the UI count backwards.
   const chunks = [...parsed.chunks].sort(
-    (a, b) => (a.chunkOrder ?? 0) - (b.chunkOrder ?? 0),
-  )
+    (a, b) => (a.chunkOrder ?? 0) - (b.chunkOrder ?? 0)
+  );
 
   for (const chunk of chunks) {
     // ---- The business refused, or Meta failed ----
@@ -776,27 +1059,27 @@ async function handleHistory(value: unknown) {
         last_chunk_order: chunk.chunkOrder,
         error_code: chunk.error.code != null ? String(chunk.error.code) : null,
         error_message: chunk.error.message,
-      })
+      });
       console.log(
         `[webhook][coexistence] history phase ${chunk.phase} ` +
           (chunk.error.isDeclined
             ? 'declined by the business — nothing to import'
-            : `failed: ${chunk.error.message ?? 'unknown error'}`),
-      )
-      continue
+            : `failed: ${chunk.error.message ?? 'unknown error'}`)
+      );
+      continue;
     }
 
-    let stored = 0
-    let skipped = 0
+    let stored = 0;
+    let skipped = 0;
 
     for (const thread of chunk.threads) {
       const result = await ingestHistoryThread(
         thread,
         config.account_id,
-        config.user_id,
-      )
-      stored += result.stored
-      skipped += result.skipped
+        config.user_id
+      );
+      stored += result.stored;
+      skipped += result.skipped;
     }
 
     await upsertHistoryImport(config, chunk.phase, {
@@ -804,16 +1087,20 @@ async function handleHistory(value: unknown) {
       // is unknown in advance, so any local maths would disagree with it.
       progress: chunk.progress,
       last_chunk_order: chunk.chunkOrder,
-      status: chunk.progress >= 100 ? 'completed' : 'running',
+      // Status is NOT decided here. It has to be derived from the progress
+      // that ends up STORED (which is clamped to never regress), and only
+      // upsertHistoryImport knows the existing row. Deciding it from this
+      // chunk alone is what left a phase reading 100% and "running" at the
+      // same time — see the note in there.
       threads_delta: chunk.threads.length,
       stored_delta: stored,
       skipped_delta: skipped,
-    })
+    });
 
     console.log(
       `[webhook][coexistence] history phase ${chunk.phase} chunk ${chunk.chunkOrder ?? '?'}: ` +
-        `${chunk.threads.length} thread(s), ${stored} stored, ${skipped} already present, ${chunk.progress}%`,
-    )
+        `${chunk.threads.length} thread(s), ${stored} stored, ${skipped} already present, ${chunk.progress}%`
+    );
   }
 }
 
@@ -829,32 +1116,67 @@ async function upsertHistoryImport(
   config: { id: string; account_id: string },
   phase: number,
   patch: {
-    status: 'running' | 'completed' | 'declined' | 'failed'
-    progress: number
-    last_chunk_order: number | null
-    error_code?: string | null
-    error_message?: string | null
-    threads_delta?: number
-    stored_delta?: number
-    skipped_delta?: number
-  },
+    /**
+     * Only supplied for the terminal outcomes Meta reports explicitly
+     * ('declined' / 'failed'). Omit it for ordinary progress chunks and it
+     * is derived from the stored progress below.
+     */
+    status?: 'declined' | 'failed';
+    progress: number;
+    last_chunk_order: number | null;
+    error_code?: string | null;
+    error_message?: string | null;
+    threads_delta?: number;
+    stored_delta?: number;
+    skipped_delta?: number;
+  }
 ) {
   const { data: existing } = await supabaseAdmin()
     .from('coexistence_history_imports')
-    .select('id, threads_seen, messages_stored, messages_skipped, progress')
+    .select(
+      'id, threads_seen, messages_stored, messages_skipped, progress, status'
+    )
     .eq('config_id', config.id)
     .eq('phase', phase)
-    .maybeSingle()
+    .maybeSingle();
+
+  // Never let progress regress. A retried or replayed chunk arriving
+  // late would otherwise drag the bar backwards, which reads as the
+  // import having broken.
+  const effectiveProgress = Math.max(patch.progress, existing?.progress ?? 0);
+
+  /**
+   * Status follows the STORED progress, not this chunk's.
+   *
+   * THE BUG THIS FIXES: progress was clamped with Math.max but status was
+   * computed straight from `chunk.progress`. So when a phase reached 100%
+   * and Meta then re-sent or delivered an out-of-order chunk reporting
+   * less, progress stayed pinned at 100 while status flipped back to
+   * 'running'. The row ended up permanently self-contradictory — a full
+   * progress bar with a spinner beside it — and, because the panel polls
+   * while anything is 'running', it also polled forever.
+   *
+   * A terminal state is therefore sticky: once a phase has completed, or
+   * Meta has declined or failed it, later traffic cannot reopen it.
+   */
+  const isTerminal = (s: string | null | undefined) =>
+    s === 'completed' || s === 'declined' || s === 'failed';
+
+  const status: 'running' | 'completed' | 'declined' | 'failed' = patch.status
+    ? // An explicit error is authoritative and outranks any progress.
+      patch.status
+    : isTerminal(existing?.status)
+      ? (existing!.status as 'completed' | 'declined' | 'failed')
+      : effectiveProgress >= 100
+        ? 'completed'
+        : 'running';
 
   const row = {
     account_id: config.account_id,
     config_id: config.id,
     phase,
-    status: patch.status,
-    // Never let progress regress. A retried or replayed chunk arriving
-    // late would otherwise drag the bar backwards, which reads as the
-    // import having broken.
-    progress: Math.max(patch.progress, existing?.progress ?? 0),
+    status,
+    progress: effectiveProgress,
     last_chunk_order: patch.last_chunk_order,
     error_code: patch.error_code ?? null,
     error_message: patch.error_message ?? null,
@@ -863,16 +1185,16 @@ async function upsertHistoryImport(
       (existing?.messages_stored ?? 0) + (patch.stored_delta ?? 0),
     messages_skipped:
       (existing?.messages_skipped ?? 0) + (patch.skipped_delta ?? 0),
-  }
+  };
 
   const query = existing
     ? supabaseAdmin()
         .from('coexistence_history_imports')
         .update(row)
         .eq('id', existing.id)
-    : supabaseAdmin().from('coexistence_history_imports').insert(row)
+    : supabaseAdmin().from('coexistence_history_imports').insert(row);
 
-  const { error } = await query
+  const { error } = await query;
   if (error) {
     // A racing chunk created the row between our read and insert. The
     // unique constraint on (config_id, phase) did its job; the next chunk
@@ -880,10 +1202,50 @@ async function upsertHistoryImport(
     if (!isUniqueViolation(error)) {
       console.error(
         '[webhook][coexistence] history progress write failed:',
-        error.message,
-      )
+        error.message
+      );
     }
   }
+}
+
+/**
+ * The name the phone's address book has for a number, or ''.
+ *
+ * Exists so history ingestion can name a contact it would otherwise create
+ * named after its own phone number. Scoped by account and matched on the
+ * normalized column, which is the same basis the unique index and the
+ * import step use — so all three agree on what "same number" means.
+ *
+ * Returns '' rather than null because the only caller passes it straight to
+ * `findOrCreateContact`, whose contract is that a falsy name means "leave
+ * the existing name alone / fall back to the number".
+ *
+ * 'removed' rows still count. A number deleted from the phone AFTER being
+ * saved still tells us what the customer is called, and the alternative is
+ * showing a bare number because the operator tidied their contacts.
+ */
+async function lookupStagedContactName(
+  accountId: string,
+  phone: string
+): Promise<string> {
+  if (!phone) return '';
+
+  const { data } = await supabaseAdmin()
+    .from('coexistence_staged_contacts')
+    .select('full_name, first_name')
+    .eq('account_id', accountId)
+    .eq('phone_normalized', phone)
+    // Newest wins: a reconnect creates a fresh whatsapp_config, so the same
+    // number can be staged more than once and the later row reflects what
+    // the phone currently calls them.
+    .order('updated_at', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+
+  const candidate = data?.full_name || data?.first_name || '';
+  // A staged name that is itself just the number is no better than the
+  // fallback, and passing it would look like a real name to callers.
+  return isPlaceholderName(candidate) ? '' : candidate.trim();
 }
 
 /**
@@ -897,53 +1259,88 @@ async function upsertHistoryImport(
 async function ingestHistoryThread(
   thread: HistoryThread,
   accountId: string,
-  configOwnerUserId: string,
+  configOwnerUserId: string
 ): Promise<{ stored: number; skipped: number }> {
-  if (thread.messages.length === 0) return { stored: 0, skipped: 0 }
+  if (thread.messages.length === 0) return { stored: 0, skipped: 0 };
+
+  const threadPhone = normalizePhone(thread.customerPhone);
+
+  // History carries no profile name — Meta sends only the thread id, which
+  // IS the number. Left at '' the contact is created named after itself,
+  // which is why a coexistence inbox reads as a column of phone numbers.
+  //
+  // The address book usually holds the answer, so ask it. This matters for
+  // ORDERING: `smb_app_state_sync` and `history` are independent streams and
+  // either can land first. handleAppStateSync renames contacts that already
+  // exist; this covers the other direction, where the name was staged before
+  // history got here. Without both halves, whichever webhook happened to
+  // arrive first decided whether the customer ever got a name.
+  //
+  // Returns '' when the number is not in the address book — a real case, and
+  // not a failure: 32 of 70 conversations on the reference account are people
+  // who messaged the business but were never saved as contacts. For those the
+  // number is genuinely all Meta has given us, and the name arrives later
+  // from the WhatsApp profile on their next live message.
+  const stagedName = await lookupStagedContactName(accountId, threadPhone);
 
   const contactOutcome = await findOrCreateContact(
     accountId,
     configOwnerUserId,
-    normalizePhone(thread.customerPhone),
-    // History carries no profile name, so pass '' and let the helper fall
-    // back to the number rather than overwriting a better existing name.
-    '',
-  )
-  if (!contactOutcome) return { stored: 0, skipped: 0 }
+    threadPhone,
+    stagedName
+  );
+  if (!contactOutcome) return { stored: 0, skipped: 0 };
 
+  // 'pending_review' is the whole point of this argument: history is up to
+  // six months of past chats, including personal ones, and dropping all of
+  // it into the inbox unannounced is what this fixes. The conversation and
+  // its messages are still stored — Meta sends history exactly once and
+  // cannot replay it, so refusing the data would lose it permanently — they
+  // are simply not shown until someone approves them.
+  //
+  // Only a NEWLY created conversation is gated. A chat that already exists
+  // is one the operator is already working in, and a backfill has no
+  // business hiding it.
   const convResult = await findOrCreateConversation(
     accountId,
     configOwnerUserId,
     contactOutcome.contact.id,
-  )
-  if (!convResult) return { stored: 0, skipped: 0 }
-  const conversationId = convResult.conversation.id
+    'pending_review'
+  );
+  if (!convResult) return { stored: 0, skipped: 0 };
+  const conversationId = convResult.conversation.id;
 
   // Which of these do we already hold? Covers a re-sync, an overlapping
   // chunk, and — importantly — messages the CRM itself sent or received
   // live before the backfill arrived.
-  const wamids = thread.messages.map((m) => m.id)
+  const wamids = thread.messages.map((m) => m.id);
   const { data: existingRows } = await supabaseAdmin()
     .from('messages')
     .select('message_id')
     .eq('conversation_id', conversationId)
-    .in('message_id', wamids)
+    .in('message_id', wamids);
 
   const existing = new Set(
-    ((existingRows ?? []) as { message_id: string }[]).map((r) => r.message_id),
-  )
+    ((existingRows ?? []) as { message_id: string }[]).map((r) => r.message_id)
+  );
 
-  const rows: Record<string, unknown>[] = []
-  const seenInBatch = new Set<string>()
+  const rows: Record<string, unknown>[] = [];
+  const seenInBatch = new Set<string>();
   for (const message of thread.messages) {
-    if (existing.has(message.id)) continue
+    if (existing.has(message.id)) continue;
     // Meta has been observed repeating a message inside one chunk. A bulk
     // insert containing the same wamid twice would violate the unique
     // index and fail the WHOLE batch, so de-dupe in memory first.
-    if (seenInBatch.has(message.id)) continue
-    seenInBatch.add(message.id)
+    if (seenInBatch.has(message.id)) continue;
+    seenInBatch.add(message.id);
 
-    const { contentType, contentText, mediaUrl } = historyContent(message)
+    // null means the entry is metadata about another message (an edit, a
+    // reaction, a revoke) rather than a message in its own right. Storing
+    // those produced phantom rows in the thread — see HISTORY_METADATA_TYPES.
+    const content = historyContent(message);
+    if (!content) continue;
+
+    const { contentType, contentText, mediaUrl } = content;
 
     rows.push({
       conversation_id: conversationId,
@@ -962,38 +1359,38 @@ async function ingestHistoryThread(
       created_at: message.timestamp
         ? new Date(parseInt(message.timestamp) * 1000).toISOString()
         : new Date().toISOString(),
-    })
+    });
   }
 
-  const skipped = thread.messages.length - rows.length
-  if (rows.length === 0) return { stored: 0, skipped }
+  const skipped = thread.messages.length - rows.length;
+  if (rows.length === 0) return { stored: 0, skipped };
 
-  const { error } = await supabaseAdmin().from('messages').insert(rows)
+  const { error } = await supabaseAdmin().from('messages').insert(rows);
 
   if (error) {
     // A concurrent chunk stored one of these first. Fall back to
     // one-at-a-time so the rest of the batch still lands — a single
     // collision must not cost thousands of messages.
     if (isUniqueViolation(error)) {
-      let stored = 0
+      let stored = 0;
       for (const row of rows) {
         const { error: rowErr } = await supabaseAdmin()
           .from('messages')
-          .insert(row)
-        if (!rowErr) stored++
+          .insert(row);
+        if (!rowErr) stored++;
       }
-      return { stored, skipped: thread.messages.length - stored }
+      return { stored, skipped: thread.messages.length - stored };
     }
     console.error(
       '[webhook][coexistence] history batch insert failed:',
-      error.message,
-    )
-    return { stored: 0, skipped: thread.messages.length }
+      error.message
+    );
+    return { stored: 0, skipped: thread.messages.length };
   }
 
-  await refreshConversationPreviewFromHistory(conversationId)
+  await refreshConversationPreviewFromHistory(conversationId);
 
-  return { stored: rows.length, skipped }
+  return { stored: rows.length, skipped };
 }
 
 /**
@@ -1016,9 +1413,9 @@ async function refreshConversationPreviewFromHistory(conversationId: string) {
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(1)
-    .maybeSingle()
+    .maybeSingle();
 
-  if (!newest) return
+  if (!newest) return;
 
   const { error } = await supabaseAdmin()
     .from('conversations')
@@ -1027,13 +1424,13 @@ async function refreshConversationPreviewFromHistory(conversationId: string) {
         newest.content_text || `[${newest.content_type ?? 'message'}]`,
       last_message_at: newest.created_at,
     })
-    .eq('id', conversationId)
+    .eq('id', conversationId);
 
   if (error) {
     console.error(
       '[webhook][coexistence] conversation preview refresh failed:',
-      error.message,
-    )
+      error.message
+    );
   }
 }
 
@@ -1055,21 +1452,22 @@ async function refreshConversationPreviewFromHistory(conversationId: string) {
  * alternative cannot be undone without knowing which rows came from where.
  */
 async function handleAppStateSync(value: unknown) {
-  const parsed = parseAppStateSync(value)
+  const parsed = parseAppStateSync(value);
   if (!parsed) {
-    console.warn('[webhook][coexistence] unusable smb_app_state_sync payload')
-    return
+    console.warn('[webhook][coexistence] unusable smb_app_state_sync payload');
+    return;
   }
 
-  const config = await resolveConfigByPhoneNumberId(parsed.phoneNumberId)
-  if (!config) return
+  const config = await resolveConfigByPhoneNumberId(parsed.phoneNumberId);
+  if (!config) return;
 
-  let staged = 0
-  let removed = 0
+  let staged = 0;
+  let removed = 0;
+  let renamed = 0;
 
   for (const entry of parsed.contacts) {
-    const phone = normalizePhone(entry.phone)
-    if (!phone) continue
+    const phone = normalizePhone(entry.phone);
+    if (!phone) continue;
 
     if (entry.action === 'remove') {
       // The number left the phone's address book. Mark the STAGING row
@@ -1081,16 +1479,16 @@ async function handleAppStateSync(value: unknown) {
         .update({ status: 'removed', reviewed_at: new Date().toISOString() })
         .eq('config_id', config.id)
         .eq('phone', phone)
-        .eq('status', 'pending')
+        .eq('status', 'pending');
       if (error) {
         console.error(
           '[webhook][coexistence] staged contact removal failed:',
-          error.message,
-        )
+          error.message
+        );
       } else {
-        removed++
+        removed++;
       }
-      continue
+      continue;
     }
 
     // Flagged so an operator reviewing hundreds of numbers can skip the
@@ -1099,15 +1497,15 @@ async function handleAppStateSync(value: unknown) {
     const alreadyKnown = await findExistingContact(
       supabaseAdmin(),
       config.account_id,
-      phone,
-    )
+      phone
+    );
 
     const { data: existingStaged } = await supabaseAdmin()
       .from('coexistence_staged_contacts')
       .select('id, status')
       .eq('config_id', config.id)
       .eq('phone', phone)
-      .maybeSingle()
+      .maybeSingle();
 
     // A decision already made stays made. Re-staging a 'skipped' number
     // would re-offer the owner's family on every sync, and re-staging an
@@ -1117,7 +1515,7 @@ async function handleAppStateSync(value: unknown) {
       (existingStaged.status === 'skipped' ||
         existingStaged.status === 'imported')
     ) {
-      continue
+      continue;
     }
 
     const row = {
@@ -1129,30 +1527,116 @@ async function handleAppStateSync(value: unknown) {
       first_name: entry.firstName,
       status: 'pending',
       already_known: Boolean(alreadyKnown),
-    }
+      // Everything Meta sent about this contact, verbatim. full_name and
+      // first_name are the two fields we act on; this is the rest, kept so
+      // a field Meta starts sending is present in the data before anyone
+      // has to ask for it.
+      raw: entry.raw,
+    };
 
     const { error } = existingStaged
       ? await supabaseAdmin()
           .from('coexistence_staged_contacts')
           .update(row)
           .eq('id', existingStaged.id)
-      : await supabaseAdmin().from('coexistence_staged_contacts').insert(row)
+      : await supabaseAdmin().from('coexistence_staged_contacts').insert(row);
 
     if (error) {
       if (!isUniqueViolation(error)) {
         console.error(
           '[webhook][coexistence] staging contact failed:',
-          error.message,
-        )
+          error.message
+        );
       }
-      continue
+      continue;
     }
-    staged++
+    staged++;
+
+    // ---- Name the contact the CRM already has ----
+    //
+    // This is the fix for an inbox full of rows labelled "919716747472".
+    //
+    // `history` and `smb_app_state_sync` are independent streams, and
+    // history almost always lands first. It creates the contact from the
+    // thread id with no name available, so the contact is named after its
+    // own number. The address book then arrives carrying the real name and
+    // — before this — put it in the staging table and stopped, because the
+    // name was only ever applied when the IMPORT step created a brand new
+    // contact. For a number history had already seen, import found the
+    // contact existing and merely linked it.
+    //
+    // The result was a name sitting in the database one join away from the
+    // row that needed it, which is why it looked like Meta had not sent one.
+    //
+    // Applied here rather than only at import time because the contact and
+    // its conversation already exist and are already on screen: waiting for
+    // someone to press Import would leave the inbox showing numbers for a
+    // customer the operator can already see and reply to.
+    //
+    // `betterContactName` only ever upgrades a placeholder, so a name an
+    // agent typed — or one from a live message's WhatsApp profile — is
+    // never overwritten by the phone's address book.
+    const stagedName = entry.fullName || entry.firstName;
+    if (alreadyKnown && stagedName) {
+      const upgraded = betterContactName(alreadyKnown.name, stagedName);
+      if (upgraded) {
+        const { error: renameErr } = await supabaseAdmin()
+          .from('contacts')
+          .update({ name: upgraded, updated_at: new Date().toISOString() })
+          .eq('id', alreadyKnown.id);
+        if (renameErr) {
+          console.error(
+            '[webhook][coexistence] contact rename failed:',
+            renameErr.message
+          );
+        } else {
+          renamed++;
+        }
+      }
+    }
+  }
+
+  // ---- Freshness, not progress ----
+  //
+  // Deliberately NOT a percentage. `history` carries metadata.progress and
+  // metadata.chunk_order, so its bar is Meta's own figure. The address book
+  // carries no total, no chunk index and no completion signal — it is an
+  // open-ended stream of adds and removes.
+  //
+  // So the honest thing to record is when the last one arrived, which lets
+  // the UI say "still arriving" versus "nothing new for ten minutes"
+  // instead of inventing a denominator and a bar that finishes at the wrong
+  // moment.
+  //
+  // The counter is read-then-written rather than an atomic increment. Two
+  // concurrent state_sync deliveries can therefore lose one increment,
+  // which is accepted: it is a diagnostic ("is Meta still sending?"), while
+  // the number the UI actually shows is an exact COUNT(*) of staged rows.
+  const { data: syncCounter } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .select('state_sync_contacts_seen')
+    .eq('id', config.id)
+    .maybeSingle();
+
+  const { error: progressErr } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .update({
+      state_sync_last_at: new Date().toISOString(),
+      state_sync_contacts_seen:
+        (syncCounter?.state_sync_contacts_seen ?? 0) + parsed.contacts.length,
+    })
+    .eq('id', config.id);
+  if (progressErr) {
+    console.error(
+      '[webhook][coexistence] state sync progress write failed:',
+      progressErr.message
+    );
   }
 
   console.log(
-    `[webhook][coexistence] address book sync: ${staged} staged for review, ${removed} marked removed`,
-  )
+    `[webhook][coexistence] address book sync: ${staged} staged for review, ` +
+      `${removed} marked removed, ${renamed} existing contact(s) renamed from the address book`
+  );
 }
 
 /**
@@ -1168,8 +1652,8 @@ async function handleAppStateSync(value: unknown) {
  * phone_number_id.
  */
 async function handleAccountUpdate(wabaIdFromEntry: string, value: unknown) {
-  const update = parseAccountUpdate(value)
-  if (!update) return
+  const update = parseAccountUpdate(value);
+  if (!update) return;
 
   if (!update.isDisconnect) {
     // Informational — verification updates and the like also land on
@@ -1177,15 +1661,17 @@ async function handleAccountUpdate(wabaIdFromEntry: string, value: unknown) {
     // treated as a disconnect: doing so would take a working number
     // offline in the UI the day Meta ships a new notification type.
     console.log(
-      `[webhook][account_update] "${update.event}" — informational, no action taken`,
-    )
-    return
+      `[webhook][account_update] "${update.event}" — informational, no action taken`
+    );
+    return;
   }
 
-  const wabaId = update.wabaId || wabaIdFromEntry
+  const wabaId = update.wabaId || wabaIdFromEntry;
   if (!wabaId) {
-    console.error('[webhook][account_update] disconnect with no resolvable waba_id')
-    return
+    console.error(
+      '[webhook][account_update] disconnect with no resolvable waba_id'
+    );
+    return;
   }
 
   const { data: rows, error } = await supabaseAdmin()
@@ -1197,23 +1683,28 @@ async function handleAccountUpdate(wabaIdFromEntry: string, value: unknown) {
       disconnected_at: new Date().toISOString(),
     })
     .eq('waba_id', wabaId)
-    .select('id, account_id')
+    .select('id, account_id');
 
   if (error) {
-    console.error('[webhook][account_update] could not mark disconnected:', error.message)
-    return
+    console.error(
+      '[webhook][account_update] could not mark disconnected:',
+      error.message
+    );
+    return;
   }
 
   if (!rows || rows.length === 0) {
-    console.warn(`[webhook][account_update] no config matched waba_id ${wabaId}`)
-    return
+    console.warn(
+      `[webhook][account_update] no config matched waba_id ${wabaId}`
+    );
+    return;
   }
 
   console.warn(
     `[webhook][account_update] ${update.event}` +
       (update.reason ? ` (${update.reason})` : '') +
-      ` — marked ${rows.length} config(s) disconnected for waba_id ${wabaId}`,
-  )
+      ` — marked ${rows.length} config(s) disconnected for waba_id ${wabaId}`
+  );
 
   // Tell each affected account's subscribers. A disconnected number stops
   // every send silently otherwise, and an integration cannot poll for
@@ -1228,8 +1719,8 @@ async function handleAccountUpdate(wabaIdFromEntry: string, value: unknown) {
         reason: update.reason,
         initiated_by: update.initiatedBy,
         waba_id: wabaId,
-      },
-    )
+      }
+    );
   }
 }
 
@@ -1247,17 +1738,21 @@ async function handleAccountUpdate(wabaIdFromEntry: string, value: unknown) {
  */
 async function handleMessageMutation(
   message: WhatsAppMessage,
-  accountId: string,
+  accountId: string
 ) {
-  const edit = parseEdit(message)
+  const edit = parseEdit(message);
   if (edit) {
     // Reuse the ordinary content parser on the replacement payload. No
     // access token is passed: re-verifying media on an edit is not worth a
     // Meta round trip, and the caption is the part that usually changed.
     const { contentText } = await parseMessageContent(
-      { ...edit.newMessage, id: edit.editMessageId, type: edit.newType } as unknown as WhatsAppMessage,
-      '',
-    )
+      {
+        ...edit.newMessage,
+        id: edit.editMessageId,
+        type: edit.newType,
+      } as unknown as WhatsAppMessage,
+      ''
+    );
 
     const { data, error } = await supabaseAdmin()
       .from('messages')
@@ -1266,17 +1761,17 @@ async function handleMessageMutation(
         edited_at: new Date().toISOString(),
       })
       .eq('message_id', edit.originalMessageId)
-      .select('id, conversation_id')
+      .select('id, conversation_id');
 
     if (error) {
-      console.error('[webhook] failed to apply message edit:', error.message)
-      return
+      console.error('[webhook] failed to apply message edit:', error.message);
+      return;
     }
     if (!data || data.length === 0) {
       console.log(
-        `[webhook] edit for unknown message ${edit.originalMessageId} — ignored`,
-      )
-      return
+        `[webhook] edit for unknown message ${edit.originalMessageId} — ignored`
+      );
+      return;
     }
 
     // Keep the conversation preview in step, but ONLY when the edited
@@ -1291,25 +1786,25 @@ async function handleMessageMutation(
         .eq('conversation_id', row.conversation_id)
         .order('created_at', { ascending: false })
         .limit(1)
-        .maybeSingle()
+        .maybeSingle();
 
-      if (newest?.id !== row.id) continue
+      if (newest?.id !== row.id) continue;
 
       await supabaseAdmin()
         .from('conversations')
         .update({ last_message_text: contentText })
-        .eq('id', row.conversation_id)
+        .eq('id', row.conversation_id);
     }
 
     await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.edited', {
       whatsapp_message_id: edit.originalMessageId,
       text: contentText,
-    })
-    return
+    });
+    return;
   }
 
-  const revoke = parseRevoke(message)
-  if (!revoke) return
+  const revoke = parseRevoke(message);
+  if (!revoke) return;
 
   // SOFT delete. The row stays so the thread can render "This message was
   // deleted" in place — removing it would silently reflow the
@@ -1319,22 +1814,22 @@ async function handleMessageMutation(
     .from('messages')
     .update({ deleted_at: new Date().toISOString() })
     .eq('message_id', revoke.originalMessageId)
-    .select('id')
+    .select('id');
 
   if (error) {
-    console.error('[webhook] failed to apply message revoke:', error.message)
-    return
+    console.error('[webhook] failed to apply message revoke:', error.message);
+    return;
   }
   if (!data || data.length === 0) {
     console.log(
-      `[webhook] revoke for unknown message ${revoke.originalMessageId} — ignored`,
-    )
-    return
+      `[webhook] revoke for unknown message ${revoke.originalMessageId} — ignored`
+    );
+    return;
   }
 
   await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.deleted', {
     whatsapp_message_id: revoke.originalMessageId,
-  })
+  });
 }
 
 // The happy-path status ladder — pending → sent → delivered → read →
@@ -1352,11 +1847,11 @@ const RECIPIENT_STATUS_LADDER = [
   'delivered',
   'read',
   'replied',
-] as const
+] as const;
 
 function ladderLevel(s: string): number {
-  const idx = (RECIPIENT_STATUS_LADDER as readonly string[]).indexOf(s)
-  return idx < 0 ? -1 : idx
+  const idx = (RECIPIENT_STATUS_LADDER as readonly string[]).indexOf(s);
+  return idx < 0 ? -1 : idx;
 }
 
 /**
@@ -1367,36 +1862,126 @@ function ladderLevel(s: string): number {
  */
 function isValidStatusTransition(current: string, incoming: string): boolean {
   if (incoming === 'failed') {
-    return current === 'pending' || current === 'sent'
+    return current === 'pending' || current === 'sent';
   }
   if (current === 'failed') {
-    return false // failed is terminal
+    return false; // failed is terminal
   }
-  const ci = ladderLevel(current)
-  const ii = ladderLevel(incoming)
-  if (ii < 0) return false // unknown incoming status
-  if (ci < 0) return true // unknown current — accept anything on the ladder
-  return ii > ci
+  const ci = ladderLevel(current);
+  const ii = ladderLevel(incoming);
+  if (ii < 0) return false; // unknown incoming status
+  if (ci < 0) return true; // unknown current — accept anything on the ladder
+  return ii > ci;
 }
 
 async function handleStatusUpdate(status: {
-  id: string
-  status: string
-  timestamp: string
-  recipient_id: string
+  id: string;
+  status: string;
+  timestamp: string;
+  recipient_id: string;
+  errors?: Array<{
+    code?: number;
+    title?: string;
+    message?: string;
+    error_data?: { details?: string };
+    href?: string;
+  }>;
 }) {
-  // 1) Mirror onto messages (legacy behavior) — Meta's status values
-  //    already match the CHECK constraint on messages.status. No
-  //    `.select()`: message_id is NOT unique (migration 009 — Meta ids
-  //    repeat across numbers), so this updates 0..N rows and must not
-  //    assume a single row.
-  const { error: msgErr } = await supabaseAdmin()
-    .from('messages')
-    .update({ status: status.status })
-    .eq('message_id', status.id)
+  // Capture Meta's reason for a delivery failure.
+  //
+  // This is the ONLY moment it is ever available. A message can be accepted
+  // by Meta — wamid returned, row stored as 'sent' — and only fail minutes
+  // later, at which point this webhook is the sole carrier of the cause.
+  // The previous code wrote `{ status: status.status }` and discarded
+  // `errors[]` entirely, which is why failed messages showed a red cross
+  // with no explanation that could ever be recovered.
+  //
+  // Meta's wording is stored verbatim. `error_data.details` is preferred
+  // over `message` because it is consistently more specific — Meta reuses
+  // the same generic sentence across unrelated codes, so a paraphrase or
+  // the generic text alone would lose the actual reason.
+  const failure = status.status === 'failed' ? status.errors?.[0] : undefined;
+
+  const tsIso = status.timestamp
+    ? new Date(parseInt(status.timestamp) * 1000).toISOString()
+    : new Date().toISOString();
+
+  // Failure detail, extracted here and handed to the RPC below. The
+  // lifecycle timestamps and the status ladder are NOT computed in this
+  // function any more — see migration 080 and the call site further down
+  // for why they have to be applied in a single SQL statement.
+  const statusPatch: Record<string, unknown> = {};
+
+  if (failure) {
+    const detail = failure.error_data?.details?.trim();
+    const generic = failure.message?.trim() || failure.title?.trim();
+    const text =
+      detail || generic || 'Meta reported a delivery failure with no detail.';
+
+    statusPatch.error_code =
+      failure.code != null ? String(failure.code) : 'delivery_failed';
+    statusPatch.error_message = failure.code
+      ? `${text} (Meta error ${failure.code})`
+      : text;
+    statusPatch.error_details = {
+      code: failure.code ?? null,
+      title: failure.title ?? null,
+      raw_message: failure.message ?? null,
+      details: failure.error_data?.details ?? null,
+      href: failure.href ?? null,
+      // Distinguishes this from a send-time rejection. The two have
+      // different causes and different fixes, and the stored row is the
+      // only place that difference survives.
+      source: 'status_webhook',
+      recipient_id: status.recipient_id,
+    };
+    console.warn(
+      `[webhook] delivery failed for ${status.id}: ${statusPatch.error_message}`
+    );
+  }
+  // Clearing a stale failure reason on a later success is handled inside
+  // fn_apply_message_status — a message that failed and was then retried
+  // must not keep a red reason under a delivered bubble.
+
+  // 1) Mirror onto messages.
+  //
+  //    Delegated to fn_apply_message_status (migration 080) rather than a
+  //    `.update()`, because Meta redelivers status webhooks and does not
+  //    order them. Doing it here in JS would mean:
+  //      - `delivered_at` overwritten by a replay, so the Message Info
+  //        panel shows the time of the LAST duplicate, not the delivery;
+  //      - a replayed `sent` arriving after `read` dragging `status` back
+  //        down, showing one tick on a message already read.
+  //    The RPC applies a forward-only status and COALESCEs each
+  //    timestamp, so the first writer wins and every replay is a no-op.
+  //    It has to be one statement: a read-then-write would let two
+  //    concurrent deliveries both see "not set yet".
+  //
+  //    Set-based on purpose: message_id is NOT unique (migration 009 —
+  //    Meta ids repeat across numbers), so this touches 0..N rows.
+  const { data: touchedRows, error: msgErr } = await supabaseAdmin().rpc(
+    'fn_apply_message_status',
+    {
+      p_message_id: status.id,
+      p_status: status.status,
+      p_ts: tsIso,
+      p_error_code: (statusPatch.error_code as string | undefined) ?? null,
+      p_error_message:
+        (statusPatch.error_message as string | undefined) ?? null,
+      p_error_details: statusPatch.error_details ?? null,
+    }
+  );
 
   if (msgErr) {
-    console.error('Error updating message status:', msgErr)
+    console.error('Error updating message status:', msgErr);
+  } else if (touchedRows === 0) {
+    // Not an error: Meta also sends statuses for sends we never stored
+    // (template tests from Manager, another tool on the same number).
+    // Logged because a SUSTAINED run of these means the send path stopped
+    // persisting wamids, which is otherwise invisible.
+    console.warn(
+      `[webhook] status '${status.status}' for unknown wamid ${status.id} — no message row matched`
+    );
   }
 
   // Webhook fan-out for this status change happens at the END of this
@@ -1407,34 +1992,38 @@ async function handleStatusUpdate(status: {
   //    (added in migration 003). The aggregate trigger on
   //    broadcast_recipients re-derives the parent broadcast's
   //    sent/delivered/read/failed counts automatically.
-  const tsIso = new Date(parseInt(status.timestamp) * 1000).toISOString()
-
   const { data: recipient, error: recFetchErr } = await supabaseAdmin()
     .from('broadcast_recipients')
     .select('id, status')
     .eq('whatsapp_message_id', status.id)
-    .maybeSingle()
+    .maybeSingle();
 
   if (recFetchErr) {
-    console.error('Error fetching broadcast recipient:', recFetchErr)
+    console.error('Error fetching broadcast recipient:', recFetchErr);
   } else if (
     recipient &&
     // Guard transitions — forward-only on the success ladder, and
     // `failed` only from pre-delivered states.
     isValidStatusTransition(recipient.status, status.status)
   ) {
-    const update: Record<string, unknown> = { status: status.status }
-    if (status.status === 'sent' && !('sent_at' in update)) update.sent_at = tsIso
-    if (status.status === 'delivered') update.delivered_at = tsIso
-    if (status.status === 'read') update.read_at = tsIso
+    // No idempotence guard needed on these three the way `messages` needs
+    // one: `isValidStatusTransition` above already rejects a replay, so a
+    // second `delivered` never reaches this block. The previous
+    // `&& !('sent_at' in update)` test read like a guard but checked a key
+    // on the object literal declared one line earlier, so it was always
+    // true — dead code that implied a protection it did not provide.
+    const update: Record<string, unknown> = { status: status.status };
+    if (status.status === 'sent') update.sent_at = tsIso;
+    if (status.status === 'delivered') update.delivered_at = tsIso;
+    if (status.status === 'read') update.read_at = tsIso;
 
     const { error: recUpdateErr } = await supabaseAdmin()
       .from('broadcast_recipients')
       .update(update)
-      .eq('id', recipient.id)
+      .eq('id', recipient.id);
 
     if (recUpdateErr) {
-      console.error('Error updating broadcast recipient status:', recUpdateErr)
+      console.error('Error updating broadcast recipient status:', recUpdateErr);
     }
   }
 
@@ -1447,11 +2036,11 @@ async function handleStatusUpdate(status: {
     .select('conversation_id, conversations(account_id)')
     .eq('message_id', status.id)
     .limit(1)
-    .maybeSingle()
+    .maybeSingle();
 
   if (msgRow) {
-    const conv = msgRow.conversations as { account_id: string } | null
-    const accountId = conv?.account_id
+    const conv = msgRow.conversations as { account_id: string } | null;
+    const accountId = conv?.account_id;
     if (accountId) {
       await dispatchWebhookEvent(
         supabaseAdmin(),
@@ -1462,7 +2051,7 @@ async function handleStatusUpdate(status: {
           conversation_id: msgRow.conversation_id,
           status: status.status,
         }
-      )
+      );
     }
   }
 }
@@ -1488,21 +2077,21 @@ async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
       .eq('broadcasts.account_id', accountId)
       .in('status', ['sent', 'delivered', 'read'])
       .order('created_at', { ascending: false })
-      .limit(1)
+      .limit(1);
 
-    if (error || !recs || recs.length === 0) return
+    if (error || !recs || recs.length === 0) return;
 
-    const row = recs[0]
+    const row = recs[0];
     const { error: updErr } = await supabaseAdmin()
       .from('broadcast_recipients')
       .update({ status: 'replied', replied_at: new Date().toISOString() })
-      .eq('id', row.id)
+      .eq('id', row.id);
 
     if (updErr) {
-      console.error('Error marking broadcast recipient replied:', updErr)
+      console.error('Error marking broadcast recipient replied:', updErr);
     }
   } catch (err) {
-    console.error('flagBroadcastReplyIfAny failed:', err)
+    console.error('flagBroadcastReplyIfAny failed:', err);
   }
 }
 
@@ -1520,12 +2109,12 @@ async function lookupInternalIdByMetaId(
     .select('id')
     .eq('message_id', metaId)
     .eq('conversation_id', conversationId)
-    .maybeSingle()
+    .maybeSingle();
   if (error) {
-    console.error('[webhook] lookupInternalIdByMetaId failed:', error.message)
-    return null
+    console.error('[webhook] lookupInternalIdByMetaId failed:', error.message);
+    return null;
   }
-  return data?.id ?? null
+  return data?.id ?? null;
 }
 
 /**
@@ -1541,19 +2130,19 @@ async function handleReaction(
   conversationId: string,
   contactId: string
 ) {
-  const reaction = message.reaction
-  if (!reaction?.message_id) return
+  const reaction = message.reaction;
+  if (!reaction?.message_id) return;
 
   const targetInternalId = await lookupInternalIdByMetaId(
     reaction.message_id,
     conversationId
-  )
+  );
   if (!targetInternalId) {
     console.warn(
       '[webhook] reaction target message not found; skipping',
       reaction.message_id
-    )
-    return
+    );
+    return;
   }
 
   // Empty emoji = removal (per Meta's Cloud API spec).
@@ -1563,11 +2152,11 @@ async function handleReaction(
       .delete()
       .eq('message_id', targetInternalId)
       .eq('actor_type', 'customer')
-      .eq('actor_id', contactId)
+      .eq('actor_id', contactId);
     if (delError) {
-      console.error('[webhook] reaction delete failed:', delError.message)
+      console.error('[webhook] reaction delete failed:', delError.message);
     }
-    return
+    return;
   }
 
   const { error: upsertError } = await supabaseAdmin()
@@ -1581,9 +2170,9 @@ async function handleReaction(
         emoji: reaction.emoji,
       },
       { onConflict: 'message_id,actor_type,actor_id' }
-    )
+    );
   if (upsertError) {
-    console.error('[webhook] reaction upsert failed:', upsertError.message)
+    console.error('[webhook] reaction upsert failed:', upsertError.message);
   }
 }
 
@@ -1600,8 +2189,8 @@ async function processMessage(
   configOwnerUserId: string,
   accessToken: string
 ) {
-  const senderPhone = normalizePhone(message.from)
-  const contactName = contact.profile.name
+  const senderPhone = normalizePhone(message.from);
+  const contactName = contact.profile.name;
 
   // Find or create contact
   const contactOutcome = await findOrCreateContact(
@@ -1609,55 +2198,69 @@ async function processMessage(
     configOwnerUserId,
     senderPhone,
     contactName
-  )
-  if (!contactOutcome) return
-  const contactRecord = contactOutcome.contact
+  );
+  if (!contactOutcome) return;
+  const contactRecord = contactOutcome.contact;
 
   // Find or create conversation
   const convResult = await findOrCreateConversation(
     accountId,
     configOwnerUserId,
     contactRecord.id
-  )
-  if (!convResult) return
-  const conversation = convResult.conversation
+  );
+  if (!convResult) return;
+  const conversation = convResult.conversation;
 
   // Emit conversation.created as soon as the thread is opened — BEFORE
   // the reaction short-circuit below — so a conversation first opened by
   // a reaction still fires the event, and a subscriber always sees the
   // thread open before its first message.received.
   if (convResult.created) {
-    await dispatchWebhookEvent(supabaseAdmin(), accountId, 'conversation.created', {
-      conversation_id: conversation.id,
-      contact_id: contactRecord.id,
-    })
+    await dispatchWebhookEvent(
+      supabaseAdmin(),
+      accountId,
+      'conversation.created',
+      {
+        conversation_id: conversation.id,
+        contact_id: contactRecord.id,
+      }
+    );
   }
 
   // Reactions short-circuit here — they aren't messages. We never insert
   // into `messages`, never bump unread_count, never update last_message_text.
   // Done before parseMessageContent so the media-URL fetch is skipped.
   if (message.type === 'reaction') {
-    await handleReaction(message, conversation.id, contactRecord.id)
-    return
+    await handleReaction(message, conversation.id, contactRecord.id);
+    return;
   }
 
   // Parse message content based on type
-  const { contentText, mediaUrl, mediaType, interactiveReplyId } =
-    await parseMessageContent(message, accessToken)
+  const {
+    contentText,
+    mediaUrl,
+    mediaType,
+    interactiveReplyId,
+    contactsPayload,
+    latitude,
+    longitude,
+    locationName,
+    locationAddress,
+  } = await parseMessageContent(message, accessToken);
 
   // Resolve swipe-reply context if present. A missing parent is fine —
   // we just store NULL and the UI renders the message without a quote.
-  let replyToInternalId: string | null = null
+  let replyToInternalId: string | null = null;
   if (message.context?.id) {
     replyToInternalId = await lookupInternalIdByMetaId(
       message.context.id,
       conversation.id
-    )
+    );
     if (!replyToInternalId) {
       console.warn(
         '[webhook] reply context parent not found:',
         message.context.id
-      )
+      );
     }
   }
 
@@ -1668,22 +2271,11 @@ async function processMessage(
   // `mediaType` is intentionally unused — the schema has no media_type
   // column; the MIME type is only used to construct the proxy URL during
   // parseMessageContent. Silence the unused-var warning:
-  void mediaType
+  void mediaType;
 
-  // The messages.content_type CHECK constraint (widened in migration 010
-  // to add 'interactive' for button/list taps) allows:
-  //   text, image, document, audio, video, location, template, interactive
-  // Map incoming WhatsApp types that aren't in that list to the closest
-  // allowed value so the INSERT doesn't fail with a constraint error.
-  const ALLOWED_CONTENT_TYPES = new Set([
-    'text', 'image', 'document', 'audio', 'video',
-    'location', 'template', 'interactive',
-  ])
-  const contentType = ALLOWED_CONTENT_TYPES.has(message.type)
-    ? message.type
-    : message.type === 'sticker'
-      ? 'image'   // stickers are images
-      : 'text'    // reaction, unknown → text fallback
+  // The messages.content_type CHECK constraint (widened in migration 076)
+  // allows all normalized types defined in content-types.ts.
+  const contentType = normalizeContentType(message.type);
 
   // Determine whether this is the contact's very first inbound message
   // BEFORE we insert, so the count is accurate. Covers the case where
@@ -1693,28 +2285,35 @@ async function processMessage(
     .from('messages')
     .select('id', { count: 'exact', head: true })
     .eq('conversation_id', conversation.id)
-    .eq('sender_type', 'customer')
-  const isFirstInboundMessage = (priorCustomerMsgCount ?? 0) === 0
+    .eq('sender_type', 'customer');
+  const isFirstInboundMessage = (priorCustomerMsgCount ?? 0) === 0;
 
-  const { error: msgError } = await supabaseAdmin().from('messages').insert({
-    conversation_id: conversation.id,
-    sender_type: 'customer',
-    content_type: contentType,
-    content_text: contentText,
-    media_url: mediaUrl,
-    message_id: message.id,
-    status: 'delivered',
-    created_at: new Date(parseInt(message.timestamp) * 1000).toISOString(),
-    reply_to_message_id: replyToInternalId,
-    // Only populated for content_type='interactive'. Migration 010 added
-    // the column; null for every other content_type so existing inserts
-    // behave identically.
-    interactive_reply_id: interactiveReplyId,
-  })
+  const { error: msgError } = await supabaseAdmin()
+    .from('messages')
+    .insert({
+      conversation_id: conversation.id,
+      sender_type: 'customer',
+      content_type: contentType,
+      content_text: contentText,
+      media_url: mediaUrl,
+      message_id: message.id,
+      status: 'delivered',
+      created_at: new Date(parseInt(message.timestamp) * 1000).toISOString(),
+      reply_to_message_id: replyToInternalId,
+      // Only populated for content_type='interactive'. Migration 010 added
+      // the column; null for every other content_type so existing inserts
+      // behave identically.
+      interactive_reply_id: interactiveReplyId,
+      contacts_payload: contactsPayload,
+      latitude,
+      longitude,
+      location_name: locationName,
+      location_address: locationAddress,
+    });
 
   if (msgError) {
-    console.error('Error inserting message:', msgError)
-    return
+    console.error('Error inserting message:', msgError);
+    return;
   }
 
   // Update conversation
@@ -1725,17 +2324,57 @@ async function processMessage(
       last_message_at: new Date().toISOString(),
       unread_count: (conversation.unread_count || 0) + 1,
       updated_at: new Date().toISOString(),
+      // A LIVE customer message always makes the chat visible, whatever the
+      // history import decided.
+      //
+      // Without this, a chat that came in as 'pending_review' would swallow
+      // real incoming messages: the customer writes, unread_count climbs,
+      // and nobody sees it because the inbox filters the row out. That is a
+      // far worse failure than the auto-loading this gate exists to fix, and
+      // it is the one case where the review queue must yield.
+      //
+      // Unconditional rather than "only if pending", because writing 'live'
+      // over 'live' costs nothing and a conditional would need the current
+      // value read first.
+      import_state: 'live',
     })
-    .eq('id', conversation.id)
+    .eq('id', conversation.id);
 
   if (convError) {
-    console.error('Error updating conversation:', convError)
+    console.error('Error updating conversation:', convError);
   }
 
   // If this contact was a recent broadcast recipient, flag the reply
   // so the broadcast's `replied_count` advances (via the aggregate
   // trigger installed in migration 003).
-  await flagBroadcastReplyIfAny(accountId, contactRecord.id)
+  await flagBroadcastReplyIfAny(accountId, contactRecord.id);
+
+  // ============================================================
+  // Opt-out / opt-in keywords (STOP / START).
+  //
+  // Runs BEFORE every reactive engine below. A customer who just asked
+  // to be left alone must get the confirmation and nothing else — if
+  // this ran after the Flow runner, a bot menu would answer "STOP", and
+  // if it ran after the AI gate the LLM would reply on top of it.
+  //
+  // Placed after the message INSERT above so the STOP is visible in the
+  // thread and so a Meta redelivery (which early-returns on the
+  // duplicate wamid) cannot record the same opt-out twice.
+  //
+  // Awaited because `consumed` gates the three dispatches below. The
+  // handler owns its own try/catch and never throws.
+  // ============================================================
+  const optOutResult = await handleInboundOptOutKeyword({
+    db: supabaseAdmin(),
+    accountId,
+    configOwnerUserId,
+    contactId: contactRecord.id,
+    conversationId: conversation.id,
+    phone: senderPhone,
+    text: contentText,
+    interactiveReplyId,
+  });
+  const optOutConsumed = optOutResult.consumed;
 
   // ============================================================
   // Flow runner dispatch.
@@ -1755,52 +2394,60 @@ async function processMessage(
   // runner has its own try/catch and never throws. Accounts with
   // no active flows take the runner's early-exit "no_match" path
   // basically for free (one indexed SELECT for the active run).
+  //
+  // Skipped entirely when the message was a STOP/START: the customer
+  // gave an instruction about receiving messages, not an answer to a
+  // bot menu.
   // ============================================================
-  const flowResult = await dispatchInboundToFlows({
-    accountId,
-    userId: configOwnerUserId,
-    contactId: contactRecord.id,
-    conversationId: conversation.id,
-    message:
-      interactiveReplyId
-        ? {
-            kind: 'interactive_reply',
-            reply_id: interactiveReplyId,
-            reply_title: contentText ?? '',
-            meta_message_id: message.id,
-          }
-        : {
-            kind: 'text',
-            text: contentText ?? message.text?.body ?? '',
-            meta_message_id: message.id,
-          },
-    isFirstInboundMessage,
-  })
-  const flowConsumed = flowResult.consumed
+  const flowResult = optOutConsumed
+    ? { consumed: false }
+    : await dispatchInboundToFlows({
+        accountId,
+        userId: configOwnerUserId,
+        contactId: contactRecord.id,
+        conversationId: conversation.id,
+        message: interactiveReplyId
+          ? {
+              kind: 'interactive_reply',
+              reply_id: interactiveReplyId,
+              reply_title: contentText ?? '',
+              meta_message_id: message.id,
+            }
+          : {
+              kind: 'text',
+              text: contentText ?? message.text?.body ?? '',
+              meta_message_id: message.id,
+            },
+        isFirstInboundMessage,
+      });
+  const flowConsumed = flowResult.consumed;
 
   // Fire any automations that react to this webhook event. All dispatches
   // run here (not earlier) so the contact, conversation, and inbound
   // message all exist before any step — including send_message — runs.
   // Fire-and-forget: a slow or failing automation must not block the
   // webhook's 200 OK response to Meta.
-  const inboundText = contentText ?? message.text?.body ?? ''
+  const inboundText = contentText ?? message.text?.body ?? '';
   const automationTriggers: (
     | 'new_contact_created'
     | 'first_inbound_message'
     | 'new_message_received'
     | 'keyword_match'
     | 'interactive_reply'
-  )[] = []
+  )[] = [];
   // Content-level triggers are suppressed when a flow consumed the
-  // message — see the comment block above.
-  if (!flowConsumed) {
-    automationTriggers.push('new_message_received', 'keyword_match')
+  // message — see the comment block above — and likewise when the
+  // message was a STOP/START. Letting `keyword_match` fire on "STOP"
+  // would hand the customer a marketing reply immediately after
+  // confirming they want none.
+  if (!flowConsumed && !optOutConsumed) {
+    automationTriggers.push('new_message_received', 'keyword_match');
     // Interactive tap → fire the interactive_reply trigger too (only
     // meaningful when a button/list reply actually arrived). Enables
     // automation-only chained menus; when a Flow owns the menu it will
     // have consumed the reply and this is skipped.
     if (interactiveReplyId) {
-      automationTriggers.push('interactive_reply')
+      automationTriggers.push('interactive_reply');
     }
   }
   // new_contact_created fires only when the webhook just auto-created the
@@ -1809,8 +2456,18 @@ async function processMessage(
   // manually-imported contacts sending for the first time. We dispatch both
   // so users can pick whichever semantic they want; an automation that
   // listens to only one trigger runs only when that trigger matches.
-  if (contactOutcome.wasCreated) automationTriggers.unshift('new_contact_created')
-  if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
+  //
+  // These normally survive `flowConsumed` because they are about WHO is
+  // messaging rather than what they said — but an opt-out is the one case
+  // where that reasoning inverts. A contact whose first-ever message is
+  // "STOP" must not be met with a welcome sequence, so the opt-out
+  // suppresses these too and `automationTriggers` stays empty.
+  if (!optOutConsumed) {
+    if (contactOutcome.wasCreated)
+      automationTriggers.unshift('new_contact_created');
+    if (isFirstInboundMessage)
+      automationTriggers.unshift('first_inbound_message');
+  }
   for (const triggerType of automationTriggers) {
     runAutomationsForTrigger({
       accountId,
@@ -1823,7 +2480,7 @@ async function processMessage(
         // trigger's exact-id match.
         interactive_reply_id: interactiveReplyId ?? undefined,
       },
-    }).catch((err) => console.error('[automations] dispatch failed:', err))
+    }).catch((err) => console.error('[automations] dispatch failed:', err));
   }
 
   // AI auto-reply. Runs only for plain-text inbound the deterministic
@@ -1831,13 +2488,18 @@ async function processMessage(
   // the account has enabled it. Awaited inside `after()` (same reason as
   // the webhook dispatch below); `dispatchInboundToAiReply` owns its
   // eligibility gates + try/catch and never throws.
-  if (!flowConsumed && !interactiveReplyId && inboundText.trim()) {
+  if (
+    !flowConsumed &&
+    !optOutConsumed &&
+    !interactiveReplyId &&
+    inboundText.trim()
+  ) {
     await dispatchInboundToAiReply({
       accountId,
       conversationId: conversation.id,
       contactId: contactRecord.id,
       configOwnerUserId,
-    })
+    });
   }
 
   // message.received webhook (public API). Awaited — not fire-and-forget
@@ -1853,16 +2515,16 @@ async function processMessage(
     whatsapp_message_id: message.id,
     content_type: contentType,
     text: contentText,
-  })
+  });
 }
 
 async function parseMessageContent(
   message: WhatsAppMessage,
   accessToken: string
 ): Promise<{
-  contentText: string | null
-  mediaUrl: string | null
-  mediaType: string | null
+  contentText: string | null;
+  mediaUrl: string | null;
+  mediaType: string | null;
   /**
    * For interactive button / list replies: the stable id of the tapped
    * option (whatever we put on the button when sending). Used by the
@@ -1870,26 +2532,29 @@ async function parseMessageContent(
    * `messages.interactive_reply_id` so the inbox bubble can render the
    * tap with the right affordance. Null for everything else.
    */
-  interactiveReplyId: string | null
+  interactiveReplyId: string | null;
+  contactsPayload: unknown[] | null;
+  latitude: number | null;
+  longitude: number | null;
+  locationName: string | null;
+  locationAddress: string | null;
 }> {
   // getMediaUrl signature is (mediaId, accessToken) — earlier code had
   // the args swapped, so every verification hit an invalid Meta URL and
   // fell through to the catch block, leaving mediaUrl as null. That's
   // why images showed up as empty bubbles in the inbox.
-  const verifyAndBuildUrl = async (
-    mediaId: string
-  ): Promise<string | null> => {
+  const verifyAndBuildUrl = async (mediaId: string): Promise<string | null> => {
     try {
-      await getMediaUrl({ mediaId, accessToken })
-      return `/api/whatsapp/media/${mediaId}`
+      await getMediaUrl({ mediaId, accessToken });
+      return `/api/whatsapp/media/${mediaId}`;
     } catch (error) {
       console.error(
         `Failed to verify media ${mediaId} with Meta:`,
         error instanceof Error ? error.message : error
-      )
-      return null
+      );
+      return null;
     }
-  }
+  };
 
   // Default shape — each case overrides only the fields it cares about.
   // Keeps the new `interactiveReplyId` field DRY across every return site.
@@ -1898,11 +2563,38 @@ async function parseMessageContent(
     mediaUrl: null,
     mediaType: null,
     interactiveReplyId: null,
-  }
+    contactsPayload: null,
+    latitude: null,
+    longitude: null,
+    locationName: null,
+    locationAddress: null,
+  };
 
   switch (message.type) {
     case 'text':
-      return { ...empty, contentText: message.text?.body || null }
+      return { ...empty, contentText: message.text?.body || null };
+
+    case 'contacts':
+      if (message.contacts && message.contacts.length > 0) {
+        const contactNames = message.contacts
+          .map((c) => {
+            const name =
+              c.name?.formatted_name?.trim() ||
+              [c.name?.first_name, c.name?.last_name]
+                .filter(Boolean)
+                .join(' ') ||
+              'Contact';
+            const phone = c.phones?.[0]?.phone ? ` (${c.phones[0].phone})` : '';
+            return `${name}${phone}`;
+          })
+          .join(', ');
+        return {
+          ...empty,
+          contentText: `👤 ${contactNames}`,
+          contactsPayload: message.contacts,
+        };
+      }
+      return empty;
 
     case 'image':
       if (message.image?.id) {
@@ -1911,9 +2603,9 @@ async function parseMessageContent(
           contentText: message.image.caption || null,
           mediaUrl: await verifyAndBuildUrl(message.image.id),
           mediaType: message.image.mime_type,
-        }
+        };
       }
-      return empty
+      return empty;
 
     case 'video':
       if (message.video?.id) {
@@ -1922,9 +2614,9 @@ async function parseMessageContent(
           contentText: message.video.caption || null,
           mediaUrl: await verifyAndBuildUrl(message.video.id),
           mediaType: message.video.mime_type,
-        }
+        };
       }
-      return empty
+      return empty;
 
     case 'document':
       if (message.document?.id) {
@@ -1934,9 +2626,9 @@ async function parseMessageContent(
             message.document.caption || message.document.filename || null,
           mediaUrl: await verifyAndBuildUrl(message.document.id),
           mediaType: message.document.mime_type,
-        }
+        };
       }
-      return empty
+      return empty;
 
     case 'audio':
       if (message.audio?.id) {
@@ -1944,9 +2636,9 @@ async function parseMessageContent(
           ...empty,
           mediaUrl: await verifyAndBuildUrl(message.audio.id),
           mediaType: message.audio.mime_type,
-        }
+        };
       }
-      return empty
+      return empty;
 
     case 'sticker':
       // Stickers are images under the hood. Treat them as such so the
@@ -1957,22 +2649,58 @@ async function parseMessageContent(
           ...empty,
           mediaUrl: await verifyAndBuildUrl(message.sticker.id),
           mediaType: message.sticker.mime_type,
-        }
+        };
       }
-      return empty
+      return empty;
 
     case 'location':
       if (message.location) {
-        const loc = message.location
-        const locationText = [loc.name, loc.address, `${loc.latitude},${loc.longitude}`]
-          .filter(Boolean)
-          .join(' - ')
-        return { ...empty, contentText: locationText }
+        const loc = message.location;
+        const label = [loc.name, loc.address].filter(Boolean).join(', ');
+        const locationText = label || `${loc.latitude}, ${loc.longitude}`;
+        return {
+          ...empty,
+          contentText: `📍 ${locationText}`,
+          latitude:
+            typeof loc.latitude === 'number'
+              ? loc.latitude
+              : Number(loc.latitude) || null,
+          longitude:
+            typeof loc.longitude === 'number'
+              ? loc.longitude
+              : Number(loc.longitude) || null,
+          locationName: loc.name || null,
+          locationAddress: loc.address || null,
+        };
       }
-      return empty
+      return empty;
 
     case 'reaction':
-      return { ...empty, contentText: message.reaction?.emoji || null }
+      return { ...empty, contentText: message.reaction?.emoji || null };
+
+    // A quick-reply button tap on a TEMPLATE message.
+    //
+    // Meta splits these across two types: `interactive` for interactive
+    // messages, and this one for templates. Only `interactive` was handled,
+    // so a customer tapping "Track Order" or "Need Help" on a template
+    // stored "[Unsupported message type: button]" and the choice was lost.
+    //
+    // The label goes in contentText so the thread reads naturally, and the
+    // payload is surfaced as interactiveReplyId so automations and flows can
+    // route on a stable value rather than display text that may be
+    // translated or edited.
+    case 'button': {
+      const label = message.button?.text?.trim();
+      const payload = message.button?.payload?.trim();
+      if (label || payload) {
+        return {
+          ...empty,
+          contentText: label || payload || null,
+          interactiveReplyId: payload || null,
+        };
+      }
+      return empty;
+    }
 
     case 'interactive': {
       // The customer tapped a reply button or a list row on a message
@@ -1982,48 +2710,81 @@ async function parseMessageContent(
       // renders the tap legibly ("Existing customer"), and stash the
       // stable id separately so the Flows engine can route on it.
       const reply =
-        message.interactive?.button_reply ?? message.interactive?.list_reply
+        message.interactive?.button_reply ?? message.interactive?.list_reply;
       if (reply?.id) {
         return {
           ...empty,
           contentText: reply.title || reply.id,
           interactiveReplyId: reply.id,
-        }
+        };
       }
 
       // A completed Meta WhatsApp Flow. Until this existed the answers
       // fell through to '[Interactive reply]' and were DISCARDED — the
       // customer filled in a form and the business received a placeholder.
       if (message.interactive?.nfm_reply) {
-        const parsed = parseFlowResponse(message.interactive.nfm_reply)
+        const parsed = parseFlowResponse(message.interactive.nfm_reply);
         return {
           ...empty,
           contentText: parsed.text,
           // The flow_token we generated when sending, so a submission can
           // be tied back to the message that started it.
           interactiveReplyId: parsed.flowToken,
-        }
+        };
       }
 
-      return { ...empty, contentText: '[Interactive reply]' }
+      return { ...empty, contentText: '[Interactive reply]' };
     }
+
+    case 'poll':
+    case 'poll_creation':
+    case 'poll_update':
+      return {
+        ...empty,
+        contentText: 'poll',
+      };
+
+    case 'live_location':
+      return {
+        ...empty,
+        contentText: 'live_location',
+      };
+
+    case 'order':
+      return {
+        ...empty,
+        contentText: 'order',
+      };
+
+    case 'ephemeral':
+    case 'view_once':
+      return {
+        ...empty,
+        contentText: 'view_once',
+      };
+
+    case 'unsupported':
+      return {
+        ...empty,
+        contentText: 'unsupported',
+      };
 
     default:
       return {
         ...empty,
-        contentText: `[Unsupported message type: ${message.type}]`,
-      }
+        contentText: message.type || 'unknown',
+      };
   }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ContactRow = any
+type ContactRow = any;
 
 interface ContactOutcome {
-  contact: ContactRow
+  contact: ContactRow;
   /** True when this call created the row; drives new_contact_created
    *  automation dispatch in processMessage. */
-  wasCreated: boolean
+  wasCreated: boolean;
 }
 
 async function findOrCreateContact(
@@ -2041,8 +2802,8 @@ async function findOrCreateContact(
   const existingContact = await findExistingContact(
     supabaseAdmin(),
     accountId,
-    phone,
-  )
+    phone
+  );
 
   if (existingContact) {
     // Update name if it changed
@@ -2050,9 +2811,9 @@ async function findOrCreateContact(
       await supabaseAdmin()
         .from('contacts')
         .update({ name, updated_at: new Date().toISOString() })
-        .eq('id', existingContact.id)
+        .eq('id', existingContact.id);
     }
-    return { contact: existingContact, wasCreated: false }
+    return { contact: existingContact, wasCreated: false };
   }
 
   // Create new contact. account_id is the tenancy column;
@@ -2068,7 +2829,7 @@ async function findOrCreateContact(
       name: name || phone,
     })
     .select()
-    .single()
+    .single();
 
   if (createError) {
     // Lost a race: a concurrent inbound delivery (or another path)
@@ -2076,20 +2837,37 @@ async function findOrCreateContact(
     // unique index (migration 022) rejected the duplicate. Re-resolve
     // the existing row instead of dropping the message.
     if (isUniqueViolation(createError)) {
-      const raced = await findExistingContact(supabaseAdmin(), accountId, phone)
-      if (raced) return { contact: raced, wasCreated: false }
+      const raced = await findExistingContact(
+        supabaseAdmin(),
+        accountId,
+        phone
+      );
+      if (raced) return { contact: raced, wasCreated: false };
     }
-    console.error('Error creating contact:', createError)
-    return null
+    console.error('Error creating contact:', createError);
+    return null;
   }
 
-  return { contact: newContact, wasCreated: true }
+  return { contact: newContact, wasCreated: true };
 }
 
 async function findOrCreateConversation(
   accountId: string,
   configOwnerUserId: string,
   contactId: string,
+  /**
+   * Inbox visibility for a conversation this call CREATES.
+   *
+   * Defaults to 'live' so every existing caller — inbound customer
+   * messages, echoes, sends — behaves exactly as before. The coexistence
+   * history backfill passes 'pending_review' instead, which is what stops
+   * an entire phone's chat history appearing in the inbox unannounced.
+   *
+   * Only ever applies to a NEW row. An existing conversation keeps whatever
+   * state it already has, so a backfill touching a chat the operator is
+   * already using cannot hide it out from under them.
+   */
+  importState: 'live' | 'pending_review' = 'live'
 ) {
   // Look for an existing conversation in this account, oldest-first.
   //
@@ -2110,15 +2888,15 @@ async function findOrCreateConversation(
     .eq('account_id', accountId)
     .eq('contact_id', contactId)
     .order('created_at', { ascending: true })
-    .limit(1)
+    .limit(1);
 
   if (findError) {
-    console.error('Error finding conversation:', findError)
-    return null
+    console.error('Error finding conversation:', findError);
+    return null;
   }
 
   if (existingRows && existingRows.length > 0) {
-    return { conversation: existingRows[0], created: false }
+    return { conversation: existingRows[0], created: false };
   }
 
   // Create new conversation. Same tenancy + audit split as
@@ -2129,9 +2907,15 @@ async function findOrCreateConversation(
       account_id: accountId,
       user_id: configOwnerUserId,
       contact_id: contactId,
+      // 'live' for every ordinary path — a real customer messaging in must
+      // appear immediately. Only the history backfill passes
+      // 'pending_review', so six months of imported chats do not land in
+      // the inbox unannounced. Set at INSERT rather than patched afterwards
+      // so there is no window where an imported chat is briefly visible.
+      import_state: importState,
     })
     .select()
-    .single()
+    .single();
 
   if (createError) {
     // Lost a race: a concurrent inbound delivery created the
@@ -2145,14 +2929,14 @@ async function findOrCreateConversation(
         .eq('account_id', accountId)
         .eq('contact_id', contactId)
         .order('created_at', { ascending: true })
-        .limit(1)
+        .limit(1);
       if (raced && raced.length > 0) {
-        return { conversation: raced[0], created: false }
+        return { conversation: raced[0], created: false };
       }
     }
-    console.error('Error creating conversation:', createError)
-    return null
+    console.error('Error creating conversation:', createError);
+    return null;
   }
 
-  return { conversation: newConv, created: true }
+  return { conversation: newConv, created: true };
 }

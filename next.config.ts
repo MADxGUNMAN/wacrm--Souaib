@@ -1,7 +1,7 @@
-import type { NextConfig } from "next";
-import createNextIntlPlugin from "next-intl/plugin";
+import type { NextConfig } from 'next';
+import createNextIntlPlugin from 'next-intl/plugin';
 
-const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
+const withNextIntl = createNextIntlPlugin('./src/i18n/request.ts');
 
 /**
  * Baseline security headers applied to every response.
@@ -15,28 +15,44 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
  *   - HSTS: only meaningful on HTTPS (no-op on http://localhost).
  *   - X-Content-Type-Options / X-Frame-Options / Referrer-Policy:
  *     baseline OWASP hardening, no behavioural cost.
- *   - Permissions-Policy: we don't use camera / microphone / etc, so
- *     deny them. A supply-chain compromise or a forgotten plugin
- *     can't silently opt back in.
+ *   - Permissions-Policy: deny every powerful feature except the two the
+ *     app actually uses, and allow those for same-origin only. A
+ *     supply-chain compromise or a forgotten plugin can't silently opt
+ *     back in. Read the note on that entry before tightening it —
+ *     denying a feature the UI offers produces a permission error the
+ *     user cannot possibly grant.
  */
 const SECURITY_HEADERS = [
   {
-    key: "Strict-Transport-Security",
-    value: "max-age=63072000; includeSubDomains; preload",
+    key: 'Strict-Transport-Security',
+    value: 'max-age=63072000; includeSubDomains; preload',
   },
-  { key: "X-Content-Type-Options", value: "nosniff" },
-  { key: "X-Frame-Options", value: "DENY" },
-  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'X-Frame-Options', value: 'DENY' },
+  { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   {
-    // Microphone is allowed for same-origin (`self`) so the inbox
-    // composer can record voice notes via MediaRecorder. Everything
-    // else stays denied — a compromised dependency can't silently grab
-    // the camera / geolocation / etc.
-    key: "Permissions-Policy",
-    value: "camera=(), microphone=(self), geolocation=(), payment=(), usb=()",
+    // Two features are allowed for SAME-ORIGIN only (`self`), because the
+    // inbox genuinely uses them:
+    //   microphone  — voice notes via MediaRecorder
+    //   geolocation — "Use my current location" in the Send Location Pin
+    //                 dialog
+    //
+    // `geolocation=()` denies it for EVERY origin including our own, and
+    // the browser then rejects getCurrentPosition with PERMISSION_DENIED
+    // *without ever showing a prompt*. That is unfixable from the user's
+    // side: no Chrome site setting and no Windows privacy toggle can
+    // override a header the site itself sent. It cost a round of "the
+    // button is broken" / "check your browser settings" on 20 Aug 2026,
+    // because the symptom is identical to a genuinely blocked permission.
+    //
+    // `(self)` is not the same as removing the entry: an embedded
+    // third-party iframe still gets nothing.
+    key: 'Permissions-Policy',
+    value:
+      'camera=(), microphone=(self), geolocation=(self), payment=(), usb=()',
   },
   {
-    key: "Content-Security-Policy-Report-Only",
+    key: 'Content-Security-Policy-Report-Only',
     value: [
       "default-src 'self'",
       // Next.js needs 'unsafe-inline' for its inline hydration script
@@ -59,7 +75,7 @@ const SECURITY_HEADERS = [
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
-    ].join("; "),
+    ].join('; '),
   },
 ] as const;
 
@@ -72,7 +88,26 @@ const nextConfig: NextConfig = {
    * `node_modules/` tree into the Docker image. The Dockerfile copies
    * `standalone/`, `.next/static/`, and `public/` into the final layer.
    */
-  output: "standalone",
+  output: 'standalone',
+
+  /**
+   * Build output directory, overridable per invocation.
+   *
+   * `next build` and `next dev` share `.next` by default, and a build run
+   * while a dev server is live overwrites the manifests that server is
+   * using. The dev server then keeps answering page requests from memory
+   * while its route table goes stale — API route handlers start coming
+   * back as 404 "Server action not found." even though the files are
+   * present and compile fine. Nothing in the code looks wrong, which is
+   * what makes it expensive to diagnose (see the Turbopack cache note on
+   * the headers() block below for the sibling version of this problem).
+   *
+   * So: verification builds pass NEXT_DIST_DIR and land somewhere else,
+   * leaving a running dev server untouched. Default is unchanged, so
+   * CI, Docker and `npm run build` on a clean tree behave exactly as
+   * before.
+   */
+  distDir: process.env.NEXT_DIST_DIR || '.next',
 
   /**
    * Cross-origin dev access (Next.js 16).
@@ -90,15 +125,15 @@ const nextConfig: NextConfig = {
    * has no effect on a production build.
    */
   allowedDevOrigins: [
-    "*.ngrok-free.app",
-    "*.ngrok-free.dev",
-    "*.ngrok.app",
-    "*.ngrok.io",
-    "*.trycloudflare.com",
-    "*.junkiescoder.com",
-    "*.loca.lt",
+    '*.ngrok-free.app',
+    '*.ngrok-free.dev',
+    '*.ngrok.app',
+    '*.ngrok.io',
+    '*.trycloudflare.com',
+    '*.junkiescoder.com',
+    '*.loca.lt',
     ...(process.env.ALLOWED_DEV_ORIGINS
-      ? process.env.ALLOWED_DEV_ORIGINS.split(",")
+      ? process.env.ALLOWED_DEV_ORIGINS.split(',')
           .map((origin) => origin.trim())
           .filter(Boolean)
       : []),
@@ -144,53 +179,48 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       /**
-       * DEV ONLY — never cache Turbopack chunks.
+       * ── Why there is NO rule for /_next/static here ────────────────
        *
-       * Turbopack dev chunk filenames are hashed from the MODULE GROUP,
-       * not from the contents: `src_06fx2uu._.js` keeps the same name
-       * across rebuilds while its contents change. Combined with a
-       * cacheable response, the browser happily reuses yesterday's copy
-       * of a filename whose contents have moved on.
+       * There used to be a dev-only `no-store` override, added to stop the
+       * browser reusing stale Turbopack chunks (dev chunk filenames are
+       * hashed from the module GROUP, not the contents, so a filename
+       * keeps its name while its contents move on).
        *
-       * The symptom is nasty to diagnose because nothing looks wrong:
-       * typecheck passes, tests pass, the production build passes, the
-       * chunk on disk is correct — and the browser throws
-       * "Cannot read properties of undefined" for an export that was
-       * added since it last fetched that filename. It bit three times in
-       * a row while adding constants to shared modules, and each time
-       * looked like a bundler or circular-import bug.
+       * It was removed because Next already does this, better. From
+       * `next/dist/server/lib/router-server.js`:
        *
-       * Especially likely over a tunnel (ngrok), where there is an extra
-       * edge between the dev server and the browser.
+       *   if (!res.getHeader('cache-control') && type === 'nextStaticFolder') {
+       *     if (opts.dev && !isNextFont(pathname)) {
+       *       res.setHeader('Cache-Control', 'no-cache, must-revalidate')
+       *     } else {
+       *       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+       *     }
+       *   }
        *
-       * Production is untouched: there, chunk names ARE content-hashed
-       * and Next emits the correct immutable headers itself. Forcing
-       * anything here would work against that.
+       * Two things follow. First, dev chunks are already
+       * `no-cache, must-revalidate` with no help from us. Second — note
+       * the `!res.getHeader('cache-control')` guard — a custom header set
+       * earlier in the pipeline SUPPRESSES that logic entirely, including
+       * the `isNextFont` exemption Next deliberately keeps cacheable in
+       * dev. So the override made things slightly worse while appearing
+       * to help, and Next warns about it on boot:
+       * "Setting a custom Cache-Control header can break Next.js
+       * development behavior."
+       *
+       * Production is untouched either way: chunk names there ARE
+       * content-hashed and Next emits the immutable header itself.
        */
-      ...(process.env.NODE_ENV !== "production"
-        ? [
-            {
-              source: "/_next/static/:path*",
-              headers: [
-                {
-                  key: "Cache-Control",
-                  value: "no-store, no-cache, must-revalidate",
-                },
-              ],
-            },
-          ]
-        : []),
       {
-        source: "/api/:path*",
-        headers: [{ key: "Cache-Control", value: "no-store" }],
+        source: '/api/:path*',
+        headers: [{ key: 'Cache-Control', value: 'no-store' }],
       },
       {
-        source: "/:path((?!_next/static|_next/image|api).*)",
+        source: '/:path((?!_next/static|_next/image|api).*)',
         headers: [
           {
-            key: "Cache-Control",
+            key: 'Cache-Control',
             value:
-              "public, max-age=0, s-maxage=300, stale-while-revalidate=86400",
+              'public, max-age=0, s-maxage=300, stale-while-revalidate=86400',
           },
         ],
       },
@@ -198,7 +228,7 @@ const nextConfig: NextConfig = {
         // Security headers on every response, including /_next/static
         // assets (nosniff matters there) and /api/* (HSTS + referrer-
         // policy don't hurt).
-        source: "/:path*",
+        source: '/:path*',
         headers: [...SECURITY_HEADERS],
       },
     ];

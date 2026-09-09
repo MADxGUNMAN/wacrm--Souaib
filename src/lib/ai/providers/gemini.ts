@@ -1,5 +1,4 @@
 import { AiError, type ProviderResult } from '../types'
-import { MAX_OUTPUT_TOKENS } from '../defaults'
 import {
   mergeConsecutive,
   normalizeUsage,
@@ -21,7 +20,8 @@ interface GeminiResponse {
  * Call Google Gemini REST API.
  */
 export async function generateGemini(args: ProviderArgs): Promise<ProviderResult> {
-  const { apiKey, model, systemPrompt, messages, timeoutMs } = args
+  const { apiKey, model, systemPrompt, messages, timeoutMs, maxOutputTokens } =
+    args
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
 
@@ -43,7 +43,7 @@ export async function generateGemini(args: ProviderArgs): Promise<ProviderResult
         },
         contents,
         generationConfig: {
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          maxOutputTokens,
         },
       }),
       signal: AbortSignal.timeout(timeoutMs),
@@ -57,8 +57,14 @@ export async function generateGemini(args: ProviderArgs): Promise<ProviderResult
   }
 
   const data = (await res.json().catch(() => null)) as GeminiResponse | null
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!text || typeof text !== 'string' || !text.trim()) {
+  // Join EVERY text part, not just the first. Gemini splits a long answer
+  // across parts, so reading `parts[0]` alone quietly returned a
+  // fragment — invisible on a short chat reply, fatal for anything
+  // structured, where the tail of a JSON document simply vanished.
+  const text = (data?.candidates?.[0]?.content?.parts ?? [])
+    .map((p) => (typeof p.text === 'string' ? p.text : ''))
+    .join('')
+  if (!text.trim()) {
     throw new AiError('Gemini returned an empty response.', {
       code: 'empty_response',
     })

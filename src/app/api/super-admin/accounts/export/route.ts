@@ -10,8 +10,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
 
     const filters: AccountFilters = {
-      status:
-        (searchParams.get('status') as AccountFilters['status']) ?? 'all',
+      status: (searchParams.get('status') as AccountFilters['status']) ?? 'all',
       whatsapp:
         (searchParams.get('whatsapp') as AccountFilters['whatsapp']) ?? 'all',
       search: searchParams.get('search') ?? undefined,
@@ -29,6 +28,7 @@ export async function GET(request: Request) {
       'Account ID',
       'Account Name',
       'Owner Email',
+      'Status',
       'Members',
       'Contacts',
       'Messages (30d)',
@@ -41,6 +41,11 @@ export async function GET(request: Request) {
       acc.account_id,
       `"${(acc.account_name || '').replace(/"/g, '""')}"`,
       `"${(acc.owner_email || '').replace(/"/g, '""')}"`,
+      acc.is_banned
+        ? 'Banned'
+        : acc.whatsapp_status === 'connected' || acc.messages_30d > 0
+          ? 'Active'
+          : 'Inactive',
       acc.member_count,
       acc.contact_count,
       acc.messages_30d,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Save, AlertCircle, ChevronLeft, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -49,9 +50,10 @@ export default function CMSContactPage() {
       });
       if (!res.ok) throw new Error("Failed to update settings");
       setSaveSuccess(true);
+      toast.success("Contact settings saved successfully!");
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err) {
-      alert("Error: " + (err as Error).message);
+      toast.error("Error: " + (err as Error).message);
     } finally {
       setIsSaving(false);
     }

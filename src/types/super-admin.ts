@@ -134,7 +134,11 @@ export interface MessageVolumePoint {
 }
 
 export interface ActivityLogEntry {
-  type: 'account_created' | 'broadcast_sent' | 'automation_triggered' | 'message_sent';
+  type:
+    | 'account_created'
+    | 'broadcast_sent'
+    | 'automation_triggered'
+    | 'message_sent';
   description: string;
   account_name: string;
   timestamp: string;
@@ -156,7 +160,8 @@ export interface HealthDashboardData {
 // Newsletter Subscribers
 // ============================================================
 
-export type NewsletterStatus = 'pending' | 'confirmed' | 'bounced' | 'unsubscribed';
+export type NewsletterStatus =
+  'pending' | 'confirmed' | 'bounced' | 'unsubscribed';
 
 export interface NewsletterSubscriber {
   id: string;
@@ -500,6 +505,13 @@ export interface SubscriberRow {
   subscriptionStartedAt: string | null;
   subscriptionEndsAt: string | null;
   note: string | null;
+  pendingWindow?: {
+    type: 'active' | 'trialing';
+    startsAt: string;
+    endsAt: string;
+    /** Length of the queued window (`endsAt - startsAt`), not time until it ends. */
+    durationDays: number;
+  } | null;
 }
 
 export interface SubscriberCounts {

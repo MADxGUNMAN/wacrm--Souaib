@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 // ============================================================
 // Super admin — manage the starter template library.
@@ -16,7 +16,7 @@
 // validator the real submit route runs, and its message is shown verbatim.
 // ============================================================
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -29,45 +29,46 @@ import {
   Plus,
   Trash2,
   X,
-} from "lucide-react";
-import { toast } from "sonner";
+} from 'lucide-react';
+import { toast } from 'sonner';
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { cn } from "@/lib/utils";
+} from '@/components/ui/select';
+import { cn } from '@/lib/utils';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import type {
   StarterCategory,
   StarterTemplate,
-} from "@/lib/templates/starter-library";
+} from '@/lib/templates/starter-library';
 
-type Tab = "templates" | "categories";
+type Tab = 'templates' | 'categories';
 
-const META_CATEGORIES = ["MARKETING", "UTILITY", "AUTHENTICATION"] as const;
-const HEADER_TYPES = ["none", "text", "image", "video", "document"] as const;
+const META_CATEGORIES = ['MARKETING', 'UTILITY', 'AUTHENTICATION'] as const;
+const HEADER_TYPES = ['none', 'text', 'image', 'video', 'document'] as const;
 
 /** A blank template form. Slug is derived from the title as you type. */
 function emptyTemplate(categoryId: string): Partial<StarterTemplate> {
   return {
     category_id: categoryId,
-    slug: "",
-    title: "",
-    description: "",
-    emoji: "",
-    meta_category: "UTILITY",
-    template_type: "default",
-    language: "en_US",
+    slug: '',
+    title: '',
+    description: '',
+    emoji: '',
+    meta_category: 'UTILITY',
+    template_type: 'default',
+    language: 'en_US',
     header_type: null,
-    header_content: "",
-    body_text: "",
-    footer_text: "",
+    header_content: '',
+    body_text: '',
+    footer_text: '',
     buttons: null,
     sample_values: { body: [] },
     tags: [],
@@ -79,8 +80,8 @@ function emptyTemplate(categoryId: string): Partial<StarterTemplate> {
 function slugify(value: string): string {
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
     .slice(0, 64);
 }
 
@@ -92,14 +93,14 @@ function countVars(body: string): number {
 }
 
 export default function SuperAdminTemplateLibraryPage() {
-  const [tab, setTab] = useState<Tab>("templates");
+  const [tab, setTab] = useState<Tab>('templates');
   const [categories, setCategories] = useState<StarterCategory[]>([]);
   const [templates, setTemplates] = useState<StarterTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const [activeCategory, setActiveCategory] = useState<string>("");
+  const [activeCategory, setActiveCategory] = useState<string>('');
   const [editingTemplate, setEditingTemplate] =
     useState<Partial<StarterTemplate> | null>(null);
   const [editingCategory, setEditingCategory] =
@@ -109,21 +110,25 @@ export default function SuperAdminTemplateLibraryPage() {
     setLoading(true);
     try {
       const [catRes, tplRes] = await Promise.all([
-        fetch("/api/super-admin/template-library/categories"),
-        fetch("/api/super-admin/template-library/templates"),
+        fetch('/api/super-admin/template-library/categories'),
+        fetch('/api/super-admin/template-library/templates'),
       ]);
       const catData = await catRes.json().catch(() => ({}));
       const tplData = await tplRes.json().catch(() => ({}));
 
-      if (!catRes.ok) throw new Error(catData?.error || "Could not load categories");
-      if (!tplRes.ok) throw new Error(tplData?.error || "Could not load templates");
+      if (!catRes.ok)
+        throw new Error(catData?.error || 'Could not load categories');
+      if (!tplRes.ok)
+        throw new Error(tplData?.error || 'Could not load templates');
 
       setCategories(catData.categories ?? []);
       setTemplates(tplData.templates ?? []);
-      setActiveCategory((prev) => prev || catData.categories?.[0]?.id || "");
+      setActiveCategory((prev) => prev || catData.categories?.[0]?.id || '');
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load the library");
+      setError(
+        err instanceof Error ? err.message : 'Could not load the library'
+      );
     } finally {
       setLoading(false);
     }
@@ -135,7 +140,7 @@ export default function SuperAdminTemplateLibraryPage() {
 
   const visibleTemplates = useMemo(
     () => templates.filter((t) => t.category_id === activeCategory),
-    [templates, activeCategory],
+    [templates, activeCategory]
   );
 
   // ── Template actions ───────────────────────────────────────
@@ -144,40 +149,50 @@ export default function SuperAdminTemplateLibraryPage() {
     setSaving(true);
     try {
       const isNew = !editingTemplate.id;
-      const res = await fetch("/api/super-admin/template-library/templates", {
-        method: isNew ? "POST" : "PATCH",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/super-admin/template-library/templates', {
+        method: isNew ? 'POST' : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editingTemplate),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `Save failed (${res.status})`);
-      toast.success(isNew ? "Template added" : "Template updated");
+      if (!res.ok)
+        throw new Error(data?.error || `Save failed (${res.status})`);
+      toast.success(isNew ? 'Template added' : 'Template updated');
       setEditingTemplate(null);
       await load();
     } catch (err) {
       // The validator's message names the exact Meta rule that was broken,
       // so it is surfaced as-is rather than replaced.
-      toast.error(err instanceof Error ? err.message : "Save failed");
+      toast.error(err instanceof Error ? err.message : 'Save failed');
     } finally {
       setSaving(false);
     }
   }
 
+  const confirm = useConfirm();
+
   async function deleteTemplate(t: StarterTemplate) {
-    if (!window.confirm(`Delete "${t.title}" from the library?`)) return;
+    const ok = await confirm({
+      title: `Delete "${t.title}" from the library?`,
+      description: 'This starter template will be removed for all tenants.',
+      confirmText: 'Delete Template',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+    if (!ok) return;
     try {
       const res = await fetch(
         `/api/super-admin/template-library/templates?id=${t.id}`,
-        { method: "DELETE" },
+        { method: 'DELETE' }
       );
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(d?.error || "Delete failed");
+        throw new Error(d?.error || 'Delete failed');
       }
-      toast.success("Template deleted");
+      toast.success('Template deleted');
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Delete failed");
+      toast.error(err instanceof Error ? err.message : 'Delete failed');
     }
   }
 
@@ -187,18 +202,19 @@ export default function SuperAdminTemplateLibraryPage() {
     setSaving(true);
     try {
       const isNew = !editingCategory.id;
-      const res = await fetch("/api/super-admin/template-library/categories", {
-        method: isNew ? "POST" : "PATCH",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/super-admin/template-library/categories', {
+        method: isNew ? 'POST' : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editingCategory),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `Save failed (${res.status})`);
-      toast.success(isNew ? "Category added" : "Category updated");
+      if (!res.ok)
+        throw new Error(data?.error || `Save failed (${res.status})`);
+      toast.success(isNew ? 'Category added' : 'Category updated');
       setEditingCategory(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
+      toast.error(err instanceof Error ? err.message : 'Save failed');
     } finally {
       setSaving(false);
     }
@@ -208,55 +224,79 @@ export default function SuperAdminTemplateLibraryPage() {
     // Stating the count matters: the delete cascades, and "3 templates" is
     // the difference between a tidy-up and losing work.
     const count = c.template_count ?? 0;
-    if (
-      !window.confirm(
-        `Delete the "${c.name}" category?\n\n${
-          count > 0
-            ? `Its ${count} template${count === 1 ? "" : "s"} will be deleted too.`
-            : "It has no templates."
-        }\n\nThis cannot be undone.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: `Delete the "${c.name}" category?`,
+      description:
+        count > 0
+          ? `Its ${count} template${count === 1 ? '' : 's'} will be deleted too. This cannot be undone.`
+          : 'It has no templates. This cannot be undone.',
+      confirmText: 'Delete Category',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+    if (!ok) return;
     try {
       const res = await fetch(
         `/api/super-admin/template-library/categories?id=${c.id}`,
-        { method: "DELETE" },
+        { method: 'DELETE' }
       );
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Delete failed");
+      if (!res.ok) throw new Error(data?.error || 'Delete failed');
       toast.success(
         data.deleted_templates
           ? `Category and ${data.deleted_templates} template(s) deleted`
-          : "Category deleted",
+          : 'Category deleted'
       );
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Delete failed");
+      toast.error(err instanceof Error ? err.message : 'Delete failed');
     }
   }
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        <Loader2 className="text-muted-foreground h-6 w-6 animate-spin" />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Template Library</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Starter templates every account can browse and copy. These are ours —
-            separate from Meta&apos;s own pre-approved library.
-          </p>
+      {error ? (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <p className="text-sm text-amber-800">{error}</p>
         </div>
+      ) : null}
+
+      {/* ---- Tabs & Actions ---- */}
+      <div className="border-border flex items-center justify-between border-b pb-2">
         <div className="flex gap-2">
-          {tab === "templates" ? (
+          {(
+            [
+              ['templates', `Templates (${templates.length})`],
+              ['categories', `Categories (${categories.length})`],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={cn(
+                '-mb-2.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+                tab === id
+                  ? 'text-foreground border-[#25D366]'
+                  : 'text-muted-foreground hover:text-foreground border-transparent'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex gap-2">
+          {tab === 'templates' ? (
             <Button
               onClick={() => setEditingTemplate(emptyTemplate(activeCategory))}
               disabled={!activeCategory}
@@ -269,10 +309,10 @@ export default function SuperAdminTemplateLibraryPage() {
             <Button
               onClick={() =>
                 setEditingCategory({
-                  slug: "",
-                  name: "",
-                  emoji: "📄",
-                  description: "",
+                  slug: '',
+                  name: '',
+                  emoji: '📄',
+                  description: '',
                   position: (categories.at(-1)?.position ?? 0) + 10,
                   is_active: true,
                 })
@@ -286,39 +326,8 @@ export default function SuperAdminTemplateLibraryPage() {
         </div>
       </div>
 
-      {error ? (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-          <p className="text-sm text-amber-800">{error}</p>
-        </div>
-      ) : null}
-
-      {/* ---- Tabs ---- */}
-      <div className="flex gap-2 border-b border-border">
-        {(
-          [
-            ["templates", `Templates (${templates.length})`],
-            ["categories", `Categories (${categories.length})`],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            className={cn(
-              "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-              tab === id
-                ? "border-[#25D366] text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
       {/* ═══════════════ TEMPLATES ═══════════════ */}
-      {tab === "templates" ? (
+      {tab === 'templates' ? (
         <div className="space-y-4">
           <div className="flex flex-wrap gap-2">
             {categories.map((c) => (
@@ -327,11 +336,11 @@ export default function SuperAdminTemplateLibraryPage() {
                 type="button"
                 onClick={() => setActiveCategory(c.id)}
                 className={cn(
-                  "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors",
+                  'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors',
                   c.id === activeCategory
-                    ? "border-[#25D366] bg-[#25D366]/10 text-foreground"
-                    : "border-border bg-card text-muted-foreground hover:text-foreground",
-                  !c.is_active && "opacity-50",
+                    ? 'text-foreground border-[#25D366] bg-[#25D366]/10'
+                    : 'border-border bg-card text-muted-foreground hover:text-foreground',
+                  !c.is_active && 'opacity-50'
                 )}
               >
                 <span aria-hidden>{c.emoji}</span>
@@ -344,9 +353,9 @@ export default function SuperAdminTemplateLibraryPage() {
           </div>
 
           {visibleTemplates.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border p-12 text-center">
-              <LibraryBig className="mx-auto h-6 w-6 text-muted-foreground" />
-              <p className="mt-2 text-sm text-foreground">
+            <div className="border-border rounded-xl border border-dashed p-12 text-center">
+              <LibraryBig className="text-muted-foreground mx-auto h-6 w-6" />
+              <p className="text-foreground mt-2 text-sm">
                 No templates in this category yet.
               </p>
             </div>
@@ -356,21 +365,21 @@ export default function SuperAdminTemplateLibraryPage() {
                 <div
                   key={t.id}
                   className={cn(
-                    "rounded-xl border border-border bg-card p-4",
-                    !t.is_active && "opacity-60",
+                    'border-border bg-card rounded-xl border p-4',
+                    !t.is_active && 'opacity-60'
                   )}
                 >
                   <div className="flex items-start gap-2">
-                    <span aria-hidden>{t.emoji ?? "📄"}</span>
+                    <span aria-hidden>{t.emoji ?? '📄'}</span>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold break-words text-foreground">
+                      <p className="text-foreground text-sm font-semibold break-words">
                         {t.title}
                       </p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-muted-foreground text-xs">
                         {t.slug} · {t.meta_category} · {t.language}
                         {countVars(t.body_text) > 0
                           ? ` · ${countVars(t.body_text)} var`
-                          : ""}
+                          : ''}
                       </p>
                     </div>
                     <div className="flex shrink-0 gap-1">
@@ -394,7 +403,7 @@ export default function SuperAdminTemplateLibraryPage() {
                       </Button>
                     </div>
                   </div>
-                  <p className="mt-2 line-clamp-3 text-xs whitespace-pre-line text-muted-foreground">
+                  <p className="text-muted-foreground mt-2 line-clamp-3 text-xs whitespace-pre-line">
                     {t.body_text}
                   </p>
                 </div>
@@ -409,19 +418,19 @@ export default function SuperAdminTemplateLibraryPage() {
             <div
               key={c.id}
               className={cn(
-                "flex items-center gap-3 rounded-xl border border-border bg-card p-3",
-                !c.is_active && "opacity-60",
+                'border-border bg-card flex items-center gap-3 rounded-xl border p-3',
+                !c.is_active && 'opacity-60'
               )}
             >
               <span className="text-lg" aria-hidden>
                 {c.emoji}
               </span>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-foreground">{c.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {c.slug} · position {c.position} ·{" "}
-                  {c.template_count ?? 0} template
-                  {(c.template_count ?? 0) === 1 ? "" : "s"}
+                <p className="text-foreground text-sm font-medium">{c.name}</p>
+                <p className="text-muted-foreground text-xs">
+                  {c.slug} · position {c.position} · {c.template_count ?? 0}{' '}
+                  template
+                  {(c.template_count ?? 0) === 1 ? '' : 's'}
                 </p>
               </div>
               <Button
@@ -429,14 +438,16 @@ export default function SuperAdminTemplateLibraryPage() {
                 size="icon"
                 className="h-8 w-8"
                 onClick={() =>
-                  void fetch("/api/super-admin/template-library/categories", {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
+                  void fetch('/api/super-admin/template-library/categories', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ id: c.id, is_active: !c.is_active }),
                   }).then(load)
                 }
-                aria-label={c.is_active ? "Hide category" : "Show category"}
-                title={c.is_active ? "Visible to accounts" : "Hidden from accounts"}
+                aria-label={c.is_active ? 'Hide category' : 'Show category'}
+                title={
+                  c.is_active ? 'Visible to accounts' : 'Hidden from accounts'
+                }
               >
                 {c.is_active ? (
                   <Eye className="h-3.5 w-3.5" />
@@ -470,10 +481,10 @@ export default function SuperAdminTemplateLibraryPage() {
       {/* ═══════════════ CATEGORY EDITOR ═══════════════ */}
       {editingCategory ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg space-y-4 rounded-xl border border-border bg-card p-5">
+          <div className="border-border bg-card w-full max-w-lg space-y-4 rounded-xl border p-5">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-foreground">
-                {editingCategory.id ? "Edit category" : "New category"}
+              <h2 className="text-foreground text-lg font-semibold">
+                {editingCategory.id ? 'Edit category' : 'New category'}
               </h2>
               <Button
                 variant="ghost"
@@ -486,23 +497,26 @@ export default function SuperAdminTemplateLibraryPage() {
 
             <div className="grid grid-cols-[80px_1fr] gap-3">
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Emoji
                 </label>
                 <Input
-                  value={editingCategory.emoji ?? ""}
+                  value={editingCategory.emoji ?? ''}
                   onChange={(e) =>
-                    setEditingCategory({ ...editingCategory, emoji: e.target.value })
+                    setEditingCategory({
+                      ...editingCategory,
+                      emoji: e.target.value,
+                    })
                   }
                   placeholder="🛍️"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Name
                 </label>
                 <Input
-                  value={editingCategory.name ?? ""}
+                  value={editingCategory.name ?? ''}
                   onChange={(e) =>
                     setEditingCategory({
                       ...editingCategory,
@@ -520,11 +534,11 @@ export default function SuperAdminTemplateLibraryPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label className="text-muted-foreground text-xs font-medium">
                 Slug
               </label>
               <Input
-                value={editingCategory.slug ?? ""}
+                value={editingCategory.slug ?? ''}
                 onChange={(e) =>
                   setEditingCategory({
                     ...editingCategory,
@@ -533,19 +547,19 @@ export default function SuperAdminTemplateLibraryPage() {
                 }
                 placeholder="ecommerce"
               />
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-muted-foreground text-[11px]">
                 Lowercase letters, numbers and hyphens. Used in links, so avoid
                 changing it once shared.
               </p>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label className="text-muted-foreground text-xs font-medium">
                 Description
               </label>
               <Textarea
                 rows={2}
-                value={editingCategory.description ?? ""}
+                value={editingCategory.description ?? ''}
                 onChange={(e) =>
                   setEditingCategory({
                     ...editingCategory,
@@ -557,7 +571,7 @@ export default function SuperAdminTemplateLibraryPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label className="text-muted-foreground text-xs font-medium">
                 Position
               </label>
               <Input
@@ -571,17 +585,24 @@ export default function SuperAdminTemplateLibraryPage() {
                 }
                 className="w-28"
               />
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-muted-foreground text-[11px]">
                 Lower numbers appear first. Existing categories step by 10, so
                 use 45 to slot between 40 and 50.
               </p>
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-border pt-3">
-              <Button variant="outline" onClick={() => setEditingCategory(null)}>
+            <div className="border-border flex justify-end gap-2 border-t pt-3">
+              <Button
+                variant="outline"
+                onClick={() => setEditingCategory(null)}
+              >
                 Cancel
               </Button>
-              <Button onClick={saveCategory} disabled={saving} className="gap-2">
+              <Button
+                onClick={saveCategory}
+                disabled={saving}
+                className="gap-2"
+              >
                 {saving ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
@@ -597,10 +618,10 @@ export default function SuperAdminTemplateLibraryPage() {
       {/* ═══════════════ TEMPLATE EDITOR ═══════════════ */}
       {editingTemplate ? (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
-          <div className="mx-auto w-full max-w-2xl space-y-4 rounded-xl border border-border bg-card p-5">
+          <div className="border-border bg-card mx-auto w-full max-w-2xl space-y-4 rounded-xl border p-5">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-foreground">
-                {editingTemplate.id ? "Edit template" : "New template"}
+              <h2 className="text-foreground text-lg font-semibold">
+                {editingTemplate.id ? 'Edit template' : 'New template'}
               </h2>
               <Button
                 variant="ghost"
@@ -613,23 +634,26 @@ export default function SuperAdminTemplateLibraryPage() {
 
             <div className="grid gap-3 sm:grid-cols-[70px_1fr]">
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Emoji
                 </label>
                 <Input
-                  value={editingTemplate.emoji ?? ""}
+                  value={editingTemplate.emoji ?? ''}
                   onChange={(e) =>
-                    setEditingTemplate({ ...editingTemplate, emoji: e.target.value })
+                    setEditingTemplate({
+                      ...editingTemplate,
+                      emoji: e.target.value,
+                    })
                   }
                   placeholder="✅"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Title
                 </label>
                 <Input
-                  value={editingTemplate.title ?? ""}
+                  value={editingTemplate.title ?? ''}
                   onChange={(e) =>
                     setEditingTemplate({
                       ...editingTemplate,
@@ -646,11 +670,11 @@ export default function SuperAdminTemplateLibraryPage() {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Slug
                 </label>
                 <Input
-                  value={editingTemplate.slug ?? ""}
+                  value={editingTemplate.slug ?? ''}
                   onChange={(e) =>
                     setEditingTemplate({
                       ...editingTemplate,
@@ -661,15 +685,15 @@ export default function SuperAdminTemplateLibraryPage() {
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Category
                 </label>
                 <Select
-                  value={editingTemplate.category_id ?? ""}
+                  value={editingTemplate.category_id ?? ''}
                   onValueChange={(v) =>
                     setEditingTemplate({
                       ...editingTemplate,
-                      category_id: v ?? "",
+                      category_id: v ?? '',
                     })
                   }
                 >
@@ -688,11 +712,11 @@ export default function SuperAdminTemplateLibraryPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label className="text-muted-foreground text-xs font-medium">
                 Description
               </label>
               <Input
-                value={editingTemplate.description ?? ""}
+                value={editingTemplate.description ?? ''}
                 onChange={(e) =>
                   setEditingTemplate({
                     ...editingTemplate,
@@ -705,16 +729,16 @@ export default function SuperAdminTemplateLibraryPage() {
 
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Meta category
                 </label>
                 <Select
-                  value={editingTemplate.meta_category ?? "UTILITY"}
+                  value={editingTemplate.meta_category ?? 'UTILITY'}
                   onValueChange={(v) =>
                     setEditingTemplate({
                       ...editingTemplate,
                       meta_category: (v ??
-                        "UTILITY") as StarterTemplate["meta_category"],
+                        'UTILITY') as StarterTemplate['meta_category'],
                     })
                   }
                 >
@@ -731,11 +755,11 @@ export default function SuperAdminTemplateLibraryPage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Language
                 </label>
                 <Input
-                  value={editingTemplate.language ?? "en_US"}
+                  value={editingTemplate.language ?? 'en_US'}
                   onChange={(e) =>
                     setEditingTemplate({
                       ...editingTemplate,
@@ -745,18 +769,18 @@ export default function SuperAdminTemplateLibraryPage() {
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Header
                 </label>
                 <Select
-                  value={editingTemplate.header_type ?? "none"}
+                  value={editingTemplate.header_type ?? 'none'}
                   onValueChange={(v) =>
                     setEditingTemplate({
                       ...editingTemplate,
                       header_type:
-                        !v || v === "none"
+                        !v || v === 'none'
                           ? null
-                          : (v as StarterTemplate["header_type"]),
+                          : (v as StarterTemplate['header_type']),
                     })
                   }
                 >
@@ -774,13 +798,13 @@ export default function SuperAdminTemplateLibraryPage() {
               </div>
             </div>
 
-            {editingTemplate.header_type === "text" ? (
+            {editingTemplate.header_type === 'text' ? (
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Header text
                 </label>
                 <Input
-                  value={editingTemplate.header_content ?? ""}
+                  value={editingTemplate.header_content ?? ''}
                   onChange={(e) =>
                     setEditingTemplate({
                       ...editingTemplate,
@@ -794,40 +818,41 @@ export default function SuperAdminTemplateLibraryPage() {
             ) : null}
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label className="text-muted-foreground text-xs font-medium">
                 Body
               </label>
               <Textarea
                 rows={6}
-                value={editingTemplate.body_text ?? ""}
+                value={editingTemplate.body_text ?? ''}
                 onChange={(e) =>
                   setEditingTemplate({
                     ...editingTemplate,
                     body_text: e.target.value,
                   })
                 }
-                placeholder={"Hi {{1}}, your order {{2}} is confirmed."}
+                placeholder={'Hi {{1}}, your order {{2}} is confirmed.'}
                 className="font-mono text-sm"
               />
-              <p className="text-[11px] text-muted-foreground">
-                Use {"{{1}}"}, {"{{2}}"} — contiguous from 1, or Meta rejects it.
+              <p className="text-muted-foreground text-[11px]">
+                Use {'{{1}}'}, {'{{2}}'} — contiguous from 1, or Meta rejects
+                it.
               </p>
             </div>
 
             {/* Sample values, one per variable. Meta requires an example for
                 every variable, and vague ones are a common rejection. */}
-            {countVars(editingTemplate.body_text ?? "") > 0 ? (
-              <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
-                <p className="text-xs font-medium text-foreground">
-                  Example values ({countVars(editingTemplate.body_text ?? "")}{" "}
+            {countVars(editingTemplate.body_text ?? '') > 0 ? (
+              <div className="border-border bg-muted/40 space-y-2 rounded-lg border p-3">
+                <p className="text-foreground text-xs font-medium">
+                  Example values ({countVars(editingTemplate.body_text ?? '')}{' '}
                   required)
                 </p>
                 {Array.from(
-                  { length: countVars(editingTemplate.body_text ?? "") },
+                  { length: countVars(editingTemplate.body_text ?? '') },
                   (_, i) => (
                     <Input
                       key={i}
-                      value={editingTemplate.sample_values?.body?.[i] ?? ""}
+                      value={editingTemplate.sample_values?.body?.[i] ?? ''}
                       onChange={(e) => {
                         const body = [
                           ...(editingTemplate.sample_values?.body ?? []),
@@ -843,21 +868,21 @@ export default function SuperAdminTemplateLibraryPage() {
                       }}
                       placeholder={`Realistic example for {{${i + 1}}}`}
                     />
-                  ),
+                  )
                 )}
-                <p className="text-[11px] text-muted-foreground">
-                  Write what a real customer would see — &ldquo;Rahul&rdquo;, not
-                  &ldquo;test&rdquo;.
+                <p className="text-muted-foreground text-[11px]">
+                  Write what a real customer would see — &ldquo;Rahul&rdquo;,
+                  not &ldquo;test&rdquo;.
                 </p>
               </div>
             ) : null}
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label className="text-muted-foreground text-xs font-medium">
                 Footer
               </label>
               <Input
-                value={editingTemplate.footer_text ?? ""}
+                value={editingTemplate.footer_text ?? ''}
                 onChange={(e) =>
                   setEditingTemplate({
                     ...editingTemplate,
@@ -867,14 +892,14 @@ export default function SuperAdminTemplateLibraryPage() {
                 maxLength={60}
                 placeholder="Questions? Just reply to this message"
               />
-              <p className="text-[11px] text-muted-foreground">
-                No variables allowed here — Meta rejects a footer containing{" "}
-                {"{{n}}"}.
+              <p className="text-muted-foreground text-[11px]">
+                No variables allowed here — Meta rejects a footer containing{' '}
+                {'{{n}}'}.
               </p>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label className="text-muted-foreground text-xs font-medium">
                 Buttons (JSON)
               </label>
               <Textarea
@@ -882,7 +907,7 @@ export default function SuperAdminTemplateLibraryPage() {
                 value={
                   editingTemplate.buttons
                     ? JSON.stringify(editingTemplate.buttons, null, 2)
-                    : ""
+                    : ''
                 }
                 onChange={(e) => {
                   const raw = e.target.value.trim();
@@ -901,20 +926,18 @@ export default function SuperAdminTemplateLibraryPage() {
                   }
                 }}
                 className="font-mono text-xs"
-                placeholder={
-                  '[{"type":"QUICK_REPLY","text":"Track Order"}]'
-                }
+                placeholder={'[{"type":"QUICK_REPLY","text":"Track Order"}]'}
               />
-              <p className="text-[11px] text-muted-foreground">
-                QUICK_REPLY, URL (needs <code>url</code>), PHONE_NUMBER (needs{" "}
-                <code>phone_number</code>) or COPY_CODE (needs{" "}
+              <p className="text-muted-foreground text-[11px]">
+                QUICK_REPLY, URL (needs <code>url</code>), PHONE_NUMBER (needs{' '}
+                <code>phone_number</code>) or COPY_CODE (needs{' '}
                 <code>example</code>).
               </p>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
+                <label className="text-muted-foreground text-xs font-medium">
                   Position
                 </label>
                 <Input
@@ -929,7 +952,7 @@ export default function SuperAdminTemplateLibraryPage() {
                 />
               </div>
               <div className="flex items-end">
-                <label className="flex items-center gap-2 text-sm text-foreground">
+                <label className="text-foreground flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
                     checked={editingTemplate.is_active !== false}
@@ -939,15 +962,15 @@ export default function SuperAdminTemplateLibraryPage() {
                         is_active: e.target.checked,
                       })
                     }
-                    className="rounded border-border"
+                    className="border-border rounded"
                   />
                   Visible to accounts
                 </label>
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
-              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="border-border flex items-center justify-between gap-2 border-t pt-3">
+              <p className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
                 <ChevronDown className="h-3 w-3" />
                 Saved templates are checked against Meta&apos;s rules first.
               </p>
@@ -958,7 +981,11 @@ export default function SuperAdminTemplateLibraryPage() {
                 >
                   Cancel
                 </Button>
-                <Button onClick={saveTemplate} disabled={saving} className="gap-2">
+                <Button
+                  onClick={saveTemplate}
+                  disabled={saving}
+                  className="gap-2"
+                >
                   {saving ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (

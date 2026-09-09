@@ -24,6 +24,7 @@ import { supabaseAdmin } from '@/lib/auth/admin-client';
 import { formatCurrency } from '@/lib/currency';
 import { formatCopyDate } from '@/lib/subscription/copy';
 
+import { getEmailBranding, type EmailBranding } from './branding';
 import {
   button,
   detailTable,
@@ -36,52 +37,14 @@ import {
 } from './layout';
 import { sendEmailQuietly } from './send';
 
-const FALLBACK_SITE_NAME = 'Replai';
-const FALLBACK_APP_URL = 'https://wacrm.tech';
-
-interface Branding {
-  siteName: string;
-  /** Where to tell customers to write. Null when none is configured. */
-  supportEmail: string | null;
-  /** No trailing slash. */
-  appUrl: string;
-}
-
 /**
  * Branding for the email chrome, read from the `site_settings`
  * singleton — the same source the marketing site and contact-reply email
- * use, so a rename propagates everywhere at once.
- *
- * Fails soft to the product name. An email that says "Replai" when the
- * operator has rebranded is a cosmetic problem; an email that never
- * sends because a settings read failed is a support ticket.
+ * use, so a rename propagates everywhere at once. Shared implementation
+ * in ./branding; this alias keeps the call sites below unchanged.
  */
-async function getBranding(): Promise<Branding> {
-  const appUrl = (process.env.NEXT_PUBLIC_SITE_URL || FALLBACK_APP_URL).replace(
-    /\/+$/,
-    '',
-  );
-
-  try {
-    const { data } = await supabaseAdmin()
-      .from('site_settings')
-      .select('site_name, support_email')
-      .limit(1)
-      .maybeSingle();
-
-    return {
-      siteName: data?.site_name || FALLBACK_SITE_NAME,
-      supportEmail: data?.support_email || null,
-      appUrl,
-    };
-  } catch (err) {
-    console.error(
-      '[email] branding lookup failed, using defaults:',
-      err instanceof Error ? err.message : err,
-    );
-    return { siteName: FALLBACK_SITE_NAME, supportEmail: null, appUrl };
-  }
-}
+type Branding = EmailBranding;
+const getBranding = () => getEmailBranding('email');
 
 /** Admin-authored copy reused in these emails. */
 interface BillingCopy {
@@ -123,7 +86,7 @@ interface Recipient {
  */
 async function resolveRecipient(
   accountId: string,
-  submitterUserId: string | null,
+  submitterUserId: string | null
 ): Promise<Recipient | null> {
   const admin = supabaseAdmin();
 
@@ -170,7 +133,7 @@ function footerNote(branding: Branding, copy: BillingCopy): string {
   parts.push(
     branding.supportEmail
       ? `Questions about this payment? Reply to this email or write to ${branding.supportEmail}.`
-      : 'Questions about this payment? Just reply to this email.',
+      : 'Questions about this payment? Just reply to this email.'
   );
   return parts.join('\n');
 }
@@ -215,11 +178,17 @@ export interface PaymentSubmittedInput {
 }
 
 export async function sendPaymentSubmittedEmail(
-  input: PaymentSubmittedInput,
+  input: PaymentSubmittedInput
 ): Promise<void> {
-  const recipient = await resolveRecipient(input.accountId, input.submitterUserId);
+  const recipient = await resolveRecipient(
+    input.accountId,
+    input.submitterUserId
+  );
   if (!recipient) {
-    console.warn('[email] payment-submitted skipped — no address for account', input.accountId);
+    console.warn(
+      '[email] payment-submitted skipped — no address for account',
+      input.accountId
+    );
     return;
   }
 
@@ -238,10 +207,10 @@ export async function sendPaymentSubmittedEmail(
   const mismatch = Math.abs(input.paidAmount - input.expectedAmount) >= 0.01;
 
   const content = [
-    heading('We have your payment details'),
+    heading('We have received your payment and it is under review'),
     paragraph(greeting(recipient)),
     paragraph(
-      `Thanks for your payment. Our team verifies every transfer by hand against our bank records, so your ${input.planName ?? 'subscription'} will be activated once that check is done. We will email you the moment it is.`,
+      `Thanks for your payment. Our team verifies every transfer by hand against our bank records, so your ${input.planName ?? 'subscription'} will be activated once that check is done. We will email you the moment it is.`
     ),
     detailTable(rows),
     mismatch
@@ -255,9 +224,12 @@ export async function sendPaymentSubmittedEmail(
       ? notice({ tone: 'neutral', body: copy.pendingReviewMessage })
       : '',
     paragraph(
-      'You do not need to do anything else, and please do not send the payment again — a second transfer for the same plan would need to be refunded manually.',
+      'You do not need to do anything else, and please do not send the payment again — a second transfer for the same plan would need to be refunded manually.'
     ),
-    button({ href: `${branding.appUrl}/settings`, label: 'View billing status' }),
+    button({
+      href: `${branding.appUrl}/settings`,
+      label: 'View billing status',
+    }),
   ]
     .filter(Boolean)
     .join('\n');
@@ -267,6 +239,8 @@ export async function sendPaymentSubmittedEmail(
     preheader: `We received your ${input.planName ?? 'subscription'} payment and it is now being verified.`,
     content,
     footerNote: footerNote(branding, copy),
+    logoUrl: branding.logoUrl,
+    logoDarkUrl: branding.logoDarkUrl,
   });
 
   await sendEmailQuietly('payment-submitted', {
@@ -301,11 +275,17 @@ export interface PaymentApprovedInput {
 }
 
 export async function sendPaymentApprovedEmail(
-  input: PaymentApprovedInput,
+  input: PaymentApprovedInput
 ): Promise<void> {
-  const recipient = await resolveRecipient(input.accountId, input.submitterUserId);
+  const recipient = await resolveRecipient(
+    input.accountId,
+    input.submitterUserId
+  );
   if (!recipient) {
-    console.warn('[email] payment-approved skipped — no address for account', input.accountId);
+    console.warn(
+      '[email] payment-approved skipped — no address for account',
+      input.accountId
+    );
     return;
   }
 
@@ -315,20 +295,20 @@ export async function sendPaymentApprovedEmail(
   const rows = paymentRows(input);
   rows.push(
     { label: 'Active from', value: formatCopyDate(input.startsAt) || '' },
-    { label: 'Renews on', value: renewsOn || '', emphasis: true },
+    { label: 'Renews on', value: renewsOn || '', emphasis: true }
   );
 
   const content = [
     heading(
       input.extended
         ? 'Your subscription has been extended'
-        : 'Your subscription is now active',
+        : 'Your subscription is now active'
     ),
     paragraph(greeting(recipient)),
     paragraph(
       input.extended
         ? `Your payment has been verified and the time has been added to your existing subscription, so you keep the days you had already paid for.`
-        : `Your payment has been verified and your ${input.planName ?? 'subscription'} is live. Everything in your workspace is unlocked again.`,
+        : `Your payment has been verified and your ${input.planName ?? 'subscription'} is live. Everything in your workspace is unlocked again.`
     ),
     detailTable(rows),
     renewsOn
@@ -339,9 +319,16 @@ export async function sendPaymentApprovedEmail(
         })
       : '',
     input.reviewNote
-      ? notice({ tone: 'neutral', title: 'Note from our team', body: input.reviewNote })
+      ? notice({
+          tone: 'neutral',
+          title: 'Note from our team',
+          body: input.reviewNote,
+        })
       : '',
-    button({ href: `${branding.appUrl}/dashboard`, label: 'Open your dashboard' }),
+    button({
+      href: `${branding.appUrl}/dashboard`,
+      label: 'Open your dashboard',
+    }),
   ]
     .filter(Boolean)
     .join('\n');
@@ -353,6 +340,8 @@ export async function sendPaymentApprovedEmail(
       : `Payment verified. Your ${input.planName ?? 'subscription'} is active.`,
     content,
     footerNote: footerNote(branding, copy),
+    logoUrl: branding.logoUrl,
+    logoDarkUrl: branding.logoDarkUrl,
   });
 
   await sendEmailQuietly('payment-approved', {
@@ -386,11 +375,17 @@ export interface PaymentRejectedInput {
 }
 
 export async function sendPaymentRejectedEmail(
-  input: PaymentRejectedInput,
+  input: PaymentRejectedInput
 ): Promise<void> {
-  const recipient = await resolveRecipient(input.accountId, input.submitterUserId);
+  const recipient = await resolveRecipient(
+    input.accountId,
+    input.submitterUserId
+  );
   if (!recipient) {
-    console.warn('[email] payment-rejected skipped — no address for account', input.accountId);
+    console.warn(
+      '[email] payment-rejected skipped — no address for account',
+      input.accountId
+    );
     return;
   }
 
@@ -406,7 +401,7 @@ export async function sendPaymentRejectedEmail(
     heading('We could not verify this payment'),
     paragraph(greeting(recipient)),
     paragraph(
-      `We checked the payment you submitted for the ${input.planName ?? 'subscription'} plan against our bank records and were not able to confirm it, so your subscription has not been activated.`,
+      `We checked the payment you submitted for the ${input.planName ?? 'subscription'} plan against our bank records and were not able to confirm it, so your subscription has not been activated.`
     ),
     notice({
       tone: 'danger',
@@ -417,15 +412,17 @@ export async function sendPaymentRejectedEmail(
     }),
     detailTable(rows),
     paragraph(
-      'If you have the transaction reference or a screenshot from your bank or UPI app, reply to this email with it and we will re-check straight away. You can also submit the payment details again with the corrected information.',
+      'If you have the transaction reference or a screenshot from your bank or UPI app, reply to this email with it and we will re-check straight away. You can also submit the payment details again with the corrected information.'
     ),
     notice({
       tone: 'neutral',
       title: 'No money has been taken by us',
-      body:
-        'This message only means we could not match the transfer to our records. If your bank shows the amount as debited, do not pay again — send us the reference and we will trace it.',
+      body: 'This message only means we could not match the transfer to our records. If your bank shows the amount as debited, do not pay again — send us the reference and we will trace it.',
     }),
-    button({ href: `${branding.appUrl}/upgrade-plan`, label: 'Submit payment details again' }),
+    button({
+      href: `${branding.appUrl}/upgrade-plan`,
+      label: 'Submit payment details again',
+    }),
   ]
     .filter(Boolean)
     .join('\n');
@@ -435,6 +432,8 @@ export async function sendPaymentRejectedEmail(
     preheader: `We could not verify your ${input.planName ?? 'subscription'} payment. Here is what to do next.`,
     content,
     footerNote: footerNote(branding, copy),
+    logoUrl: branding.logoUrl,
+    logoDarkUrl: branding.logoDarkUrl,
   });
 
   await sendEmailQuietly('payment-rejected', {

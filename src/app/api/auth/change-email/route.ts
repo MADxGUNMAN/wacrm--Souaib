@@ -16,10 +16,8 @@ import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account';
 import { supabaseAdmin } from '@/lib/auth/admin-client';
 import { sendEmailChangeEmail } from '@/lib/email/auth';
 import { createEmailChangeToken } from '@/lib/auth/email-token';
-import {
-  checkRateLimit,
-  rateLimitResponse,
-} from '@/lib/rate-limit';
+import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit';
+import { EMAIL_INVALID_MESSAGE, isValidEmail } from '@/lib/validation/email';
 
 import { createClient } from '@supabase/supabase-js';
 
@@ -34,25 +32,29 @@ export async function POST(request: Request) {
 
     const { newEmail, password } = body ?? {};
 
-    if (!newEmail || typeof newEmail !== 'string' || !newEmail.includes('@')) {
+    // The worst place for the old `includes('@')` check: a dotless domain
+    // here moves the account's login address to something that can never
+    // receive mail, so the confirmation never arrives and a password
+    // reset can never be delivered either.
+    if (!isValidEmail(newEmail)) {
       return NextResponse.json(
-        { error: 'Valid email is required' },
-        { status: 400 },
+        { error: EMAIL_INVALID_MESSAGE },
+        { status: 400 }
       );
     }
 
     if (!password || typeof password !== 'string') {
       return NextResponse.json(
         { error: 'Password is required' },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
     // Rate limit per user
-    const limit = checkRateLimit(
-      `auth:emailChange:${ctx.userId}`,
-      { limit: 3, windowMs: 60_000 },
-    );
+    const limit = checkRateLimit(`auth:emailChange:${ctx.userId}`, {
+      limit: 3,
+      windowMs: 60_000,
+    });
     if (!limit.success) return rateLimitResponse(limit);
 
     const admin = supabaseAdmin();
@@ -63,10 +65,13 @@ export async function POST(request: Request) {
       await admin.auth.admin.getUserById(ctx.userId);
 
     if (userError || !userData.user) {
-      console.error('[POST /api/auth/change-email] getUserById error:', userError);
+      console.error(
+        '[POST /api/auth/change-email] getUserById error:',
+        userError
+      );
       return NextResponse.json(
         { error: 'Failed to verify current user' },
-        { status: 500 },
+        { status: 500 }
       );
     }
 
@@ -74,7 +79,7 @@ export async function POST(request: Request) {
     if (!currentEmail) {
       return NextResponse.json(
         { error: 'No current email found on account' },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -93,7 +98,7 @@ export async function POST(request: Request) {
     if (authError) {
       return NextResponse.json(
         { error: 'Incorrect password. Please verify and try again.' },
-        { status: 401 },
+        { status: 401 }
       );
     }
 
@@ -101,7 +106,7 @@ export async function POST(request: Request) {
     if (trimmedEmail.toLowerCase() === currentEmail.toLowerCase()) {
       return NextResponse.json(
         { error: 'New email is the same as current email' },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -117,7 +122,7 @@ export async function POST(request: Request) {
     if (emailLookup) {
       return NextResponse.json(
         { error: 'That email is already registered to another account' },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -136,11 +141,11 @@ export async function POST(request: Request) {
       console.warn(
         '[POST /api/auth/change-email] email send issue:',
         emailResult.reason,
-        'detail' in emailResult ? emailResult.detail : '',
+        'detail' in emailResult ? emailResult.detail : ''
       );
       return NextResponse.json(
         { error: 'Failed to send confirmation email. Please try again.' },
-        { status: 500 },
+        { status: 500 }
       );
     }
 

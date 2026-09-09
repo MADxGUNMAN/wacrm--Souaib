@@ -29,6 +29,7 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 import type { WhatsAppConfig as WhatsAppConfigType } from '@/types';
 
@@ -335,10 +336,18 @@ export function WhatsAppConfig() {
     }
   }
 
+  const confirm = useConfirm();
+
   async function handleReset() {
-    if (!confirm('This will delete the current WhatsApp config so you can re-enter it. Continue?')) {
-      return;
-    }
+    const ok = await confirm({
+      title: 'Reset WhatsApp configuration?',
+      description:
+        'This will remove your current WhatsApp Business API credentials from this account so you can re-enter them. Active conversations and chat history will not be affected.',
+      confirmText: 'Reset Credentials',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+    if (!ok) return;
 
     try {
       setResetting(true);

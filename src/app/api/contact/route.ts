@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/auth/admin-client';
+import { EMAIL_INVALID_MESSAGE, isValidEmail } from '@/lib/validation/email';
 
 export async function POST(request: Request) {
   try {
@@ -14,10 +15,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Basic email format check
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    // Shared validator — a dotless domain is rejected here too, since a
+    // sales enquiry we cannot reply to is worse than no enquiry.
+    if (!isValidEmail(email)) {
       return NextResponse.json(
-        { error: 'Please provide a valid email address.' },
+        { error: EMAIL_INVALID_MESSAGE },
         { status: 400 }
       );
     }

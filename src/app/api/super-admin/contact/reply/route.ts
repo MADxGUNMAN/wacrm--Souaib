@@ -15,13 +15,15 @@ export async function POST(request: Request) {
 
     if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
       return NextResponse.json(
-        { error: 'SMTP is not configured. Please add SMTP credentials to your environment.' },
+        {
+          error:
+            'SMTP is not configured. Please add SMTP credentials to your environment.',
+        },
         { status: 500 }
       );
     }
 
     const nodemailer = await import('nodemailer');
-    const path = await import('path');
 
     const transporter = nodemailer.createTransport({
       host: SMTP_HOST,
@@ -35,15 +37,23 @@ export async function POST(request: Request) {
 
     const { supabaseAdmin } = await import('@/lib/auth/admin-client');
     const admin = supabaseAdmin();
-    
+
     // Fetch site settings for branding
     const { data: settings } = await admin
       .from('site_settings')
       .select('site_name, full_logo_url, logo_url')
       .limit(1)
       .maybeSingle();
-      
+
     const siteName = settings?.site_name || 'Replai';
+
+    const appUrl = (
+      process.env.NEXT_PUBLIC_SITE_URL || 'https://wacrm.junkiescoder.com'
+    ).replace(/\/+$/, '');
+    const logoUrl =
+      settings?.full_logo_url ||
+      settings?.logo_url ||
+      `${appUrl}/Replai-logo.png`;
 
     const htmlBody = `
 <!DOCTYPE html>
@@ -62,7 +72,7 @@ export async function POST(request: Request) {
           <!-- Header -->
           <tr>
             <td style="padding: 32px 40px; border-bottom: 1px solid #f1f5f9; background-color: #ffffff; text-align: left;">
-              <img src="cid:company-logo" alt="${siteName} Logo" style="height: 32px; max-width: 200px; display: block; object-fit: contain;">
+              <img src="${logoUrl}" alt="${siteName} Logo" style="height: 32px; max-width: 200px; display: block; object-fit: contain; border: 0;">
             </td>
           </tr>
 
@@ -105,23 +115,17 @@ export async function POST(request: Request) {
 </html>
     `;
 
-    const logoUrl = settings?.full_logo_url || settings?.logo_url;
-    const logoAttachment = logoUrl && (logoUrl.startsWith('http://') || logoUrl.startsWith('https://'))
-      ? { filename: 'logo.png', path: logoUrl, cid: 'company-logo' }
-      : { filename: 'logo.jpg', path: path.join(process.cwd(), 'public', 'logo-full.jpg'), cid: 'company-logo' };
-    
     await transporter.sendMail({
       from: `"${siteName} Support" <${SMTP_USER}>`,
       to,
       subject,
       html: htmlBody,
       replyTo: SMTP_USER,
-      attachments: [logoAttachment]
+      attachments: [],
     });
 
     // Save the reply and update submission status
     if (submissionId) {
-
       // Save reply to contact_replies table
       await admin.from('contact_replies').insert({
         submission_id: submissionId,

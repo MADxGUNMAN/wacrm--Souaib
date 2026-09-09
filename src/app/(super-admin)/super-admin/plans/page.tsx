@@ -34,17 +34,7 @@ export default function SuperAdminPlansPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-          Plans &amp; pricing
-        </h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Everything on the customer upgrade page — plans, prices, cycles and
-          copy.
-        </p>
-      </div>
-
-      <div className="flex gap-1 overflow-x-auto border-b border-slate-200">
+      <div className="flex gap-1 border-b border-slate-200">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
@@ -54,7 +44,7 @@ export default function SuperAdminPlansPage() {
               '-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors',
               tab === id
                 ? 'border-[#25D366] text-slate-900'
-                : 'border-transparent text-slate-500 hover:text-slate-800',
+                : 'border-transparent text-slate-500 hover:text-slate-800'
             )}
           >
             <Icon className="h-4 w-4" />

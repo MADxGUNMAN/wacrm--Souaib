@@ -1,17 +1,17 @@
-"use client";
+﻿'use client';
 
 // ============================================================
 // Wizard step 2, ORDER STATUS variant.
 //
 // The narrowest template Meta offers: a body, an optional footer, and
-// nothing else. No header, no buttons — the order card is rendered by
+// nothing else. No header, no buttons â€” the order card is rendered by
 // WhatsApp from the order the message references.
 //
 // Its own step rather than the Default form with fields hidden, because
 // "the same form minus half its controls" invites someone to re-enable a
 // control Meta will reject.
 //
-// ─── The part that surprises people ───────────────────────────
+// â”€â”€â”€ The part that surprises people â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // What makes this template special is invisible in its content. Sending
 // one UPDATES AN EXISTING ORDER, so every send needs the reference id of
@@ -26,6 +26,7 @@ import { Info, PackageCheck } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { RequiredMark } from '@/components/templates/required-mark';
 import { TEMPLATE_LIMITS } from '@/lib/whatsapp/template-limits';
 import { extractVariableIndices } from '@/lib/whatsapp/template-variables';
 import {
@@ -45,19 +46,19 @@ export function WizardStepOrderStatus({
   const bodyVarCount = extractVariableIndices(draft.bodyText).length;
   const bodySamples = Array.from(
     { length: bodyVarCount },
-    (_, i) => draft.bodySamples[i] ?? '',
+    (_, i) => draft.bodySamples[i] ?? ''
   );
 
-  // Always Utility — Meta will not accept an order-status template in any
+  // Always Utility â€” Meta will not accept an order-status template in any
   // other category, so this is not a choice the operator is offered.
   const definition = definitionFromDraft(draft, 'Utility', 'order_status');
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="min-w-0 space-y-5">
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
-          <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
+        <div className="border-border bg-muted/40 flex items-start gap-3 rounded-lg border p-3">
+          <Info className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+          <p className="text-muted-foreground text-sm">
             Sending this updates an order the customer already has. Each send
             needs the reference id of an order message plus the new status, so
             it only works once you are creating orders through WhatsApp Pay.
@@ -65,13 +66,16 @@ export function WizardStepOrderStatus({
         </div>
 
         {/* ---- Name + language ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Template name and language
           </h2>
           <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_200px]">
             <div className="space-y-1.5">
-              <Label htmlFor="os-name">Name your template</Label>
+              <Label htmlFor="os-name">
+                Name your template
+                <RequiredMark />
+              </Label>
               <Input
                 id="os-name"
                 value={draft.name}
@@ -87,7 +91,10 @@ export function WizardStepOrderStatus({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="os-lang">Select language</Label>
+              <Label htmlFor="os-lang">
+                Select language
+                <RequiredMark />
+              </Label>
               <Input
                 id="os-lang"
                 value={draft.language}
@@ -98,16 +105,19 @@ export function WizardStepOrderStatus({
         </section>
 
         {/* ---- Message content ---- */}
-        <section className="rounded-xl border border-border bg-card p-5">
+        <section className="border-border bg-card rounded-xl border p-5">
           <div className="flex items-center gap-2">
-            <PackageCheck className="size-4 text-primary" />
-            <h2 className="text-base font-semibold text-foreground">
+            <PackageCheck className="text-primary size-4" />
+            <h2 className="text-foreground text-base font-semibold">
               Message content
             </h2>
           </div>
 
           <div className="mt-4 space-y-2">
-            <Label htmlFor="os-body">Body</Label>
+            <Label htmlFor="os-body">
+              Body
+              <RequiredMark />
+            </Label>
             <Textarea
               id="os-body"
               rows={4}
@@ -117,13 +127,13 @@ export function WizardStepOrderStatus({
               placeholder="Your order {{1}} has shipped and should arrive by {{2}}."
               className="resize-none"
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-xs">
               {draft.bodyText.length}/{TEMPLATE_LIMITS.bodyMaxLength}
             </p>
 
             {bodyVarCount > 0 ? (
-              <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
-                <p className="text-xs font-medium text-foreground">
+              <div className="border-border bg-muted/40 space-y-2 rounded-lg border p-3">
+                <p className="text-foreground text-xs font-medium">
                   Example values
                 </p>
                 {bodySamples.map((val, i) => (
@@ -144,7 +154,7 @@ export function WizardStepOrderStatus({
           </div>
 
           <div className="mt-5 space-y-1.5">
-            <Label htmlFor="os-footer">Footer · optional</Label>
+            <Label htmlFor="os-footer">Footer Â· optional</Label>
             <Input
               id="os-footer"
               value={draft.footerText}
@@ -154,8 +164,8 @@ export function WizardStepOrderStatus({
             />
           </div>
 
-          <p className="mt-4 text-xs text-muted-foreground">
-            No header and no buttons — Meta does not allow either on this
+          <p className="text-muted-foreground mt-4 text-xs">
+            No header and no buttons â€” Meta does not allow either on this
             template type, and the order card comes from WhatsApp.
           </p>
         </section>
@@ -163,8 +173,8 @@ export function WizardStepOrderStatus({
 
       {/* ---- Preview ---- */}
       <aside className="lg:sticky lg:top-4 lg:self-start">
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground">
+        <div className="border-border bg-card rounded-xl border p-5">
+          <h3 className="text-foreground text-sm font-semibold">
             Template preview
           </h3>
           <WhatsAppPreview
@@ -172,7 +182,7 @@ export function WizardStepOrderStatus({
             values={draftBodyValues({ ...draft, bodySamples })}
             className="mt-3"
           />
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
             The order card the customer sees above this text is rendered by
             WhatsApp from the order itself, so it is not previewed here.
           </p>

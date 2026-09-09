@@ -21,8 +21,9 @@
 // ============================================================
 
 import { useState } from 'react';
-import { Loader2, Send, TriangleAlert } from 'lucide-react';
+import { Loader2, Lock, TriangleAlert } from 'lucide-react';
 
+import { DatePickerField } from '@/components/ui/date-picker-field';
 import { formatCurrency } from '@/lib/currency';
 import { cn } from '@/lib/utils';
 
@@ -72,7 +73,8 @@ export function PaymentSubmissionForm({
 
   const parsedPaid = Number.parseFloat(paidAmount.replace(/[^0-9.]/g, ''));
   const mismatch =
-    Number.isFinite(parsedPaid) && Math.abs(parsedPaid - expectedAmount) >= 0.01;
+    Number.isFinite(parsedPaid) &&
+    Math.abs(parsedPaid - expectedAmount) >= 0.01;
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -120,34 +122,34 @@ export function PaymentSubmissionForm({
       'w-full rounded-lg border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1',
       errorField === name
         ? 'border-destructive focus:ring-destructive'
-        : 'border-border focus:border-primary focus:ring-primary',
+        : 'border-border focus:border-primary focus:ring-primary'
     );
 
   return (
     <form
       onSubmit={handleSubmit}
-      className="rounded-2xl border border-border bg-card p-6 sm:p-8"
+      className="border-border bg-card rounded-2xl border p-6 sm:p-8"
     >
-      <h2 className="text-lg font-semibold tracking-tight text-foreground">
+      <h2 className="text-foreground text-lg font-semibold tracking-tight">
         Submit your payment details
       </h2>
-      <p className="mt-1 text-sm text-muted-foreground">
+      <p className="text-muted-foreground mt-1 text-sm">
         We verify every payment by hand. Accurate details get you activated
         faster.
       </p>
 
       {/* Read-only purchase summary — states what is being bought without
           letting the form influence the price. */}
-      <dl className="mt-5 grid gap-x-6 gap-y-2 rounded-xl bg-muted/40 p-4 text-sm sm:grid-cols-2">
+      <dl className="bg-muted/40 mt-5 grid gap-x-6 gap-y-2 rounded-xl p-4 text-sm sm:grid-cols-2">
         <div className="flex justify-between gap-4 sm:block">
           <dt className="text-muted-foreground">Selected plan</dt>
-          <dd className="font-medium text-foreground">
+          <dd className="text-foreground font-medium">
             {planName} · {cycleLabel}
           </dd>
         </div>
         <div className="flex justify-between gap-4 sm:block">
           <dt className="text-muted-foreground">Plan amount</dt>
-          <dd className="font-medium text-foreground">
+          <dd className="text-foreground font-medium">
             {formatCurrency(expectedAmount, currency)}
           </dd>
         </div>
@@ -158,7 +160,7 @@ export function PaymentSubmissionForm({
         <div className="sm:col-span-2">
           <label
             htmlFor="transactionRef"
-            className="mb-1.5 block text-sm font-medium text-foreground"
+            className="text-foreground mb-1.5 block text-sm font-medium"
           >
             Transaction ID / UTR <span className="text-destructive">*</span>
           </label>
@@ -171,7 +173,7 @@ export function PaymentSubmissionForm({
             autoComplete="off"
             className={cn(fieldClass('transactionRef'), 'font-mono')}
           />
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="text-muted-foreground mt-1 text-xs">
             Find this in your UPI app&apos;s payment history, shown as UTR,
             transaction ID, or reference number.
           </p>
@@ -180,7 +182,7 @@ export function PaymentSubmissionForm({
         <div>
           <label
             htmlFor="payerName"
-            className="mb-1.5 block text-sm font-medium text-foreground"
+            className="text-foreground mb-1.5 block text-sm font-medium"
           >
             Account holder name <span className="text-destructive">*</span>
           </label>
@@ -198,7 +200,7 @@ export function PaymentSubmissionForm({
         <div>
           <label
             htmlFor="payerMobile"
-            className="mb-1.5 block text-sm font-medium text-foreground"
+            className="text-foreground mb-1.5 block text-sm font-medium"
           >
             Mobile number <span className="text-destructive">*</span>
           </label>
@@ -218,7 +220,7 @@ export function PaymentSubmissionForm({
         <div>
           <label
             htmlFor="paidAmount"
-            className="mb-1.5 block text-sm font-medium text-foreground"
+            className="text-foreground mb-1.5 block text-sm font-medium"
           >
             Amount you paid <span className="text-destructive">*</span>
           </label>
@@ -243,18 +245,18 @@ export function PaymentSubmissionForm({
         </div>
 
         <div>
-          <label
-            htmlFor="paidAt"
-            className="mb-1.5 block text-sm font-medium text-foreground"
-          >
+          <p className="text-foreground mb-1.5 text-sm font-medium">
             Payment date
-          </label>
-          <input
-            id="paidAt"
-            type="date"
+          </p>
+          {/* Not a native <input type="date">: clicking it could select
+              its text (reads as "trying to copy") and its calendar
+              affordance opens the OS's own popup outside this app's
+              DOM/z-index. See date-picker-field.tsx. */}
+          <DatePickerField
             value={paidAt}
+            onChange={setPaidAt}
             max={todayISO()}
-            onChange={(e) => setPaidAt(e.target.value)}
+            placeholder="When did you pay?"
             className={fieldClass('paidAt')}
           />
         </div>
@@ -262,9 +264,10 @@ export function PaymentSubmissionForm({
         <div>
           <label
             htmlFor="payerUpiId"
-            className="mb-1.5 block text-sm font-medium text-foreground"
+            className="text-foreground mb-1.5 block text-sm font-medium"
           >
-            Your UPI ID <span className="text-muted-foreground">(optional)</span>
+            Your UPI ID{' '}
+            <span className="text-muted-foreground">(optional)</span>
           </label>
           <input
             id="payerUpiId"
@@ -279,7 +282,7 @@ export function PaymentSubmissionForm({
         <div>
           <label
             htmlFor="payerBank"
-            className="mb-1.5 block text-sm font-medium text-foreground"
+            className="text-foreground mb-1.5 block text-sm font-medium"
           >
             Bank name <span className="text-muted-foreground">(optional)</span>
           </label>
@@ -295,7 +298,7 @@ export function PaymentSubmissionForm({
         <div className="sm:col-span-2">
           <label
             htmlFor="payerNote"
-            className="mb-1.5 block text-sm font-medium text-foreground"
+            className="text-foreground mb-1.5 block text-sm font-medium"
           >
             Note for our team{' '}
             <span className="text-muted-foreground">(optional)</span>
@@ -312,9 +315,9 @@ export function PaymentSubmissionForm({
       </div>
 
       {error ? (
-        <div className="mt-5 flex items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/5 p-3">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-          <p className="text-sm text-destructive">{error}</p>
+        <div className="border-destructive/25 bg-destructive/5 mt-5 flex items-start gap-2 rounded-lg border p-3">
+          <TriangleAlert className="text-destructive mt-0.5 size-4 shrink-0" />
+          <p className="text-destructive text-sm">{error}</p>
         </div>
       ) : null}
 
@@ -322,7 +325,7 @@ export function PaymentSubmissionForm({
         <button
           type="submit"
           disabled={submitting}
-          className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+          className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
         >
           {submitting ? (
             <>
@@ -331,7 +334,7 @@ export function PaymentSubmissionForm({
             </>
           ) : (
             <>
-              <Send className="size-4" />
+              <Lock className="size-4" />
               Submit for verification
             </>
           )}
@@ -340,7 +343,7 @@ export function PaymentSubmissionForm({
           type="button"
           onClick={onCancel}
           disabled={submitting}
-          className="rounded-xl border border-border bg-card px-5 py-3 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
+          className="border-border bg-card text-foreground hover:bg-muted rounded-xl border px-5 py-3 text-sm font-medium transition-colors disabled:opacity-60"
         >
           Cancel
         </button>

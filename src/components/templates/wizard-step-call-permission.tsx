@@ -1,11 +1,11 @@
-"use client";
+﻿'use client';
 
 // ============================================================
 // Wizard step 2, CALLING PERMISSION REQUEST variant.
 //
 // Asks the customer for consent to be called on WhatsApp. They answer with
-// one of three options WhatsApp supplies itself — Allow, Temporarily allow
-// (one week), or Not at this time — which is why THIS TEMPLATE HAS NO
+// one of three options WhatsApp supplies itself â€” Allow, Temporarily allow
+// (one week), or Not at this time â€” which is why THIS TEMPLATE HAS NO
 // BUTTONS OF ITS OWN. Sending a buttons array is rejected.
 //
 // Needs voice calling enabled on the phone number in WhatsApp Manager.
@@ -19,6 +19,7 @@ import { Info, PhoneCall } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { RequiredMark } from '@/components/templates/required-mark';
 import {
   Select,
   SelectContent,
@@ -46,43 +47,46 @@ export function WizardStepCallPermission({
   const bodyVarCount = extractVariableIndices(draft.bodyText).length;
   const bodySamples = Array.from(
     { length: bodyVarCount },
-    (_, i) => draft.bodySamples[i] ?? '',
+    (_, i) => draft.bodySamples[i] ?? ''
   );
   const headerVarCount = useMemo(
     () =>
       draft.headerFormat === 'text'
         ? extractVariableIndices(draft.headerContent).length
         : 0,
-    [draft.headerFormat, draft.headerContent],
+    [draft.headerFormat, draft.headerContent]
   );
 
-  // Always Utility — Meta accepts this sub-category nowhere else.
+  // Always Utility â€” Meta accepts this sub-category nowhere else.
   const definition = definitionFromDraft(
     draft,
     'Utility',
-    'calling_permission_request',
+    'calling_permission_request'
   );
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div className="min-w-0 space-y-5">
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/40 p-3">
-          <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
+        <div className="border-border bg-muted/40 flex items-start gap-3 rounded-lg border p-3">
+          <Info className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+          <p className="text-muted-foreground text-sm">
             Needs WhatsApp calling enabled on your phone number in WhatsApp
             Manager. The customer replies with Allow, Temporarily allow (one
-            week) or Not at this time — WhatsApp adds those options, so this
+            week) or Not at this time â€” WhatsApp adds those options, so this
             template has no buttons to set.
           </p>
         </div>
 
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h2 className="text-base font-semibold text-foreground">
+        <section className="border-border bg-card rounded-xl border p-5">
+          <h2 className="text-foreground text-base font-semibold">
             Template name and language
           </h2>
           <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_200px]">
             <div className="space-y-1.5">
-              <Label htmlFor="cp-name">Name your template</Label>
+              <Label htmlFor="cp-name">
+                Name your template
+                <RequiredMark />
+              </Label>
               <Input
                 id="cp-name"
                 value={draft.name}
@@ -98,7 +102,10 @@ export function WizardStepCallPermission({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="cp-lang">Select language</Label>
+              <Label htmlFor="cp-lang">
+                Select language
+                <RequiredMark />
+              </Label>
               <Input
                 id="cp-lang"
                 value={draft.language}
@@ -108,17 +115,17 @@ export function WizardStepCallPermission({
           </div>
         </section>
 
-        <section className="rounded-xl border border-border bg-card p-5">
+        <section className="border-border bg-card rounded-xl border p-5">
           <div className="flex items-center gap-2">
-            <PhoneCall className="size-4 text-primary" />
-            <h2 className="text-base font-semibold text-foreground">
+            <PhoneCall className="text-primary size-4" />
+            <h2 className="text-foreground text-base font-semibold">
               Message content
             </h2>
           </div>
 
           <div className="mt-4 space-y-2">
             <Label htmlFor="cp-header-format">
-              Header <span className="text-muted-foreground">· optional</span>
+              Header <span className="text-muted-foreground">Â· optional</span>
             </Label>
             <Select
               value={draft.headerFormat === 'text' ? 'text' : 'none'}
@@ -134,8 +141,8 @@ export function WizardStepCallPermission({
                 <SelectItem value="text">Text</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              Text only — Meta does not allow an image, video or document
+            <p className="text-muted-foreground text-xs">
+              Text only â€” Meta does not allow an image, video or document
               header on this type.
             </p>
             {draft.headerFormat === 'text' ? (
@@ -158,7 +165,10 @@ export function WizardStepCallPermission({
           </div>
 
           <div className="mt-5 space-y-2">
-            <Label htmlFor="cp-body">Body</Label>
+            <Label htmlFor="cp-body">
+              Body
+              <RequiredMark />
+            </Label>
             <Textarea
               id="cp-body"
               rows={4}
@@ -168,13 +178,13 @@ export function WizardStepCallPermission({
               placeholder="Hi {{1}}, may we call you on WhatsApp about your order? It is quicker than typing."
               className="resize-none"
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-xs">
               {draft.bodyText.length}/{TEMPLATE_LIMITS.bodyMaxLength}
             </p>
 
             {bodyVarCount > 0 ? (
-              <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
-                <p className="text-xs font-medium text-foreground">
+              <div className="border-border bg-muted/40 space-y-2 rounded-lg border p-3">
+                <p className="text-foreground text-xs font-medium">
                   Example values
                 </p>
                 {bodySamples.map((val, i) => (
@@ -196,7 +206,7 @@ export function WizardStepCallPermission({
 
           <div className="mt-5 space-y-1.5">
             <Label htmlFor="cp-footer">
-              Footer <span className="text-muted-foreground">· optional</span>
+              Footer <span className="text-muted-foreground">Â· optional</span>
             </Label>
             <Input
               id="cp-footer"
@@ -210,8 +220,8 @@ export function WizardStepCallPermission({
       </div>
 
       <aside className="lg:sticky lg:top-4 lg:self-start">
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="text-sm font-semibold text-foreground">
+        <div className="border-border bg-card rounded-xl border p-5">
+          <h3 className="text-foreground text-sm font-semibold">
             Template preview
           </h3>
           <WhatsAppPreview
@@ -220,7 +230,7 @@ export function WizardStepCallPermission({
             headerValues={draftHeaderValues(draft)}
             className="mt-3"
           />
-          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          <p className="text-muted-foreground mt-3 text-xs leading-relaxed">
             WhatsApp adds the Allow / Temporarily allow / Not at this time
             options below your text, so they are not shown here.
           </p>

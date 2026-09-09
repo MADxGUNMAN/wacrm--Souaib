@@ -461,6 +461,34 @@ function parseHistoryError(raw: unknown): HistoryError | null {
   }
 }
 
+/**
+ * Thread-level keys we knowingly read. Anything else Meta sends is logged
+ * ONCE per key so it can be found in the data rather than guessed at.
+ *
+ * This exists because of a concrete dead end: the inbox was showing phone
+ * numbers instead of names, and answering "does history carry a name at
+ * all?" was impossible from our own logs — the parser keeps `id` and
+ * `messages` and silently drops every other property of the thread. If
+ * Meta ever starts sending one, this is what will tell us.
+ *
+ * Module-level so it warns once per process, not once per thread: a single
+ * history chunk carries dozens of threads and a per-thread warning would
+ * bury the signal it exists to provide.
+ */
+const KNOWN_THREAD_KEYS = new Set(['id', 'messages'])
+const reportedThreadKeys = new Set<string>()
+
+function reportUnknownThreadKeys(thread: Record<string, unknown>): void {
+  for (const key of Object.keys(thread)) {
+    if (KNOWN_THREAD_KEYS.has(key) || reportedThreadKeys.has(key)) continue
+    reportedThreadKeys.add(key)
+    console.warn(
+      `[coexistence] history thread carries an unread field "${key}" — ` +
+        `if it holds a contact name, wire it into ingestHistoryThread`,
+    )
+  }
+}
+
 function parseHistoryMessages(raw: unknown): HistoryMessage[] {
   if (!Array.isArray(raw)) return []
   const out: HistoryMessage[] = []
@@ -522,6 +550,7 @@ export function parseHistory(value: unknown): ParsedHistory | null {
         // The thread id IS the customer's number. Without it there is no
         // way to know whose conversation these messages belong to.
         if (typeof thread.id !== 'string' || thread.id === '') continue
+        reportUnknownThreadKeys(thread)
         threads.push({
           customerPhone: thread.id,
           messages: parseHistoryMessages(thread.messages),
@@ -600,6 +629,17 @@ export interface StateSyncContact {
   phone: string
   fullName: string | null
   firstName: string | null
+  /**
+   * The verbatim `contact` object.
+   *
+   * Kept because the three fields above are the ones we happen to know
+   * about, not the ones Meta happens to send. When the inbox was showing
+   * phone numbers instead of names, the first question was "what did Meta
+   * actually give us for this number" — and the answer had been parsed away
+   * and discarded. Storing the original costs a JSONB column and removes
+   * that whole class of dead end.
+   */
+  raw: Record<string, unknown>
 }
 
 export interface ParsedAppStateSync {
@@ -610,6 +650,21 @@ export interface ParsedAppStateSync {
 interface RawStateSyncValue {
   metadata?: { display_phone_number?: string; phone_number_id?: string }
   state_sync?: unknown
+}
+
+/**
+ * A contact name from the phone's address book, or null.
+ *
+ * Whitespace-only is treated as absent. The WhatsApp Business App lets a
+ * contact be saved with a blank-looking name, and because `' '` is truthy
+ * it would beat the `full_name || first_name || phone` fallback used at
+ * import time — producing a contact that renders as an empty row rather
+ * than falling back to the number.
+ */
+function cleanName(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed === '' ? null : trimmed
 }
 
 /**
@@ -649,9 +704,14 @@ export function parseAppStateSync(value: unknown): ParsedAppStateSync | null {
       // Names are ABSENT on a remove — Meta only sends the number. So
       // these must stay nullable rather than defaulting to '', or a
       // removal would blank out the name we already staged.
-      fullName: typeof contact.full_name === 'string' ? contact.full_name : null,
-      firstName:
-        typeof contact.first_name === 'string' ? contact.first_name : null,
+      //
+      // Trimmed, and '' collapsed to null: the phone app happily stores a
+      // contact whose name is a single space, and `' ' || ...` is truthy,
+      // so an untrimmed value would win the `full_name || first_name ||
+      // phone` fallback at import time and produce a blank-looking contact.
+      fullName: cleanName(contact.full_name),
+      firstName: cleanName(contact.first_name),
+      raw: contact,
     })
   }
 

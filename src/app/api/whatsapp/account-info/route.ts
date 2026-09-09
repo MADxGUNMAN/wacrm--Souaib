@@ -53,12 +53,17 @@ export async function GET() {
     // Get the whatsapp_config for this account
     const { data: config } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, waba_id, access_token')
+      .select(
+        'id, phone_number_id, waba_id, access_token, display_phone_number, verified_name'
+      )
       .eq('account_id', profile.account_id)
       .maybeSingle();
 
     if (!config?.phone_number_id || !config?.access_token) {
-      return NextResponse.json({ error: 'WhatsApp not connected' }, { status: 404 });
+      return NextResponse.json(
+        { error: 'WhatsApp not connected' },
+        { status: 404 }
+      );
     }
 
     let accessToken: string;
@@ -72,7 +77,8 @@ export async function GET() {
     }
 
     // Fetch phone number details from Meta
-    const phoneFields = 'id,display_phone_number,verified_name,quality_rating,status,name_status,code_verification_status';
+    const phoneFields =
+      'id,display_phone_number,verified_name,quality_rating,status,name_status,code_verification_status';
     const phoneRes = await fetch(
       `${META_API_BASE}/${config.phone_number_id}?fields=${phoneFields}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -81,6 +87,43 @@ export async function GET() {
     let phoneData: Record<string, unknown> = {};
     if (phoneRes.ok) {
       phoneData = await phoneRes.json();
+
+      // Cache the number and business name on our own row.
+      //
+      // This is the backfill path for every account that connected before
+      // migration 078: the fetch is happening anyway, so persisting the
+      // result costs one write and means the super-admin panel and any
+      // other screen can show the real number without a Meta round trip
+      // (and without falling back to the phone_number_id, which is what
+      // made an asset id look like a phone number). Only writes on a
+      // change, and never blocks the response.
+      const display =
+        typeof phoneData.display_phone_number === 'string'
+          ? phoneData.display_phone_number.trim()
+          : null;
+      const verified =
+        typeof phoneData.verified_name === 'string'
+          ? phoneData.verified_name.trim()
+          : null;
+      const patch: Record<string, string> = {};
+      if (display && display !== config.display_phone_number) {
+        patch.display_phone_number = display;
+      }
+      if (verified && verified !== config.verified_name) {
+        patch.verified_name = verified;
+      }
+      if (Object.keys(patch).length > 0) {
+        const { error: cacheErr } = await supabase
+          .from('whatsapp_config')
+          .update(patch)
+          .eq('id', config.id);
+        if (cacheErr) {
+          console.warn(
+            '[account-info] could not cache phone display fields:',
+            cacheErr.message
+          );
+        }
+      }
     } else {
       const errBody = await phoneRes.json().catch(() => ({}));
       console.error('[account-info] Phone number fetch failed:', errBody);
@@ -100,7 +143,7 @@ export async function GET() {
     try {
       const healthRes = await fetch(
         `${META_API_BASE}/${config.phone_number_id}?fields=health_status`,
-        { headers: { Authorization: `Bearer ${accessToken}` } },
+        { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       if (healthRes.ok) {
         const body = (await healthRes.json()) as Record<string, unknown>;
@@ -125,7 +168,7 @@ export async function GET() {
     try {
       const res = await fetch(
         `${META_API_BASE}/${config.phone_number_id}?fields=whatsapp_business_manager_messaging_limit,throughput`,
-        { headers: { Authorization: `Bearer ${accessToken}` } },
+        { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       if (res.ok) {
         const body = (await res.json()) as Record<string, unknown>;
@@ -152,7 +195,7 @@ export async function GET() {
         const start = end - USAGE_DAYS * 24 * 60 * 60;
         const res = await fetch(
           `${META_API_BASE}/${config.waba_id}?fields=analytics.start(${start}).end(${end}).granularity(DAY)`,
-          { headers: { Authorization: `Bearer ${accessToken}` } },
+          { headers: { Authorization: `Bearer ${accessToken}` } }
         );
         if (res.ok) {
           const body = (await res.json()) as Record<string, unknown>;
@@ -185,7 +228,9 @@ export async function GET() {
       const now = Date.now();
       const outboundSince = new Date(now - 24 * 60 * 60 * 1000).toISOString();
       const inboundSince = new Date(now - 48 * 60 * 60 * 1000).toISOString();
-      const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const sevenDaysAgo = new Date(
+        now - 7 * 24 * 60 * 60 * 1000
+      ).toISOString();
 
       // ─── Do NOT add 'business_app' to the outbound filters below ───
       //
@@ -210,7 +255,7 @@ export async function GET() {
       const contactByConversation = new Map<string, string>(
         (conversations ?? [])
           .filter((c) => c.id && c.contact_id)
-          .map((c) => [c.id as string, c.contact_id as string]),
+          .map((c) => [c.id as string, c.contact_id as string])
       );
 
       if (contactByConversation.size > 0) {
@@ -238,7 +283,7 @@ export async function GET() {
         const toEvents = (rows: typeof outboundRes.data) =>
           (rows ?? []).flatMap((row) => {
             const contactId = contactByConversation.get(
-              row.conversation_id as string,
+              row.conversation_id as string
             );
             if (!contactId) return [];
             return [{ contactId, at: new Date(row.created_at as string) }];
@@ -248,13 +293,15 @@ export async function GET() {
           toEvents(outboundRes.data),
           toEvents(inboundRes.data),
           24,
-          new Date(now),
+          new Date(now)
         );
 
         if (sevenDayRes.data) {
           const uniqueContacts = new Set<string>();
           for (const msg of sevenDayRes.data) {
-            const cid = contactByConversation.get(msg.conversation_id as string);
+            const cid = contactByConversation.get(
+              msg.conversation_id as string
+            );
             if (cid) uniqueContacts.add(cid);
           }
           sevenDayUnique = uniqueContacts.size;
@@ -270,7 +317,8 @@ export async function GET() {
     // Fetch WABA details (messaging limits are at the WABA level)
     let wabaData: Record<string, unknown> = {};
     if (config.waba_id) {
-      const wabaFields = 'id,name,account_review_status,business_verification_status,message_template_namespace';
+      const wabaFields =
+        'id,name,account_review_status,business_verification_status,message_template_namespace';
       const wabaRes = await fetch(
         `${META_API_BASE}/${config.waba_id}?fields=${wabaFields}`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -285,38 +333,39 @@ export async function GET() {
     }
 
     return NextResponse.json({
-        phone: {
-          id: phoneData.id ?? config.phone_number_id,
-          display_phone_number: phoneData.display_phone_number ?? null,
-          verified_name: phoneData.verified_name ?? null,
-          quality_rating: phoneData.quality_rating ?? null,
-          status: phoneData.status ?? null,
-          name_status: phoneData.name_status ?? null,
-        },
-        waba: {
-          id: wabaData.id ?? config.waba_id,
-          name: wabaData.name ?? null,
-          account_review_status: wabaData.account_review_status ?? null,
-          business_verification_status: wabaData.business_verification_status ?? null,
-        },
-        // Normalised here rather than in the component so the setup
-        // checklist renders Meta's verdict without re-deriving it.
-        health: summarizeHealthStatus(healthRaw),
+      phone: {
+        id: phoneData.id ?? config.phone_number_id,
+        display_phone_number: phoneData.display_phone_number ?? null,
+        verified_name: phoneData.verified_name ?? null,
+        quality_rating: phoneData.quality_rating ?? null,
+        status: phoneData.status ?? null,
+        name_status: phoneData.name_status ?? null,
+      },
+      waba: {
+        id: wabaData.id ?? config.waba_id,
+        name: wabaData.name ?? null,
+        account_review_status: wabaData.account_review_status ?? null,
+        business_verification_status:
+          wabaData.business_verification_status ?? null,
+      },
+      // Normalised here rather than in the component so the setup
+      // checklist renders Meta's verdict without re-deriving it.
+      health: summarizeHealthStatus(healthRaw),
 
-        // Limits and usage. Each is independently nullable, because each
-        // comes from a request that can fail on its own.
-        limits: {
-          messaging: parseMessagingLimit(limitRaw),
-          throughput: parseThroughput(throughputRaw),
-          nameReview: parseNameStatus(phoneData.name_status),
-          usage: summarizeUsage(usageRaw, USAGE_DAYS),
-          // Our own count against the rolling 24h allowance. Named
-          // `initiated` rather than `used` to keep it distinct from Meta's
-          // figures above, which it is not.
-          initiated: usage,
-          sevenDayUnique,
-        },
-      });
+      // Limits and usage. Each is independently nullable, because each
+      // comes from a request that can fail on its own.
+      limits: {
+        messaging: parseMessagingLimit(limitRaw),
+        throughput: parseThroughput(throughputRaw),
+        nameReview: parseNameStatus(phoneData.name_status),
+        usage: summarizeUsage(usageRaw, USAGE_DAYS),
+        // Our own count against the rolling 24h allowance. Named
+        // `initiated` rather than `used` to keep it distinct from Meta's
+        // figures above, which it is not.
+        initiated: usage,
+        sevenDayUnique,
+      },
+    });
   } catch (error) {
     console.error('[account-info] Internal error:', error);
     return NextResponse.json(

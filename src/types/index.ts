@@ -1,6 +1,7 @@
-import type { AccountRole } from "@/lib/auth/roles";
+import type { AccountRole } from '@/lib/auth/roles';
 export type { AccountRole };
-import type { InteractiveMessagePayload } from "@/lib/whatsapp/interactive";
+import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive';
+import type { ContentType } from '@/lib/whatsapp/content-types';
 
 export type {
   InteractiveMessagePayload,
@@ -9,7 +10,10 @@ export type {
   InteractiveButton,
   InteractiveListRow,
   InteractiveListSection,
-} from "@/lib/whatsapp/interactive";
+} from '@/lib/whatsapp/interactive';
+
+export type { ContentType };
+export { CONTENT_TYPES, CONTENT_TYPE_SET } from '@/lib/whatsapp/content-types';
 
 export interface MemberPermissions {
   [key: string]: boolean | undefined;
@@ -27,6 +31,22 @@ export interface MemberPermissions {
   settings_deals?: boolean;
   settings_members?: boolean;
   settings_api?: boolean;
+  /**
+   * Usage alerts (migration 079). Owner-only by default — see
+   * `OWNER_ONLY_SETTINGS_SECTIONS` in `@/lib/auth/roles`, which is what
+   * makes "absent" mean DENY for this key instead of the usual allow.
+   */
+  settings_alerts?: boolean;
+  /**
+   * Opt-in/opt-out keywords (migration 20260831000000). Read-only for
+   * members: the panel's write path is owner-only in the route AND in RLS,
+   * so this key controls visibility, not editing.
+   *
+   * Absent means ALLOW (the usual default) — the keywords are not
+   * sensitive, and an agent knowing that STOP unsubscribes people is
+   * useful context.
+   */
+  settings_opt_out?: boolean;
 }
 
 export const DEFAULT_MEMBER_PERMISSIONS: MemberPermissions = {
@@ -44,26 +64,112 @@ export const DEFAULT_MEMBER_PERMISSIONS: MemberPermissions = {
   settings_deals: true,
   settings_members: false,
   settings_api: false,
+  settings_alerts: false,
+  settings_opt_out: true,
 };
 
-export const PERMISSION_ITEMS: { key: keyof MemberPermissions; label: string; desc: string }[] = [
-  { key: 'inbox', label: 'Inbox', desc: 'Access messaging conversations and reply to leads' },
-  { key: 'contacts', label: 'Contacts', desc: 'View, add, and manage customer profiles and tags' },
-  { key: 'pipelines', label: 'Pipelines', desc: 'Manage deal stages and move lead cards' },
-  { key: 'broadcasts', label: 'Broadcasts', desc: 'Create and send bulk template campaigns' },
-  { key: 'automations', label: 'Automations', desc: 'Configure chatbot workflows and auto-replies' },
-  { key: 'dashboard', label: 'Dashboard', desc: 'View analytics and workspace performance metrics' },
-  { key: 'settings', label: 'Settings', desc: 'Manage WhatsApp numbers, integrations, and templates' },
+export const PERMISSION_ITEMS: {
+  key: keyof MemberPermissions;
+  label: string;
+  desc: string;
+}[] = [
+  {
+    key: 'inbox',
+    label: 'Inbox',
+    desc: 'Access messaging conversations and reply to leads',
+  },
+  {
+    key: 'contacts',
+    label: 'Contacts',
+    desc: 'View, add, and manage customer profiles and tags',
+  },
+  {
+    key: 'pipelines',
+    label: 'Pipelines',
+    desc: 'Manage deal stages and move lead cards',
+  },
+  {
+    key: 'broadcasts',
+    label: 'Broadcasts',
+    desc: 'Create and send bulk template campaigns',
+  },
+  {
+    key: 'automations',
+    label: 'Automations',
+    desc: 'Configure chatbot workflows and auto-replies',
+  },
+  {
+    key: 'dashboard',
+    label: 'Dashboard',
+    desc: 'View analytics and workspace performance metrics',
+  },
+  {
+    key: 'settings',
+    label: 'Settings',
+    desc: 'Manage WhatsApp numbers, integrations, and templates',
+  },
 ];
 
-export const SETTINGS_SUB_ITEMS: { key: string; label: string; desc: string; defaultVal: boolean }[] = [
-  { key: 'settings_whatsapp', label: 'WhatsApp Configuration', desc: 'Manage WABA numbers, credentials, and connection status', defaultVal: true },
-  { key: 'settings_templates', label: 'Message Templates', desc: 'Create, edit, submit, and sync WhatsApp message templates', defaultVal: true },
-  { key: 'settings_quick_replies', label: 'Quick Replies', desc: 'Manage canned responses for inbox agents', defaultVal: true },
-  { key: 'settings_fields', label: 'Fields & Tags', desc: 'Configure custom contact attributes and conversation labels', defaultVal: true },
-  { key: 'settings_deals', label: 'Deals & Currency', desc: 'Configure CRM deal stages and default currency', defaultVal: true },
-  { key: 'settings_members', label: 'Team Members', desc: 'View team roster and member access', defaultVal: false },
-  { key: 'settings_api', label: 'API Keys & Webhooks', desc: 'Manage developer tokens and webhook endpoints', defaultVal: false },
+export const SETTINGS_SUB_ITEMS: {
+  key: string;
+  label: string;
+  desc: string;
+  defaultVal: boolean;
+}[] = [
+  {
+    key: 'settings_whatsapp',
+    label: 'WhatsApp Configuration',
+    desc: 'Manage WABA numbers, credentials, and connection status',
+    defaultVal: true,
+  },
+  {
+    key: 'settings_templates',
+    label: 'Message Templates',
+    desc: 'Create, edit, submit, and sync WhatsApp message templates',
+    defaultVal: true,
+  },
+  {
+    key: 'settings_quick_replies',
+    label: 'Quick Replies',
+    desc: 'Manage canned responses for inbox agents',
+    defaultVal: true,
+  },
+  {
+    key: 'settings_fields',
+    label: 'Fields & Tags',
+    desc: 'Configure custom contact attributes and conversation labels',
+    defaultVal: true,
+  },
+  {
+    key: 'settings_deals',
+    label: 'Deals & Currency',
+    desc: 'Configure CRM deal stages and default currency',
+    defaultVal: true,
+  },
+  {
+    key: 'settings_members',
+    label: 'Team Members',
+    desc: 'View team roster and member access',
+    defaultVal: false,
+  },
+  {
+    key: 'settings_api',
+    label: 'API Keys & Webhooks',
+    desc: 'Manage developer tokens and webhook endpoints',
+    defaultVal: false,
+  },
+  {
+    key: 'settings_alerts',
+    label: 'Usage Alerts',
+    desc: 'Set the weekly or monthly message budget and who gets warned',
+    defaultVal: false,
+  },
+  {
+    key: 'settings_opt_out',
+    label: 'Opt-in / Opt-out',
+    desc: 'View the STOP/START keywords and confirmation wording (owner-only to edit)',
+    defaultVal: true,
+  },
 ];
 
 export interface Profile {
@@ -154,7 +260,7 @@ export interface AccountInvitation {
   id: string;
   account_id: string;
   /** Invites always create members — owner is never offered. */
-  role: "member";
+  role: 'member';
   created_by_user_id: string | null;
   label: string | null;
   created_at: string;
@@ -204,6 +310,9 @@ export interface CustomField {
   field_name: string;
   field_type: string;
   field_options?: Record<string, unknown>;
+  field_key?: 'email' | 'company' | null;
+  is_system?: boolean;
+  visible?: boolean;
   created_at: string;
 }
 
@@ -220,6 +329,56 @@ export interface ContactNote {
   user_id: string;
   note_text: string;
   created_at: string;
+}
+
+/**
+ * A recorded marketing opt-out (migration 20260831000000).
+ *
+ * Keyed on `phone_normalized`, NOT `contact_id` — the phone is the
+ * identity so an opt-out survives contact deletion and CSV re-import.
+ * `contact_id` is audit convenience and may be null.
+ *
+ * Presence of a row suppresses MARKETING templates only; Utility and
+ * Authentication sends are unaffected.
+ */
+export interface MarketingOptOut {
+  id: string;
+  account_id: string;
+  /** Digits-only phone, mirroring `contacts.phone_normalized`. */
+  phone_normalized: string;
+  contact_id?: string | null;
+  source:
+    | 'customer_keyword'
+    | 'customer_button'
+    | 'meta_131050'
+    | 'agent'
+    | 'api'
+    | 'import';
+  opted_out_at: string;
+  created_at: string;
+}
+
+/**
+ * Per-account opt-in/opt-out settings row (migration 20260831000000).
+ *
+ * Keywords are stored UPPERCASE and matched case-insensitively against
+ * the whole trimmed message. `is_active` gates whether keywords are
+ * WATCHED — it does not release contacts who already opted out.
+ *
+ * The domain-shaped equivalent, with defaults applied, is `OptInOutConfig`
+ * in `@/lib/whatsapp/marketing-opt-out`.
+ */
+export interface OptInOutSettings {
+  id: string;
+  account_id: string;
+  created_by?: string | null;
+  is_active: boolean;
+  opt_out_keywords: string[];
+  opt_in_keywords: string[];
+  opt_out_response_message: string;
+  opt_in_response_message: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export type ConversationStatus = 'open' | 'pending' | 'closed';
@@ -248,13 +407,22 @@ export interface Conversation {
   ai_autoreply_disabled?: boolean;
   ai_reply_count?: number;
   ai_handoff_summary?: string | null;
+  /**
+   * Pinned message fields (Migration 077 / Phase 7)
+   */
+  pinned_message_id?: string | null;
+  pinned_at?: string | null;
+  pinned_by?: string | null;
 }
 
 // ============================================================
 // Notifications (migration 027)
 // ============================================================
 
-export type NotificationType = 'conversation_assigned';
+export type NotificationType =
+  | 'conversation_assigned'
+  /** A message-usage threshold was crossed (migration 079). */
+  | 'usage_threshold';
 
 export interface Notification {
   id: string;
@@ -268,6 +436,14 @@ export interface Notification {
   actor_user_id?: string;
   title: string;
   body?: string;
+  /**
+   * Where clicking should go, e.g. `/settings?tab=alerts` (migration 079).
+   *
+   * Null for conversation notifications, which route from
+   * `conversation_id` instead. Before this existed, a notification with no
+   * conversation was inert when clicked.
+   */
+  link?: string | null;
   read_at?: string;
   created_at: string;
 }
@@ -290,17 +466,8 @@ export interface Notification {
  * fourth value.
  */
 export type SenderType = 'customer' | 'agent' | 'bot' | 'business_app';
-export type ContentType =
-  | 'text'
-  | 'image'
-  | 'document'
-  | 'audio'
-  | 'video'
-  | 'location'
-  | 'template'
-  /** Customer tapped a reply button or list row on a message we sent. */
-  | 'interactive';
-export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type MessageStatus =
+  'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 export interface Message {
   id: string;
@@ -314,6 +481,52 @@ export interface Message {
   message_id?: string;
   status: MessageStatus;
   created_at: string;
+  /**
+   * Location structured fields (Phase 0/2)
+   */
+  latitude?: number | null;
+  longitude?: number | null;
+  location_name?: string | null;
+  location_address?: string | null;
+  /**
+   * Contact cards raw payload (Phase 0/3)
+   */
+  contacts_payload?: Record<string, unknown>[] | null;
+  /**
+   * Per-status timestamps (Phase 0/1/7)
+   */
+  sent_at?: string | null;
+  delivered_at?: string | null;
+  read_at?: string | null;
+  /**
+   * Media metadata (Phase 0/5)
+   */
+  media_mime_type?: string | null;
+  media_filename?: string | null;
+  /**
+   * Re-send / forward provenance (Phase 0/6)
+   */
+  forwarded_from_message_id?: string | null;
+  /**
+   * Why this message failed — Meta's numeric code as text (e.g. '131042'
+   * for a payment problem, '131047' for the 24-hour window), or a domain
+   * code for non-Meta failures. Migration 073.
+   */
+  error_code?: string | null;
+  /**
+   * Meta's own wording for the failure, verbatim. Deliberately NOT
+   * paraphrased: Meta reuses generic sentences across unrelated causes, so
+   * rewording it is one more place for the real reason to be lost. Null
+   * means no recorded reason — every successful message, plus failures
+   * that predate migration 073 — and must never render as a blank error.
+   */
+  error_message?: string | null;
+  /**
+   * The full Meta error payload: subcode, fbtrace_id, error_data.details
+   * and HTTP status. `fbtrace_id` is the value Meta asks for when you open
+   * a Direct Support ticket. Migration 073.
+   */
+  error_details?: Record<string, unknown> | null;
   /**
    * Set when the sender edited this message. `content_text` holds the
    * LATEST version — the original is not kept, matching what WhatsApp
@@ -386,6 +599,22 @@ export interface WhatsAppConfig {
   subscribed_apps_at?: string;
   /** Last error from /register; cleared on success. */
   last_registration_error?: string;
+  /**
+   * The actual WhatsApp number, verbatim from Meta. Migration 078.
+   *
+   * Meta sends two shapes and both are stored as-is: `'918588096070'` from
+   * webhook metadata and `'+91 72020 72233'` from the phone-number node.
+   * Render it through `formatDisplayPhoneNumber`, which handles either.
+   *
+   * NULL until the first sync from Meta (connect, an account-info fetch,
+   * or any inbound webhook, all of which carry it). When it is null the UI
+   * must say so; rendering `phone_number_id` in its place is the bug this
+   * column exists to fix — that value is a Meta asset id, and prefixing it
+   * with '+' made a 15-digit id look like a phone number.
+   */
+  display_phone_number?: string | null;
+  /** Business display name Meta shows customers for this number. */
+  verified_name?: string | null;
 }
 
 // Raw Meta status enum. We persist this verbatim from Meta (sync + webhook)
@@ -509,8 +738,22 @@ export interface Deal {
   assignee?: Profile;
 }
 
-export type BroadcastStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'failed';
-export type RecipientStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'replied' | 'failed';
+export type BroadcastStatus =
+  'draft' | 'scheduled' | 'sending' | 'sent' | 'failed';
+export type RecipientStatus =
+  | 'pending'
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'replied'
+  | 'failed'
+  /**
+   * Suppressed before sending because the contact opted out of marketing
+   * (migration 20260831000000). Deliberately counted in NEITHER
+   * `sent_count` nor `failed_count` by the aggregate trigger — a respected
+   * opt-out is not a delivery failure.
+   */
+  | 'skipped';
 
 export interface Broadcast {
   id: string;
@@ -671,10 +914,7 @@ export interface WaitStepConfig {
 }
 
 export type ConditionSubject =
-  | 'contact_field'
-  | 'tag_presence'
-  | 'message_content'
-  | 'time_of_day';
+  'contact_field' | 'tag_presence' | 'message_content' | 'time_of_day';
 
 export interface ConditionStepConfig {
   subject: ConditionSubject;

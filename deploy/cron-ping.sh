@@ -15,6 +15,11 @@
 #                           `idx_one_active_run_per_contact`, which
 #                           silently blocks every future flow trigger
 #                           for that contact.
+#   /api/alerts/cron      — checks each workspace's message usage against
+#                           its weekly/monthly budget and notifies on a
+#                           crossed threshold. Safe to call every 5
+#                           minutes: each (period, threshold) is claimed
+#                           by a UNIQUE insert, so it notifies once.
 #
 # ─── Why this is a script and not an inline crontab command ───
 # The original crontab inlined the curl and wrapped the secret lookup in
@@ -53,7 +58,14 @@ if [ -z "$SECRET" ]; then
   exit 1
 fi
 
-for ep in automations flows; do
+# Endpoint list is hardcoded rather than discovered, so ADDING A CRON ROUTE
+# TO THE REPO IS NOT ENOUGH — it must be named here, and this file must be
+# re-copied to /opt/wacrm/cron-ping.sh. CI does not deploy it.
+#
+#   auto-mail  trial and renewal reminder emails. Safe at this interval:
+#              each send is claimed by a partial unique index on
+#              auto_email_log, so 288 ticks a day still send once.
+for ep in automations flows alerts auto-mail; do
   # Capture body and status together so the log records what the app
   # actually said, not just that something happened.
   out=$(curl -s --max-time 60 -w '\n%{http_code}' \

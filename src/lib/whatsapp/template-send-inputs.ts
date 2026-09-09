@@ -401,6 +401,20 @@ export interface BroadcastSendExtras {
    * sending from a conversation is for.
    */
   headerLocation?: HeaderLocationValues;
+  /** One-time code for authentication templates. */
+  authCode?: string;
+  /** Thumbnail product ID for catalog templates. */
+  catalogThumbnailProductId?: string;
+  /** Product sections for multi-product message templates. */
+  mpm?: MpmValues;
+  /** Invoice fields for order-details templates. */
+  orderDetails?: OrderDetailsValues;
+  /** Order status fields for order-status templates. */
+  orderStatus?: {
+    orderReferenceId: string;
+    orderStatus: OrderStatusOption | '';
+    orderStatusDescription: string;
+  };
 }
 
 export const EMPTY_SEND_EXTRAS: BroadcastSendExtras = {

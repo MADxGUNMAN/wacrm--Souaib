@@ -31,6 +31,7 @@ import {
   Search,
   RefreshCw,
   AlertCircle,
+  Copy,
   Pencil,
   RotateCcw,
   ListFilter,
@@ -38,6 +39,7 @@ import {
   X,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { readApiResponse } from '@/lib/http/read-api-response';
 import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -104,20 +106,22 @@ const CATEGORY_FILTERS: { id: CategoryFilter; label: string }[] = [
  */
 function matchesStatus(
   template: MessageTemplate,
-  filter: StatusFilter,
+  filter: StatusFilter
 ): boolean {
   if (filter === 'ALL') return true;
   const status = (template.status ?? 'DRAFT').toUpperCase();
   if (filter === 'APPROVED') return status === 'APPROVED';
   if (filter === 'PENDING') {
-    return ['PENDING', 'DRAFT', 'IN_APPEAL', 'PENDING_DELETION'].includes(status);
+    return ['PENDING', 'DRAFT', 'IN_APPEAL', 'PENDING_DELETION'].includes(
+      status
+    );
   }
   return ['REJECTED', 'PAUSED', 'DISABLED'].includes(status);
 }
 
 function matchesCategory(
   template: MessageTemplate,
-  filter: CategoryFilter,
+  filter: CategoryFilter
 ): boolean {
   return filter === 'ALL' || template.category === filter;
 }
@@ -164,9 +168,7 @@ const QUALITY_TEXT: Record<string, string> = {
 function typeLabel(template: MessageTemplate): string | null {
   const type = template.template_type;
   if (!type || type === 'default' || type === 'authentication') return null;
-  return (
-    findTypeOption(template.category, type as TemplateType)?.title ?? null
-  );
+  return findTypeOption(template.category, type as TemplateType)?.title ?? null;
 }
 
 export function TemplateManager() {
@@ -179,6 +181,7 @@ export function TemplateManager() {
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [dismissingId, setDismissingId] = useState<string | null>(null);
   // Template selected for the confirm-delete dialog. The destructive
   // action goes through this two-step so a slip on the trash icon
   // doesn't take the template off Meta as well as locally.
@@ -227,7 +230,9 @@ export function TemplateManager() {
     if (!user || !accountId) return;
     setSyncing(true);
     try {
-      const res = await fetch('/api/whatsapp/templates/sync', { method: 'POST' });
+      const res = await fetch('/api/whatsapp/templates/sync', {
+        method: 'POST',
+      });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.error || `Sync failed (HTTP ${res.status})`);
@@ -235,26 +240,30 @@ export function TemplateManager() {
       toast.success(
         t('toastSyncCount', { total: data.total }) +
           (data.inserted || data.updated
-            ? t('toastSyncDetails', { inserted: data.inserted, updated: data.updated })
-            : ''),
+            ? t('toastSyncDetails', {
+                inserted: data.inserted,
+                updated: data.updated,
+              })
+            : '')
       );
       if (Array.isArray(data.errors) && data.errors.length > 0) {
-        const preview = data.errors.slice(0, 3).map(
-          (e: { name: string; language: string; message: string }) =>
-            `${e.name} (${e.language})`,
-        );
+        const preview = data.errors
+          .slice(0, 3)
+          .map(
+            (e: { name: string; language: string; message: string }) =>
+              `${e.name} (${e.language})`
+          );
         const suffix =
           data.errors.length > 3 ? `, +${data.errors.length - 3} more` : '';
-        toast.error(t('toastSyncFailed', { preview: preview.join(', ') + suffix }));
+        toast.error(
+          t('toastSyncFailed', { preview: preview.join(', ') + suffix })
+        );
       }
       if (data.truncated) {
         // Use error (not warning) so the message survives long
         // enough to read — sonner's `warning` auto-dismisses on
         // the same short timer as `success`.
-        toast.error(
-          t('toastSyncTruncated'),
-          { duration: 10000 },
-        );
+        toast.error(t('toastSyncTruncated'), { duration: 10000 });
       }
       if (accountId) await fetchTemplates(accountId);
     } catch (err) {
@@ -291,6 +300,52 @@ export function TemplateManager() {
     }
   }
 
+  /**
+   * Clear the stored failure note on one template.
+   *
+   * Local-only: nothing about the template on Meta's side is touched, so
+   * there is no confirm step. The row is patched in place rather than
+   * refetching the whole list — the response is authoritative and a full
+   * reload would scroll the operator away from the card they just acted
+   * on.
+   */
+  async function dismissProblem(templateId: string) {
+    if (dismissingId) return;
+    setDismissingId(templateId);
+    try {
+      const res = await fetch(
+        `/api/whatsapp/templates/${templateId}/dismiss-error`,
+        { method: 'POST' }
+      );
+      const result = await readApiResponse<{ template?: MessageTemplate }>(
+        res,
+        'cleared'
+      );
+      if (!result.ok) {
+        toast.error(result.error ?? 'Could not clear the message.');
+        return;
+      }
+      setTemplates((prev) =>
+        prev.map((row) =>
+          row.id === templateId
+            ? {
+                ...row,
+                submission_error: undefined,
+                // Mirrors the server: a genuinely rejected template keeps
+                // its reason, so only drop it when the server did.
+                rejection_reason:
+                  row.status === 'REJECTED' ? row.rejection_reason : undefined,
+              }
+            : row
+        )
+      );
+    } catch {
+      toast.error('Could not clear the message.');
+    } finally {
+      setDismissingId(null);
+    }
+  }
+
   const query = search.trim().toLowerCase();
 
   /**
@@ -307,9 +362,9 @@ export function TemplateManager() {
         (template) =>
           matchesStatus(template, statusFilter) &&
           matchesCategory(template, categoryFilter) &&
-          matchesQuery(template, query),
+          matchesQuery(template, query)
       ),
-    [templates, statusFilter, categoryFilter, query],
+    [templates, statusFilter, categoryFilter, query]
   );
 
   /**
@@ -323,7 +378,7 @@ export function TemplateManager() {
       (template) =>
         matchesStatus(template, filter) &&
         matchesCategory(template, categoryFilter) &&
-        matchesQuery(template, query),
+        matchesQuery(template, query)
     ).length;
 
   const categoryCount = (filter: CategoryFilter) =>
@@ -331,7 +386,7 @@ export function TemplateManager() {
       (template) =>
         matchesStatus(template, statusFilter) &&
         matchesCategory(template, filter) &&
-        matchesQuery(template, query),
+        matchesQuery(template, query)
     ).length;
 
   const filtersActive =
@@ -352,10 +407,7 @@ export function TemplateManager() {
       {/* ---- Page header ---- */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl font-bold tracking-tight text-foreground">
-            {t('title')}
-          </h1>
-          <p className="mt-1 max-w-[68ch] text-sm text-muted-foreground">
+          <p className="text-muted-foreground max-w-[68ch] text-sm">
             {t('description')}
           </p>
         </div>
@@ -376,7 +428,7 @@ export function TemplateManager() {
               than writing one. */}
           <Link
             href="/templates/library"
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            className="border-border text-foreground hover:bg-muted focus-visible:ring-ring inline-flex h-9 items-center justify-center gap-2 rounded-md border px-4 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             <LibraryBig className="size-4" />
             Browse library
@@ -385,7 +437,7 @@ export function TemplateManager() {
               open-in-new-tab behave normally. */}
           <Link
             href="/templates/new"
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            className="bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring inline-flex h-9 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             <Plus className="size-4" />
             {t('newTemplate')}
@@ -395,18 +447,18 @@ export function TemplateManager() {
 
       {loading ? (
         <div className="flex items-center justify-center py-16">
-          <Loader2 className="size-6 animate-spin text-primary" />
+          <Loader2 className="text-primary size-6 animate-spin" />
         </div>
       ) : templates.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="flex size-11 items-center justify-center rounded-full bg-muted">
-              <LibraryBig className="size-5 text-muted-foreground" />
+            <div className="bg-muted flex size-11 items-center justify-center rounded-full">
+              <LibraryBig className="text-muted-foreground size-5" />
             </div>
-            <p className="mt-4 text-sm font-medium text-foreground">
+            <p className="text-foreground mt-4 text-sm font-medium">
               {t('noTemplates')}
             </p>
-            <p className="mt-1 max-w-[46ch] text-sm text-muted-foreground">
+            <p className="text-muted-foreground mt-1 max-w-[46ch] text-sm">
               {t('createFirst')}
             </p>
             {/* A brand-new account has nothing to sync and nothing to edit,
@@ -414,7 +466,7 @@ export function TemplateManager() {
                 here saves a hunt through the header. */}
             <Link
               href="/templates/library"
-              className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 mt-5 inline-flex h-9 items-center gap-2 rounded-md px-4 text-sm font-medium"
             >
               <LibraryBig className="size-4" />
               Browse the template library
@@ -428,7 +480,7 @@ export function TemplateManager() {
             <div
               role="group"
               aria-label="Filter by status"
-              className="inline-flex flex-wrap gap-1 rounded-lg border border-border bg-muted/40 p-1"
+              className="border-border bg-muted/40 inline-flex flex-wrap gap-1 rounded-lg border p-1"
             >
               {STATUS_FILTERS.map((f) => {
                 const isActive = statusFilter === f.id;
@@ -442,7 +494,7 @@ export function TemplateManager() {
                       'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
                       isActive
                         ? 'bg-background text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground',
+                        : 'text-muted-foreground hover:text-foreground'
                     )}
                   >
                     {f.label}
@@ -451,7 +503,7 @@ export function TemplateManager() {
                         'rounded px-1.5 text-xs tabular-nums',
                         isActive
                           ? 'bg-primary/10 text-primary'
-                          : 'text-muted-foreground/70',
+                          : 'text-muted-foreground/70'
                       )}
                     >
                       {statusCount(f.id)}
@@ -472,7 +524,7 @@ export function TemplateManager() {
                       // rows are being held back.
                       className={cn(
                         categoryFilter !== 'ALL' &&
-                          'border-primary/40 bg-primary/5 text-primary',
+                          'border-primary/40 bg-primary/5 text-primary'
                       )}
                       aria-label={`Filter by category: ${activeCategoryLabel}`}
                     />
@@ -497,7 +549,7 @@ export function TemplateManager() {
                       belong between groups, so with one group there is
                       none. */}
                   <DropdownMenuGroup>
-                    <DropdownMenuLabel className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+                    <DropdownMenuLabel className="text-muted-foreground text-[11px] font-semibold tracking-wider uppercase">
                       Filter by category
                     </DropdownMenuLabel>
                     {CATEGORY_FILTERS.map((c) => {
@@ -510,11 +562,11 @@ export function TemplateManager() {
                           <Check
                             className={cn(
                               'size-4',
-                              isActive ? 'opacity-100' : 'opacity-0',
+                              isActive ? 'opacity-100' : 'opacity-0'
                             )}
                           />
                           <span className="flex-1">{c.label}</span>
-                          <span className="text-xs text-muted-foreground tabular-nums">
+                          <span className="text-muted-foreground text-xs tabular-nums">
                             {categoryCount(c.id)}
                           </span>
                         </DropdownMenuItem>
@@ -525,7 +577,7 @@ export function TemplateManager() {
               </DropdownMenu>
 
               <div className="relative w-full sm:w-64">
-                <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Search className="text-muted-foreground absolute top-1/2 left-3 size-4 -translate-y-1/2" />
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -540,20 +592,19 @@ export function TemplateManager() {
           {/* Only shown while filtering: says how much is hidden, and
               offers one click to get everything back. */}
           {filtersActive ? (
-            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-sm">
               <span>
                 Showing{' '}
-                <span className="font-medium text-foreground tabular-nums">
+                <span className="text-foreground font-medium tabular-nums">
                   {visibleTemplates.length}
                 </span>{' '}
-                of{' '}
-                <span className="tabular-nums">{templates.length}</span>{' '}
+                of <span className="tabular-nums">{templates.length}</span>{' '}
                 templates
               </span>
               <button
                 type="button"
                 onClick={clearFilters}
-                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-primary transition-colors hover:bg-primary/10"
+                className="text-primary hover:bg-primary/10 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors"
               >
                 <X className="size-3.5" />
                 Clear filters
@@ -564,16 +615,16 @@ export function TemplateManager() {
           {visibleTemplates.length === 0 ? (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-14 text-center">
-                <p className="text-sm font-medium text-foreground">
+                <p className="text-foreground text-sm font-medium">
                   No templates match these filters.
                 </p>
-                <p className="mt-1 text-sm text-muted-foreground">
+                <p className="text-muted-foreground mt-1 text-sm">
                   Try a different status or category, or clear the search.
                 </p>
                 <button
                   type="button"
                   onClick={clearFilters}
-                  className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                  className="text-primary mt-4 inline-flex items-center gap-1.5 text-sm font-medium hover:underline"
                 >
                   <X className="size-3.5" />
                   Clear filters
@@ -597,12 +648,12 @@ export function TemplateManager() {
                 return (
                   <Card
                     key={template.id}
-                    className="flex min-w-0 flex-col overflow-hidden transition-colors hover:border-primary/30"
+                    className="hover:border-primary/30 flex min-w-0 flex-col overflow-hidden transition-colors"
                   >
                     <CardContent className="flex min-w-0 flex-1 flex-col gap-3 pt-4">
                       {/* ---- Name + actions ---- */}
                       <div className="flex min-w-0 items-start gap-2">
-                        <h3 className="min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground">
+                        <h3 className="text-foreground min-w-0 flex-1 truncate font-mono text-sm font-semibold">
                           {template.name}
                         </h3>
                         <div className="flex shrink-0 items-center gap-0.5">
@@ -626,7 +677,7 @@ export function TemplateManager() {
                               aria-label={
                                 isResubmit ? t('resubmitLabel') : t('editLabel')
                               }
-                              className="h-8 px-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                              className="text-muted-foreground hover:bg-primary/10 hover:text-primary h-8 px-2"
                             >
                               {isResubmit ? (
                                 <RotateCcw className="size-3.5" />
@@ -638,6 +689,32 @@ export function TemplateManager() {
                               </span>
                             </Button>
                           ) : null}
+
+                          {/* Duplicate — a FIRST-CLASS action, not a
+                              consolation prize after a failed edit.
+                              
+                              Meta rate-limits edits to one per 24h and 10
+                              per month, and refuses some edits outright, so
+                              "copy it and submit a new one" is a routine
+                              way to change a live template — not an error
+                              path. It was previously only reachable from
+                              the error banner, which meant discovering it
+                              required first filling in the whole edit form
+                              and having it rejected. */}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() =>
+                              router.push(
+                                `/templates/new?copyFrom=${template.id}`
+                              )
+                            }
+                            title="Copy into a new template"
+                            aria-label="Copy into a new template"
+                            className="text-muted-foreground hover:bg-primary/10 hover:text-primary size-8"
+                          >
+                            <Copy className="size-4" />
+                          </Button>
                           <Button
                             variant="ghost"
                             size="icon"
@@ -653,7 +730,7 @@ export function TemplateManager() {
                                 ? t('deleteMetaLocallyTitle')
                                 : t('deleteLocallyTitle')
                             }
-                            className="size-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive size-8"
                           >
                             {deletingId === template.id ? (
                               <Loader2 className="size-4 animate-spin" />
@@ -669,7 +746,7 @@ export function TemplateManager() {
                         <Badge
                           className={cn(
                             'border text-xs',
-                            CATEGORY_BADGE[template.category],
+                            CATEGORY_BADGE[template.category]
                           )}
                         >
                           {template.category}
@@ -689,25 +766,51 @@ export function TemplateManager() {
 
                       {/* ---- Message preview ---- */}
                       <div className="min-w-0 flex-1 space-y-1.5">
-                        <p className="line-clamp-3 text-sm break-words text-muted-foreground">
+                        <p className="text-muted-foreground line-clamp-3 text-sm break-words">
                           {template.body_text}
                         </p>
                         {template.footer_text ? (
-                          <p className="truncate text-xs text-muted-foreground/70 italic">
+                          <p className="text-muted-foreground/70 truncate text-xs italic">
                             {template.footer_text}
                           </p>
                         ) : null}
                       </div>
 
                       {problem ? (
-                        <div className="flex items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/[0.07] px-2 py-1.5 text-xs text-destructive">
+                        <div className="border-destructive/30 bg-destructive/[0.07] text-destructive flex items-start gap-1.5 rounded-md border px-2 py-1.5 text-xs">
                           <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-                          <span className="min-w-0 break-words">{problem}</span>
+                          <span className="min-w-0 flex-1 break-words">
+                            {problem}
+                          </span>
+                          {/* Dismissable ONLY when the template is not
+                              currently rejected. On an APPROVED template
+                              this text is a note about a past failed
+                              attempt and the template works fine, so it
+                              should be clearable. On a REJECTED one it is
+                              the live reason the template cannot be sent
+                              — hiding that would remove something the
+                              user still has to act on. */}
+                          {statusKey !== 'REJECTED' ? (
+                            <button
+                              type="button"
+                              onClick={() => void dismissProblem(template.id)}
+                              disabled={dismissingId === template.id}
+                              title="Dismiss this message"
+                              aria-label="Dismiss this message"
+                              className="text-destructive/60 hover:text-destructive -m-1 shrink-0 rounded p-1 disabled:opacity-50"
+                            >
+                              {dismissingId === template.id ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <X className="size-3.5" />
+                              )}
+                            </button>
+                          ) : null}
                         </div>
                       ) : null}
 
                       {/* ---- Meta row: language + Meta's quality rating ---- */}
-                      <div className="flex items-center gap-2 border-t border-border pt-2.5 text-xs text-muted-foreground">
+                      <div className="border-border text-muted-foreground flex items-center gap-2 border-t pt-2.5 text-xs">
                         {template.language ? (
                           <span className="uppercase">{template.language}</span>
                         ) : null}
@@ -717,7 +820,7 @@ export function TemplateManager() {
                             <span
                               className={cn(
                                 'font-medium uppercase',
-                                QUALITY_TEXT[template.quality_score],
+                                QUALITY_TEXT[template.quality_score]
                               )}
                               title="Meta quality score"
                             >
@@ -754,7 +857,9 @@ export function TemplateManager() {
       >
         <DialogContent className="bg-popover border-border sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle className="text-popover-foreground">{t('deleteDialogTitle')}</DialogTitle>
+            <DialogTitle className="text-popover-foreground">
+              {t('deleteDialogTitle')}
+            </DialogTitle>
             <DialogDescription className="text-muted-foreground">
               {templateToDelete?.meta_template_id
                 ? t('deleteMetaDesc', { name: templateToDelete.name })
@@ -773,7 +878,7 @@ export function TemplateManager() {
             <Button
               onClick={confirmDelete}
               disabled={deletingId !== null}
-              className="bg-red-600 hover:bg-red-700 text-white"
+              className="bg-red-600 text-white hover:bg-red-700"
             >
               {deletingId !== null ? (
                 <>

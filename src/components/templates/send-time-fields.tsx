@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 /**
  * The send-time inputs that are IDENTICAL wherever a template is sent:
@@ -15,9 +15,10 @@
  * variable gains an input with no change on this side.
  */
 
-import { useEffect, useState } from "react";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { useEffect, useState } from 'react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { MediaUploadField } from '@/components/media/media-upload-field';
 import {
   Clock,
   Image as ImageIcon,
@@ -25,8 +26,8 @@ import {
   PackageCheck,
   ReceiptText,
   ShoppingBag,
-} from "lucide-react";
-import { MPM_LIMITS } from "@/lib/whatsapp/template-limits";
+} from 'lucide-react';
+import { MPM_LIMITS } from '@/lib/whatsapp/template-limits';
 import {
   ORDER_STATUS_OPTIONS,
   localInputToMs,
@@ -39,7 +40,7 @@ import {
   type OfferSendPlan,
   type OrderStatusOption,
   type TemplateSendPlan,
-} from "@/lib/whatsapp/template-send-inputs";
+} from '@/lib/whatsapp/template-send-inputs';
 
 // ============================================================
 // Offer expiry
@@ -75,16 +76,16 @@ export function OfferExpiryField({
   const inPast = ms !== undefined && ms <= now;
 
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-muted/40 p-3">
+    <div className="border-border bg-muted/40 space-y-3 rounded-lg border p-3">
       <div className="flex items-center gap-2">
-        <Clock className="h-3.5 w-3.5 text-primary" />
-        <p className="text-xs font-medium text-popover-foreground">
-          {offer.text || "Limited-time offer"}
+        <Clock className="text-primary h-3.5 w-3.5" />
+        <p className="text-popover-foreground text-xs font-medium">
+          {offer.text || 'Limited-time offer'}
         </p>
       </div>
 
       <div className="space-y-1">
-        <Label className="text-xs text-popover-foreground">
+        <Label className="text-popover-foreground text-xs">
           Offer expires at
         </Label>
         <Input
@@ -93,10 +94,10 @@ export function OfferExpiryField({
           onChange={(e) => onChange(e.target.value)}
           className="border-border bg-muted text-foreground"
         />
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-muted-foreground text-[10px]">
           {offer.hasExpiration
-            ? "The customer sees a live countdown to this moment, in their own timezone."
-            : "Required even without a countdown — the offer code stops working after this."}
+            ? 'The customer sees a live countdown to this moment, in their own timezone.'
+            : 'Required even without a countdown — the offer code stops working after this.'}
         </p>
         {inPast ? (
           <p className="text-[10px] text-amber-600 dark:text-amber-500">
@@ -108,19 +109,19 @@ export function OfferExpiryField({
 
       {offer.code ? (
         <div className="space-y-1">
-          <Label className="text-xs text-popover-foreground">
+          <Label className="text-popover-foreground text-xs">
             {`Code for the "${offer.code.text}" button`}
           </Label>
           <Input
             value={code}
             onChange={(e) => onCodeChange(e.target.value)}
-            placeholder={offer.code.defaultCode || "e.g. SAVE20"}
+            placeholder={offer.code.defaultCode || 'e.g. SAVE20'}
             className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
           />
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-muted-foreground text-[10px]">
             {offer.code.defaultCode
               ? `Leave blank to use the approved code "${offer.code.defaultCode}".`
-              : "This template has no default code, so one is required."}
+              : 'This template has no default code, so one is required.'}
           </p>
         </div>
       ) : null}
@@ -140,17 +141,17 @@ export function HeaderLocationFields({
   onChange: (next: HeaderLocationValues) => void;
 }) {
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-muted/40 p-3">
+    <div className="border-border bg-muted/40 space-y-3 rounded-lg border p-3">
       <div className="flex items-center gap-2">
-        <MapPin className="h-3.5 w-3.5 text-primary" />
-        <p className="text-xs font-medium text-popover-foreground">
+        <MapPin className="text-primary h-3.5 w-3.5" />
+        <p className="text-popover-foreground text-xs font-medium">
           The map pin for this message
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <Label className="text-xs text-popover-foreground">Latitude</Label>
+          <Label className="text-popover-foreground text-xs">Latitude</Label>
           <Input
             value={value.latitude}
             onChange={(e) => onChange({ ...value, latitude: e.target.value })}
@@ -160,7 +161,7 @@ export function HeaderLocationFields({
           />
         </div>
         <div className="space-y-1">
-          <Label className="text-xs text-popover-foreground">Longitude</Label>
+          <Label className="text-popover-foreground text-xs">Longitude</Label>
           <Input
             value={value.longitude}
             onChange={(e) => onChange({ ...value, longitude: e.target.value })}
@@ -172,7 +173,7 @@ export function HeaderLocationFields({
       </div>
 
       <div className="space-y-1">
-        <Label className="text-xs text-popover-foreground">Place name</Label>
+        <Label className="text-popover-foreground text-xs">Place name</Label>
         <Input
           value={value.name}
           onChange={(e) => onChange({ ...value, name: e.target.value })}
@@ -182,7 +183,7 @@ export function HeaderLocationFields({
       </div>
 
       <div className="space-y-1">
-        <Label className="text-xs text-popover-foreground">Address</Label>
+        <Label className="text-popover-foreground text-xs">Address</Label>
         <Input
           value={value.address}
           onChange={(e) => onChange({ ...value, address: e.target.value })}
@@ -191,7 +192,7 @@ export function HeaderLocationFields({
         />
       </div>
 
-      <p className="text-[10px] text-muted-foreground">
+      <p className="text-muted-foreground text-[10px]">
         All four are required — WhatsApp draws the pin from the coordinates and
         labels it with the name and address, and refuses a partial pin.
       </p>
@@ -219,16 +220,16 @@ export function OrderStatusFields({
   }) => void;
 }) {
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-muted/40 p-3">
+    <div className="border-border bg-muted/40 space-y-3 rounded-lg border p-3">
       <div className="flex items-center gap-2">
-        <PackageCheck className="h-3.5 w-3.5 text-primary" />
-        <p className="text-xs font-medium text-popover-foreground">
+        <PackageCheck className="text-primary h-3.5 w-3.5" />
+        <p className="text-popover-foreground text-xs font-medium">
           Which order is this updating?
         </p>
       </div>
 
       <div className="space-y-1">
-        <Label className="text-xs text-popover-foreground">
+        <Label className="text-popover-foreground text-xs">
           Order reference id
         </Label>
         <Input
@@ -237,14 +238,14 @@ export function OrderStatusFields({
           placeholder="The reference id from the order message"
           className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
         />
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-muted-foreground text-[10px]">
           Comes from the order message that created the order. Without it
           WhatsApp has no order to update.
         </p>
       </div>
 
       <div className="space-y-1">
-        <Label className="text-xs text-popover-foreground">New status</Label>
+        <Label className="text-popover-foreground text-xs">New status</Label>
         {/* A plain select rather than the styled one: this component is
             rendered inside both a dialog and a page, and the native
             element behaves correctly in both without extra portal work. */}
@@ -253,7 +254,7 @@ export function OrderStatusFields({
           onChange={(e) =>
             onChange({ orderStatus: e.target.value as OrderStatusOption | '' })
           }
-          className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground"
+          className="border-border bg-muted text-foreground w-full rounded-md border px-3 py-2 text-sm"
         >
           <option value="">Choose a status…</option>
           {ORDER_STATUS_OPTIONS.map((o) => (
@@ -262,14 +263,14 @@ export function OrderStatusFields({
             </option>
           ))}
         </select>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-muted-foreground text-[10px]">
           WhatsApp checks the transition makes sense — it refuses to move an
           order backwards, or to cancel one that is already paid.
         </p>
       </div>
 
       <div className="space-y-1">
-        <Label className="text-xs text-popover-foreground">
+        <Label className="text-popover-foreground text-xs">
           Note on the order card · optional
         </Label>
         <Input
@@ -295,8 +296,8 @@ export function CatalogThumbnailField({
   onChange: (next: string) => void;
 }) {
   return (
-    <div className="space-y-1 rounded-lg border border-border bg-muted/40 p-3">
-      <Label className="text-xs text-popover-foreground">
+    <div className="border-border bg-muted/40 space-y-1 rounded-lg border p-3">
+      <Label className="text-popover-foreground text-xs">
         Header product · optional
       </Label>
       <Input
@@ -305,7 +306,7 @@ export function CatalogThumbnailField({
         placeholder="Content ID / SKU from Commerce Manager"
         className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
       />
-      <p className="text-[10px] text-muted-foreground">
+      <p className="text-muted-foreground text-[10px]">
         This product&apos;s image becomes the header. Leave blank and WhatsApp
         uses the first item in your catalogue.
       </p>
@@ -322,23 +323,23 @@ export function MpmFields({
 }) {
   const productCount = value.sections.reduce(
     (n, s) => n + s.productIds.split(/[\s,]+/).filter(Boolean).length,
-    0,
+    0
   );
 
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-muted/40 p-3">
+    <div className="border-border bg-muted/40 space-y-3 rounded-lg border p-3">
       <div className="flex items-center gap-2">
-        <ShoppingBag className="h-3.5 w-3.5 text-primary" />
-        <p className="text-xs font-medium text-popover-foreground">
+        <ShoppingBag className="text-primary h-3.5 w-3.5" />
+        <p className="text-popover-foreground text-xs font-medium">
           Which products to show
         </p>
-        <span className="ml-auto text-[10px] text-muted-foreground">
+        <span className="text-muted-foreground ml-auto text-[10px]">
           {productCount}/{MPM_LIMITS.maxProductsTotal} products
         </span>
       </div>
 
       {value.sections.map((section, i) => (
-        <div key={i} className="space-y-1 rounded-md border border-border p-2">
+        <div key={i} className="border-border space-y-1 rounded-md border p-2">
           <div className="flex items-center gap-2">
             <Input
               value={section.title}
@@ -360,7 +361,7 @@ export function MpmFields({
                     sections: value.sections.filter((_, idx) => idx !== i),
                   })
                 }
-                className="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted"
+                className="border-border text-muted-foreground hover:bg-muted shrink-0 rounded-md border px-2 py-1 text-[10px]"
               >
                 Remove
               </button>
@@ -388,14 +389,14 @@ export function MpmFields({
               sections: [...value.sections, { title: '', productIds: '' }],
             })
           }
-          className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+          className="border-border text-muted-foreground hover:bg-muted rounded-md border px-2 py-1 text-xs"
         >
           Add section
         </button>
       ) : null}
 
       <div className="space-y-1">
-        <Label className="text-xs text-popover-foreground">
+        <Label className="text-popover-foreground text-xs">
           Header product · optional
         </Label>
         <Input
@@ -408,7 +409,7 @@ export function MpmFields({
         />
       </div>
 
-      <p className="text-[10px] text-muted-foreground">
+      <p className="text-muted-foreground text-[10px]">
         The IDs are the Content IDs from Meta Commerce Manager. Up to{' '}
         {MPM_LIMITS.maxSections} sections and {MPM_LIMITS.maxProductsTotal}{' '}
         products in total.
@@ -427,28 +428,30 @@ export function OrderDetailsFields({
   const total = orderDetailsTotal(value);
 
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-muted/40 p-3">
+    <div className="border-border bg-muted/40 space-y-3 rounded-lg border p-3">
       <div className="flex items-center gap-2">
-        <ReceiptText className="h-3.5 w-3.5 text-primary" />
-        <p className="text-xs font-medium text-popover-foreground">
+        <ReceiptText className="text-primary h-3.5 w-3.5" />
+        <p className="text-popover-foreground text-xs font-medium">
           The invoice to send
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <Label className="text-xs text-popover-foreground">
+          <Label className="text-popover-foreground text-xs">
             Your order reference
           </Label>
           <Input
             value={value.referenceId}
-            onChange={(e) => onChange({ ...value, referenceId: e.target.value })}
+            onChange={(e) =>
+              onChange({ ...value, referenceId: e.target.value })
+            }
             placeholder="ORD-1042"
             className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
           />
         </div>
         <div className="space-y-1">
-          <Label className="text-xs text-popover-foreground">Currency</Label>
+          <Label className="text-popover-foreground text-xs">Currency</Label>
           <Input
             value={value.currency}
             onChange={(e) =>
@@ -462,7 +465,7 @@ export function OrderDetailsFields({
       </div>
 
       <div className="space-y-2">
-        <Label className="text-xs text-popover-foreground">Items</Label>
+        <Label className="text-popover-foreground text-xs">Items</Label>
         {value.items.map((item, i) => (
           <div key={i} className="flex items-center gap-2">
             <Input
@@ -473,7 +476,7 @@ export function OrderDetailsFields({
                 onChange({ ...value, items });
               }}
               placeholder="Item name"
-              className="flex-1 border-border bg-muted text-foreground placeholder:text-muted-foreground"
+              className="border-border bg-muted text-foreground placeholder:text-muted-foreground flex-1"
             />
             <Input
               value={item.amount}
@@ -484,18 +487,21 @@ export function OrderDetailsFields({
               }}
               inputMode="decimal"
               placeholder="Price"
-              className="w-24 border-border bg-muted text-foreground placeholder:text-muted-foreground"
+              className="border-border bg-muted text-foreground placeholder:text-muted-foreground w-24"
             />
             <Input
               value={item.quantity}
               onChange={(e) => {
                 const items = [...value.items];
-                items[i] = { ...item, quantity: e.target.value.replace(/\D/g, '') };
+                items[i] = {
+                  ...item,
+                  quantity: e.target.value.replace(/\D/g, ''),
+                };
                 onChange({ ...value, items });
               }}
               inputMode="numeric"
               placeholder="Qty"
-              className="w-16 border-border bg-muted text-foreground placeholder:text-muted-foreground"
+              className="border-border bg-muted text-foreground placeholder:text-muted-foreground w-16"
             />
             {value.items.length > 1 ? (
               <button
@@ -506,7 +512,7 @@ export function OrderDetailsFields({
                     items: value.items.filter((_, idx) => idx !== i),
                   })
                 }
-                className="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted"
+                className="border-border text-muted-foreground hover:bg-muted shrink-0 rounded-md border px-2 py-1 text-[10px]"
               >
                 ✕
               </button>
@@ -524,11 +530,11 @@ export function OrderDetailsFields({
               ],
             })
           }
-          className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+          className="border-border text-muted-foreground hover:bg-muted rounded-md border px-2 py-1 text-xs"
         >
           Add item
         </button>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-muted-foreground text-[10px]">
           Prices in whole {value.currency || 'INR'} — e.g. 250 for ₹250. Paise
           are handled for you.
         </p>
@@ -543,7 +549,7 @@ export function OrderDetailsFields({
           ] as const
         ).map(([field, label]) => (
           <div key={field} className="space-y-1">
-            <Label className="text-xs text-popover-foreground">{label}</Label>
+            <Label className="text-popover-foreground text-xs">{label}</Label>
             <Input
               value={value[field]}
               onChange={(e) => onChange({ ...value, [field]: e.target.value })}
@@ -556,7 +562,7 @@ export function OrderDetailsFields({
       </div>
 
       <div className="space-y-1">
-        <Label className="text-xs text-popover-foreground">
+        <Label className="text-popover-foreground text-xs">
           Payment configuration name
         </Label>
         <Input
@@ -567,13 +573,13 @@ export function OrderDetailsFields({
           placeholder="From WhatsApp Manager → Payments"
           className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
         />
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-muted-foreground text-[10px]">
           Without this the invoice shows but has no payment gateway behind it,
           so the customer cannot pay.
         </p>
       </div>
 
-      <p className="text-xs font-medium text-popover-foreground">
+      <p className="text-popover-foreground text-xs font-medium">
         Total: {value.currency || 'INR'} {total.toFixed(2)}
       </p>
     </div>
@@ -598,7 +604,7 @@ export function CarouselCardFields({
 
   return (
     <div className="space-y-3">
-      <p className="text-xs font-medium text-popover-foreground">
+      <p className="text-popover-foreground text-xs font-medium">
         {`Card details (${cards.length} cards)`}
       </p>
       {/* Card count and order are frozen at approval, so this list is
@@ -608,50 +614,58 @@ export function CarouselCardFields({
         return (
           <div
             key={card.cardIndex}
-            className="space-y-2 rounded-lg border border-border bg-muted/40 p-3"
+            className="border-border bg-muted/40 space-y-2 rounded-lg border p-3"
           >
             <div className="flex items-center gap-2">
-              <ImageIcon className="h-3.5 w-3.5 text-primary" />
-              <p className="text-xs font-medium text-popover-foreground">
+              <ImageIcon className="text-primary h-3.5 w-3.5" />
+              <p className="text-popover-foreground text-xs font-medium">
                 {`Card ${card.cardIndex + 1}`}
               </p>
             </div>
             {card.bodyText ? (
-              <p className="line-clamp-2 text-[10px] text-muted-foreground">
+              <p className="text-muted-foreground line-clamp-2 text-[10px]">
                 {card.bodyText}
               </p>
             ) : null}
 
             <div className="space-y-1">
-              <Label className="text-xs text-popover-foreground">
+              <Label className="text-popover-foreground text-xs">
                 {`${card.media.format.charAt(0)}${card.media.format
                   .slice(1)
-                  .toLowerCase()} link`}
+                  .toLowerCase()}`}
               </Label>
-              <Input
-                value={given.headerMediaUrl ?? ""}
-                onChange={(e) =>
-                  onChange(card.cardIndex, { headerMediaUrl: e.target.value })
+              {/* Send-time media, so it goes to the SEND folder, not the
+                  review one — this file is delivered to a customer and
+                  stays referenced by their chat history. */}
+              <MediaUploadField
+                kind={
+                  card.media.format.toLowerCase() as
+                    'image' | 'video' | 'document'
                 }
-                placeholder={
-                  card.media.defaultUrl || "https://example.com/card.png"
+                purpose="send"
+                compact
+                value={given.headerMediaUrl ?? ''}
+                onChange={(url) =>
+                  onChange(card.cardIndex, { headerMediaUrl: url })
                 }
-                className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
+                urlPlaceholder={
+                  card.media.defaultUrl || 'https://example.com/card.png'
+                }
+                hint={
+                  card.media.defaultUrl
+                    ? 'Leave empty to use the image approved with the template.'
+                    : 'This card has no stored image, so one is required.'
+                }
               />
-              <p className="text-[10px] text-muted-foreground">
-                {card.media.defaultUrl
-                  ? "Leave blank to use the image approved with the template."
-                  : "This card has no stored image, so a link is required."}
-              </p>
             </div>
 
             {Array.from({ length: card.bodyVarCount }, (_, i) => (
               <div key={i} className="space-y-1">
-                <Label className="text-xs text-popover-foreground">
+                <Label className="text-popover-foreground text-xs">
                   {`Card text {{${i + 1}}}`}
                 </Label>
                 <Input
-                  value={given.body?.[i] ?? ""}
+                  value={given.body?.[i] ?? ''}
                   onChange={(e) => {
                     const next = [...(given.body ?? [])];
                     next[i] = e.target.value;
@@ -664,11 +678,11 @@ export function CarouselCardFields({
 
             {card.urlButtons.map((btn) => (
               <div key={btn.index} className="space-y-1">
-                <Label className="text-xs text-popover-foreground">
+                <Label className="text-popover-foreground text-xs">
                   {`Link value for "${btn.text}"`}
                 </Label>
                 <Input
-                  value={given.buttonParams?.[btn.index] ?? ""}
+                  value={given.buttonParams?.[btn.index] ?? ''}
                   onChange={(e) =>
                     onChange(card.cardIndex, {
                       buttonParams: {
@@ -679,10 +693,10 @@ export function CarouselCardFields({
                   }
                   className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
                 />
-                <p className="break-words text-[10px] text-muted-foreground">
+                <p className="text-muted-foreground text-[10px] break-words">
                   {btn.url.replace(
                     /\{\{1\}\}/g,
-                    given.buttonParams?.[btn.index] || "{{1}}",
+                    given.buttonParams?.[btn.index] || '{{1}}'
                   )}
                 </p>
               </div>

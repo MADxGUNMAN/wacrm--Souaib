@@ -17,6 +17,11 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit';
+import {
+  EMAIL_INVALID_MESSAGE,
+  isValidEmail,
+  normalizeEmail,
+} from '@/lib/validation/email';
 
 export async function POST(request: Request) {
   try {
@@ -29,24 +34,30 @@ export async function POST(request: Request) {
 
     const { email, password, fullName, inviteToken } = body ?? {};
 
-    if (!email || typeof email !== 'string' || !email.includes('@')) {
+    // `includes('@')` was the entire check here, so `akash@junkiescoder`
+    // created a real account that could never confirm — the address has
+    // no deliverable domain, so the confirmation link went nowhere and the
+    // user was left unable to log in OR to re-register the same address.
+    // The browser does not catch it either: <input type="email"> allows a
+    // dotless domain by design.
+    if (!isValidEmail(email)) {
       return NextResponse.json(
-        { error: 'Valid email is required' },
-        { status: 400 },
+        { error: EMAIL_INVALID_MESSAGE },
+        { status: 400 }
       );
     }
     if (!password || typeof password !== 'string' || password.length < 6) {
       return NextResponse.json(
         { error: 'Password must be at least 6 characters' },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
     // Rate limit by email to prevent abuse
-    const limit = checkRateLimit(
-      `auth:signup:${email.toLowerCase().trim()}`,
-      { limit: 5, windowMs: 60_000 },
-    );
+    const limit = checkRateLimit(`auth:signup:${normalizeEmail(email)}`, {
+      limit: 5,
+      windowMs: 60_000,
+    });
     if (!limit.success) return rateLimitResponse(limit);
 
     const admin = supabaseAdmin();
@@ -81,7 +92,7 @@ export async function POST(request: Request) {
       console.error('[POST /api/auth/signup] generateLink error:', error);
       return NextResponse.json(
         { error: error.message || 'Failed to create account' },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -92,7 +103,7 @@ export async function POST(request: Request) {
       console.error('[POST /api/auth/signup] no action_link returned');
       return NextResponse.json(
         { error: 'Failed to generate confirmation link' },
-        { status: 500 },
+        { status: 500 }
       );
     }
 
@@ -100,14 +111,14 @@ export async function POST(request: Request) {
     const emailResult = await sendSignupConfirmationEmail(
       trimmedEmail,
       confirmUrl,
-      fullName?.trim(),
+      fullName?.trim()
     );
 
     if (!emailResult.ok) {
       console.warn(
         '[POST /api/auth/signup] email send issue:',
         emailResult.reason,
-        'detail' in emailResult ? emailResult.detail : '',
+        'detail' in emailResult ? emailResult.detail : ''
       );
       // Don't fail the signup — the user was created. They can
       // request a new confirmation email later.
@@ -118,7 +129,7 @@ export async function POST(request: Request) {
     console.error('[POST /api/auth/signup] unexpected error:', err);
     return NextResponse.json(
       { error: 'An unexpected error occurred' },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }

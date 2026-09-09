@@ -1,6 +1,6 @@
-"use client";
+'use client';
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from 'react';
 import {
   Building2,
   Users,
@@ -18,17 +18,17 @@ import {
   DollarSign,
   UserPlus,
   CalendarDays,
-} from "lucide-react";
-import type { PlatformMetrics, SignupDataPoint } from "@/types/super-admin";
-import type { MessageVolumePoint } from "@/types/super-admin";
+} from 'lucide-react';
+import type { PlatformMetrics, SignupDataPoint } from '@/types/super-admin';
+import type { MessageVolumePoint } from '@/types/super-admin';
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+} from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import {
   AreaChart,
   Area,
@@ -39,7 +39,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-} from "recharts";
+} from 'recharts';
 
 // ────────────────────────────────────────────────────────────
 // Helpers
@@ -48,7 +48,7 @@ import {
 function formatNum(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return new Intl.NumberFormat("en-US").format(n);
+  return new Intl.NumberFormat('en-US').format(n);
 }
 
 function relativeTime(ts: string): string {
@@ -69,15 +69,19 @@ function ChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-lg">
-      <p className="text-[11px] font-medium text-slate-500 mb-0.5">
-        {new Date(label).toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
+      <p className="mb-0.5 text-[11px] font-medium text-slate-500">
+        {new Date(label).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
         })}
       </p>
       {payload.map((p: any) => (
-        <p key={p.dataKey} className="text-sm font-bold" style={{ color: p.color }}>
+        <p
+          key={p.dataKey}
+          className="text-sm font-bold"
+          style={{ color: p.color }}
+        >
           {p.name}: {p.value.toLocaleString()}
         </p>
       ))}
@@ -102,9 +106,9 @@ export default function SuperAdminDashboardPage() {
     if (showSpinner) setIsRefreshing(true);
     try {
       const [metricsRes, growthRes, healthRes] = await Promise.all([
-        fetch("/api/super-admin/metrics"),
-        fetch("/api/super-admin/growth?days=30"),
-        fetch("/api/super-admin/health"),
+        fetch('/api/super-admin/metrics'),
+        fetch('/api/super-admin/growth?days=30'),
+        fetch('/api/super-admin/health'),
       ]);
 
       if (!metricsRes.ok) {
@@ -115,7 +119,7 @@ export default function SuperAdminDashboardPage() {
         // checking permissions for a deployment problem.
         const body = await metricsRes.json().catch(() => null);
         throw new Error(
-          body?.error || `Request failed with HTTP ${metricsRes.status}`,
+          body?.error || `Request failed with HTTP ${metricsRes.status}`
         );
       }
 
@@ -173,58 +177,58 @@ export default function SuperAdminDashboardPage() {
   // ──────────────────────────────────────────────────────────
   const kpis = [
     {
-      title: "Total Accounts",
+      title: 'Total Accounts',
       value: m?.total_accounts ?? 0,
       change: m?.new_accounts_30d ?? 0,
-      changeLabel: "this month",
+      changeLabel: 'this month',
       icon: Building2,
-      iconColor: "text-primary",
-      iconBg: "bg-primary/10",
+      iconColor: 'text-primary',
+      iconBg: 'bg-primary/10',
     },
     {
-      title: "Total Users",
+      title: 'Total Users',
       value: m?.total_users ?? 0,
       change: m?.active_7d ?? 0,
-      changeLabel: "active 7d",
+      changeLabel: 'active 7d',
       icon: Users,
-      iconColor: "text-blue-500",
-      iconBg: "bg-blue-50",
+      iconColor: 'text-blue-500',
+      iconBg: 'bg-blue-50',
     },
     {
-      title: "Messages (7d)",
+      title: 'Messages (7d)',
       value: m?.messages_7d ?? 0,
       change: m?.messages_today ?? 0,
-      changeLabel: "today",
+      changeLabel: 'today',
       icon: MessageSquare,
-      iconColor: "text-violet-500",
-      iconBg: "bg-violet-50",
+      iconColor: 'text-violet-500',
+      iconBg: 'bg-violet-50',
     },
     {
-      title: "Contacts",
+      title: 'Contacts',
       value: m?.total_contacts ?? 0,
       change: null,
-      changeLabel: "across all accounts",
+      changeLabel: 'across all accounts',
       icon: Contact,
-      iconColor: "text-emerald-500",
-      iconBg: "bg-emerald-50",
+      iconColor: 'text-emerald-500',
+      iconBg: 'bg-emerald-50',
     },
     {
-      title: "Broadcasts",
+      title: 'Broadcasts',
       value: m?.total_broadcasts ?? 0,
       change: null,
-      changeLabel: "campaigns sent",
+      changeLabel: 'campaigns sent',
       icon: Megaphone,
-      iconColor: "text-amber-500",
-      iconBg: "bg-amber-50",
+      iconColor: 'text-amber-500',
+      iconBg: 'bg-amber-50',
     },
     {
-      title: "Automations",
+      title: 'Automations',
       value: m?.total_automations ?? 0,
       change: null,
-      changeLabel: "active workflows",
+      changeLabel: 'active workflows',
       icon: Zap,
-      iconColor: "text-pink-500",
-      iconBg: "bg-pink-50",
+      iconColor: 'text-pink-500',
+      iconBg: 'bg-pink-50',
     },
   ];
 
@@ -233,32 +237,32 @@ export default function SuperAdminDashboardPage() {
   // ──────────────────────────────────────────────────────────
   const healthItems = [
     {
-      label: "Connected WABA",
+      label: 'Connected WABA',
       value: m?.connected_whatsapp ?? 0,
       icon: Wifi,
-      color: "text-emerald-500",
-      bg: "bg-emerald-50",
+      color: 'text-emerald-500',
+      bg: 'bg-emerald-50',
     },
     {
-      label: "Disconnected WABA",
+      label: 'Disconnected WABA',
       value: m?.disconnected_whatsapp ?? 0,
       icon: WifiOff,
-      color: "text-amber-500",
-      bg: "bg-amber-50",
+      color: 'text-amber-500',
+      bg: 'bg-amber-50',
     },
     {
-      label: "Banned Accounts",
+      label: 'Banned Accounts',
       value: m?.banned_accounts ?? 0,
       icon: ShieldBan,
-      color: "text-red-500",
-      bg: "bg-red-50",
+      color: 'text-red-500',
+      bg: 'bg-red-50',
     },
     {
-      label: "Deals Pipeline",
+      label: 'Deals Pipeline',
       value: m?.total_deals_value ?? 0,
       icon: DollarSign,
-      color: "text-emerald-500",
-      bg: "bg-emerald-50",
+      color: 'text-emerald-500',
+      bg: 'bg-emerald-50',
       isCurrency: true,
     },
   ];
@@ -267,52 +271,40 @@ export default function SuperAdminDashboardPage() {
   // Quick Stats
   // ──────────────────────────────────────────────────────────
   const quickStats = [
-    { label: "Active Today", value: m?.active_today ?? 0, icon: Zap },
-    { label: "Active 7d", value: m?.active_7d ?? 0, icon: CalendarDays },
-    { label: "Active 30d", value: m?.active_30d ?? 0, icon: TrendingUp },
-    { label: "New Today", value: m?.new_accounts_today ?? 0, icon: UserPlus },
-    { label: "New 7d", value: m?.new_accounts_7d ?? 0, icon: UserPlus },
-    { label: "New 30d", value: m?.new_accounts_30d ?? 0, icon: UserPlus },
+    { label: 'Active Today', value: m?.active_today ?? 0, icon: Zap },
+    { label: 'Active 7d', value: m?.active_7d ?? 0, icon: CalendarDays },
+    { label: 'Active 30d', value: m?.active_30d ?? 0, icon: TrendingUp },
+    { label: 'New Today', value: m?.new_accounts_today ?? 0, icon: UserPlus },
+    { label: 'New 7d', value: m?.new_accounts_7d ?? 0, icon: UserPlus },
+    { label: 'New 30d', value: m?.new_accounts_30d ?? 0, icon: UserPlus },
   ];
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-            Dashboard
-          </h1>
-          <p className="text-sm text-slate-500 mt-0.5">
-            Real-time overview of your Replai platform
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {/* Removed last updated timestamp */}
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchAll(true)}
-            disabled={isRefreshing}
-            className="gap-2"
-          >
-            <RefreshCw
-              className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
-            />
-            Refresh
-          </Button>
-        </div>
+      {/* Action Bar */}
+      <div className="flex items-center justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => fetchAll(true)}
+          disabled={isRefreshing}
+          className="gap-2 border-slate-200 bg-white shadow-xs"
+        >
+          <RefreshCw
+            className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`}
+          />
+          Refresh
+        </Button>
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         {kpis.map((kpi) => {
           const Icon = kpi.icon;
           return (
             <Card
               key={kpi.title}
-              className="bg-white border-slate-200 shadow-sm hover:shadow-md transition-shadow"
+              className="border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md"
             >
               <CardContent className="pt-0 pb-0">
                 {isLoading ? (
@@ -323,22 +315,22 @@ export default function SuperAdminDashboardPage() {
                   </div>
                 ) : (
                   <>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-[11px] font-medium tracking-wider text-slate-500 uppercase">
                         {kpi.title}
                       </span>
-                      <div className={`p-1.5 rounded-lg ${kpi.iconBg}`}>
+                      <div className={`rounded-lg p-1.5 ${kpi.iconBg}`}>
                         <Icon className={`h-3.5 w-3.5 ${kpi.iconColor}`} />
                       </div>
                     </div>
-                    <p className="text-2xl font-bold text-slate-900 tracking-tight">
+                    <p className="text-2xl font-bold tracking-tight text-slate-900">
                       {formatNum(kpi.value)}
                     </p>
                     <div className="mt-1 flex items-center text-xs text-slate-500">
                       {kpi.change !== null ? (
                         <>
-                          <TrendingUp className="mr-1 h-3 w-3 text-primary" />
-                          <span className="text-primary font-semibold mr-1">
+                          <TrendingUp className="text-primary mr-1 h-3 w-3" />
+                          <span className="text-primary mr-1 font-semibold">
                             +{formatNum(kpi.change)}
                           </span>
                           {kpi.changeLabel}
@@ -356,12 +348,12 @@ export default function SuperAdminDashboardPage() {
       </div>
 
       {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Account Growth Chart */}
-        <Card className="bg-white border-slate-200 shadow-sm">
+        <Card className="border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-primary" />
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+              <TrendingUp className="text-primary h-4 w-4" />
               Account Growth
             </CardTitle>
             <CardDescription className="text-xs text-slate-500">
@@ -375,8 +367,18 @@ export default function SuperAdminDashboardPage() {
               <ResponsiveContainer width="100%" height={260}>
                 <AreaChart data={growth}>
                   <defs>
-                    <linearGradient id="gradAccounts" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#25D366" stopOpacity={0.25} />
+                    <linearGradient
+                      id="gradAccounts"
+                      x1="0"
+                      y1="0"
+                      x2="0"
+                      y2="1"
+                    >
+                      <stop
+                        offset="5%"
+                        stopColor="#25D366"
+                        stopOpacity={0.25}
+                      />
                       <stop offset="95%" stopColor="#25D366" stopOpacity={0} />
                     </linearGradient>
                     <linearGradient id="gradUsers" x1="0" y1="0" x2="0" y2="1">
@@ -388,18 +390,18 @@ export default function SuperAdminDashboardPage() {
                   <XAxis
                     dataKey="date"
                     tickFormatter={(v) =>
-                      new Date(v).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
+                      new Date(v).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
                       })
                     }
-                    tick={{ fontSize: 10, fill: "#94a3b8" }}
+                    tick={{ fontSize: 10, fill: '#94a3b8' }}
                     tickLine={false}
-                    axisLine={{ stroke: "#e2e8f0" }}
+                    axisLine={{ stroke: '#e2e8f0' }}
                     interval="preserveStartEnd"
                   />
                   <YAxis
-                    tick={{ fontSize: 10, fill: "#94a3b8" }}
+                    tick={{ fontSize: 10, fill: '#94a3b8' }}
                     tickLine={false}
                     axisLine={false}
                     width={30}
@@ -416,8 +418,8 @@ export default function SuperAdminDashboardPage() {
                     dot={false}
                     activeDot={{
                       r: 4,
-                      fill: "#25D366",
-                      stroke: "#fff",
+                      fill: '#25D366',
+                      stroke: '#fff',
                       strokeWidth: 2,
                     }}
                   />
@@ -431,8 +433,8 @@ export default function SuperAdminDashboardPage() {
                     dot={false}
                     activeDot={{
                       r: 4,
-                      fill: "#3b82f6",
-                      stroke: "#fff",
+                      fill: '#3b82f6',
+                      stroke: '#fff',
                       strokeWidth: 2,
                     }}
                   />
@@ -443,9 +445,9 @@ export default function SuperAdminDashboardPage() {
         </Card>
 
         {/* Message Volume Chart */}
-        <Card className="bg-white border-slate-200 shadow-sm">
+        <Card className="border-slate-200 bg-white shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold text-slate-900">
               <MessageSquare className="h-4 w-4 text-violet-500" />
               Message Volume
             </CardTitle>
@@ -462,25 +464,29 @@ export default function SuperAdminDashboardPage() {
                   <defs>
                     <linearGradient id="gradMsg" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.9} />
-                      <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0.4} />
+                      <stop
+                        offset="100%"
+                        stopColor="#8b5cf6"
+                        stopOpacity={0.4}
+                      />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis
                     dataKey="date"
                     tickFormatter={(v) =>
-                      new Date(v).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
+                      new Date(v).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
                       })
                     }
-                    tick={{ fontSize: 10, fill: "#94a3b8" }}
+                    tick={{ fontSize: 10, fill: '#94a3b8' }}
                     tickLine={false}
-                    axisLine={{ stroke: "#e2e8f0" }}
+                    axisLine={{ stroke: '#e2e8f0' }}
                     interval="preserveStartEnd"
                   />
                   <YAxis
-                    tick={{ fontSize: 10, fill: "#94a3b8" }}
+                    tick={{ fontSize: 10, fill: '#94a3b8' }}
                     tickLine={false}
                     axisLine={false}
                     width={30}
@@ -502,9 +508,9 @@ export default function SuperAdminDashboardPage() {
       </div>
 
       {/* Bottom Row: Platform Health + Quick Stats */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         {/* Platform Health */}
-        <Card className="lg:col-span-2 bg-white border-slate-200 shadow-sm">
+        <Card className="border-slate-200 bg-white shadow-sm lg:col-span-2">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold text-slate-900">
               Platform Health
@@ -517,7 +523,10 @@ export default function SuperAdminDashboardPage() {
             {isLoading ? (
               <div className="space-y-4">
                 {Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="h-10 animate-pulse rounded bg-slate-100" />
+                  <div
+                    key={i}
+                    className="h-10 animate-pulse rounded bg-slate-100"
+                  />
                 ))}
               </div>
             ) : (
@@ -527,15 +536,17 @@ export default function SuperAdminDashboardPage() {
                   return (
                     <div
                       key={item.label}
-                      className="flex items-center gap-3 p-3 rounded-xl bg-slate-50/80 border border-slate-100"
+                      className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3"
                     >
-                      <div className={`p-2 rounded-lg ${item.bg}`}>
+                      <div className={`rounded-lg p-2 ${item.bg}`}>
                         <Icon className={`h-4 w-4 ${item.color}`} />
                       </div>
-                      <span className="text-sm font-medium text-slate-700 flex-1">
+                      <span className="flex-1 text-sm font-medium text-slate-700">
                         {item.label}
                       </span>
-                      <span className={`text-lg font-bold tabular-nums ${item.color}`}>
+                      <span
+                        className={`text-lg font-bold tabular-nums ${item.color}`}
+                      >
                         {item.isCurrency
                           ? `$${formatNum(item.value)}`
                           : formatNum(item.value)}
@@ -549,7 +560,7 @@ export default function SuperAdminDashboardPage() {
         </Card>
 
         {/* Quick Stats Grid */}
-        <Card className="lg:col-span-3 bg-white border-slate-200 shadow-sm">
+        <Card className="border-slate-200 bg-white shadow-sm lg:col-span-3">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold text-slate-900">
               Quick Stats
@@ -562,7 +573,10 @@ export default function SuperAdminDashboardPage() {
             {isLoading ? (
               <div className="grid grid-cols-3 gap-3">
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="h-20 animate-pulse rounded-xl bg-slate-100" />
+                  <div
+                    key={i}
+                    className="h-20 animate-pulse rounded-xl bg-slate-100"
+                  />
                 ))}
               </div>
             ) : (
@@ -572,13 +586,13 @@ export default function SuperAdminDashboardPage() {
                   return (
                     <div
                       key={stat.label}
-                      className="flex flex-col items-center justify-center p-4 rounded-xl bg-slate-50/80 border border-slate-100 hover:bg-slate-50 transition-colors"
+                      className="flex flex-col items-center justify-center rounded-xl border border-slate-100 bg-slate-50/80 p-4 transition-colors hover:bg-slate-50"
                     >
-                      <Icon className="h-4 w-4 text-slate-400 mb-1.5" />
+                      <Icon className="mb-1.5 h-4 w-4 text-slate-400" />
                       <p className="text-xl font-bold text-slate-900 tabular-nums">
                         {formatNum(stat.value)}
                       </p>
-                      <p className="text-[10px] text-slate-500 font-medium mt-0.5 text-center">
+                      <p className="mt-0.5 text-center text-[10px] font-medium text-slate-500">
                         {stat.label}
                       </p>
                     </div>

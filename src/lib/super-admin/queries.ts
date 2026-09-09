@@ -61,20 +61,31 @@ export async function getAccountsList(
     .filter(Boolean) as string[];
 
   if (superAdminAccountIds.length > 0) {
-    query = query.not('account_id', 'in', `(${superAdminAccountIds.join(',')})`);
+    query = query.not(
+      'account_id',
+      'in',
+      `(${superAdminAccountIds.join(',')})`
+    );
   }
 
   // Apply filters
   if (filters?.status === 'banned') {
     query = query.eq('is_banned', true);
   } else if (filters?.status === 'active') {
-    query = query.eq('is_banned', false);
+    query = query
+      .eq('is_banned', false)
+      .or('whatsapp_status.eq.connected,messages_30d.gt.0');
+  } else if (filters?.status === 'inactive') {
+    query = query
+      .eq('is_banned', false)
+      .eq('messages_30d', 0)
+      .or('whatsapp_status.is.null,whatsapp_status.neq.connected');
   }
 
   if (filters?.whatsapp === 'connected') {
     query = query.eq('whatsapp_status', 'connected');
   } else if (filters?.whatsapp === 'disconnected') {
-    query = query.eq('whatsapp_status', 'disconnected');
+    query = query.or('whatsapp_status.eq.disconnected,whatsapp_status.is.null');
   }
 
   if (filters?.search) {

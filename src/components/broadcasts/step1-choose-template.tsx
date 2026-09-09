@@ -86,7 +86,9 @@ export function Step1ChooseTemplate({ selectedTemplate, onSelect, onNext, onBack
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {templates.map((template) => {
-            const isSelected = selectedTemplate?.id === template.id;
+            const isSelected =
+              selectedTemplate?.id === template.id ||
+              selectedTemplate?.name === template.name;
             const catColor = categoryColors[template.category] ?? categoryColors.Utility;
             // Approved does not mean sendable — a carousel needs per-card
             // media uploaded at send time, which is not wired up yet.

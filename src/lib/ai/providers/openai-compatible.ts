@@ -1,5 +1,4 @@
 import { AiError, type ProviderResult } from '../types'
-import { MAX_OUTPUT_TOKENS } from '../defaults'
 import {
   mergeConsecutive,
   normalizeUsage,
@@ -27,7 +26,8 @@ export async function generateOpenAiCompatible(
   args: ProviderArgs,
   extraHeaders: Record<string, string> = {}
 ): Promise<ProviderResult> {
-  const { apiKey, model, systemPrompt, messages, timeoutMs } = args
+  const { apiKey, model, systemPrompt, messages, timeoutMs, maxOutputTokens } =
+    args
 
   let res: Response
   try {
@@ -44,7 +44,7 @@ export async function generateOpenAiCompatible(
           { role: 'system', content: systemPrompt },
           ...mergeConsecutive(messages),
         ],
-        max_completion_tokens: MAX_OUTPUT_TOKENS,
+        max_completion_tokens: maxOutputTokens,
       }),
       signal: AbortSignal.timeout(timeoutMs),
     })

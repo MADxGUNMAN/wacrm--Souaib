@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,15 @@ import { ArrowLeft, Save, Loader2, Edit3, Eye, EyeOff, ImagePlus, Plus, Trash2 }
 import Link from "next/link";
 import { updateLandingSection } from "./actions";
 import { createClient } from "@/lib/supabase/client";
+import { uploadAccountMedia } from "@/lib/storage/upload-media";
+
+/**
+ * S3 prefix for landing-page section artwork. Named once because it has to
+ * match an entry in ALLOWED_UPLOAD_FOLDERS exactly — the presign route
+ * rejects anything not on that list, so a typo here is a 400 rather than a
+ * stray folder appearing in the bucket.
+ */
+const LANDING_SECTION_FOLDER = "public-assets/landing-sections";
 
 const SECTION_FIELD_CONFIG: Record<string, {
   title?: boolean;
@@ -129,15 +139,16 @@ export function SectionsClient({ initialSections }: { initialSections: any[] }) 
       });
 
       if (res.error) {
-        alert("Failed to update section: " + res.error);
+        toast.error("Failed to update section: " + res.error);
       } else {
         // Update local state
         setSections(sections.map(s => s.id === editingSection.id ? editingSection : s));
         setEditingSection(null);
+        toast.success("Section updated successfully!");
         router.refresh();
       }
     } catch (err) {
-      alert("An error occurred");
+      toast.error("An error occurred");
     } finally {
       setIsSaving(false);
     }
@@ -298,23 +309,14 @@ export function SectionsClient({ initialSections }: { initialSections: any[] }) 
                       if (!file) return;
                       setIsUploading(true);
                       try {
-                        const fileExt = file.name.split('.').pop();
-                        const fileName = `${Math.random()}.${fileExt}`;
-                        const filePath = `landing-sections/${fileName}`;
-                        
-                        const { error: uploadError, data } = await supabase.storage
-                          .from('public-assets')
-                          .upload(filePath, file);
-                          
-                        if (uploadError) throw uploadError;
-                        
-                        const { data: { publicUrl } } = supabase.storage
-                          .from('public-assets')
-                          .getPublicUrl(filePath);
-                          
+                        const { publicUrl } = await uploadAccountMedia(
+                          LANDING_SECTION_FOLDER,
+                          file
+                        );
                         setEditingSection({ ...editingSection, image_url: publicUrl });
+                        toast.success("Image uploaded successfully!");
                       } catch (err: any) {
-                        alert("Error uploading image: " + err.message);
+                        toast.error("Error uploading image: " + err.message);
                       } finally {
                         setIsUploading(false);
                       }
@@ -381,29 +383,22 @@ export function SectionsClient({ initialSections }: { initialSections: any[] }) 
                           if (!files || files.length === 0) return;
                           setIsUploading(true);
                           try {
-                            const uploadPromises = Array.from(files).map(async (file) => {
-                              const fileExt = file.name.split('.').pop();
-                              const fileName = `${Math.random()}.${fileExt}`;
-                              const filePath = `landing-sections/${fileName}`;
-                              
-                              const { error: uploadError } = await supabase.storage
-                                .from('public-assets')
-                                .upload(filePath, file);
-                                
-                              if (uploadError) throw uploadError;
-                              
-                              const { data: { publicUrl } } = supabase.storage
-                                .from('public-assets')
-                                .getPublicUrl(filePath);
-                                
-                              return publicUrl;
-                            });
+                            const uploadPromises = Array.from(files).map(
+                              async (file) =>
+                                (
+                                  await uploadAccountMedia(
+                                    LANDING_SECTION_FOLDER,
+                                    file
+                                  )
+                                ).publicUrl
+                            );
                             
                             const newUrls = await Promise.all(uploadPromises);
                             const currentImages = editingSection.images || [];
                             setEditingSection({ ...editingSection, images: [...currentImages, ...newUrls] });
+                            toast.success("Images uploaded successfully!");
                           } catch (err: any) {
-                            alert("Error uploading images: " + err.message);
+                            toast.error("Error uploading images: " + err.message);
                           } finally {
                             setIsUploading(false);
                           }
@@ -456,29 +451,22 @@ export function SectionsClient({ initialSections }: { initialSections: any[] }) 
                               if (!files || files.length === 0) return;
                               setIsUploading(true);
                               try {
-                                const uploadPromises = Array.from(files).map(async (file) => {
-                                  const fileExt = file.name.split('.').pop();
-                                  const fileName = `${Math.random()}.${fileExt}`;
-                                  const filePath = `landing-sections/${fileName}`;
-                                  
-                                  const { error: uploadError } = await supabase.storage
-                                    .from('public-assets')
-                                    .upload(filePath, file);
-                                    
-                                  if (uploadError) throw uploadError;
-                                  
-                                  const { data: { publicUrl } } = supabase.storage
-                                    .from('public-assets')
-                                    .getPublicUrl(filePath);
-                                    
-                                  return publicUrl;
-                                });
+                                const uploadPromises = Array.from(files).map(
+                                  async (file) =>
+                                    (
+                                      await uploadAccountMedia(
+                                        LANDING_SECTION_FOLDER,
+                                        file
+                                      )
+                                    ).publicUrl
+                                );
                                 
                                 const newUrls = await Promise.all(uploadPromises);
                                 const currentImages = editingSection.images_secondary || [];
                                 setEditingSection({ ...editingSection, images_secondary: [...currentImages, ...newUrls] });
+                                toast.success("Images uploaded successfully!");
                               } catch (err: any) {
-                                alert("Error uploading images: " + err.message);
+                                toast.error("Error uploading images: " + err.message);
                               } finally {
                                 setIsUploading(false);
                               }

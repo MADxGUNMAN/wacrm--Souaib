@@ -24,9 +24,13 @@ import type {
   AccountOwnerContact,
   AccountSubscriptionRow,
   BillingCycle,
+  CustomerHistoryPage,
+  CustomerPaymentRecord,
+  CustomerPlanActivity,
   PaymentRequest,
   PlansBundle,
   PublicSubscriptionSettings,
+  SelectedPlanSummary,
   SubscriptionEventType,
   SubscriptionPlan,
   SubscriptionPlanPrice,
@@ -86,6 +90,15 @@ export const FALLBACK_SETTINGS: PublicSubscriptionSettings = {
   member_blocked_note: null,
   member_blocked_contact_label: 'Email account owner',
   member_blocked_show_owner_contact: true,
+  show_trial_badges: true,
+  trial_badge_template: '{days} days free trial',
+  no_card_label: 'No card or payment required',
+  trial_cta_label: 'Start with trial',
+  trial_cta_note: null,
+  upcoming_plan_label: 'Upcoming plan',
+  upcoming_unpaid_label: 'Not paid',
+  pay_now_label: 'Pay now',
+  change_plan_label: 'Change plan',
 };
 
 // ------------------------------------------------------------
@@ -193,7 +206,7 @@ function normalisePrice(row: Record<string, unknown>): SubscriptionPlanPrice {
  * server-only.
  */
 export async function getPlansBundle(
-  options: { includeHidden?: boolean } = {},
+  options: { includeHidden?: boolean } = {}
 ): Promise<PlansBundle> {
   const { includeHidden = false } = options;
   const admin = supabaseAdmin();
@@ -218,23 +231,29 @@ export async function getPlansBundle(
   ]);
 
   if (cyclesRes.error) {
-    console.error('[subscription] cycles read failed:', cyclesRes.error.message);
+    console.error(
+      '[subscription] cycles read failed:',
+      cyclesRes.error.message
+    );
   }
   if (plansRes.error) {
     console.error('[subscription] plans read failed:', plansRes.error.message);
   }
   if (pricesRes.error) {
-    console.error('[subscription] prices read failed:', pricesRes.error.message);
+    console.error(
+      '[subscription] prices read failed:',
+      pricesRes.error.message
+    );
   }
 
   return {
     settings,
     cycles: (cyclesRes.data ?? []).map((r) =>
-      normaliseCycle(r as Record<string, unknown>),
+      normaliseCycle(r as Record<string, unknown>)
     ),
     plans: (plansRes.data ?? []) as SubscriptionPlan[],
     prices: (pricesRes.data ?? []).map((r) =>
-      normalisePrice(r as Record<string, unknown>),
+      normalisePrice(r as Record<string, unknown>)
     ),
   };
 }
@@ -277,7 +296,7 @@ export class QuoteError extends Error {
  */
 export async function resolveQuote(
   planId: string,
-  cycleId: string,
+  cycleId: string
 ): Promise<ResolvedQuote> {
   const admin = supabaseAdmin();
 
@@ -315,7 +334,7 @@ export async function resolveQuote(
   }
   if (!price || !price.is_visible) {
     throw new QuoteError(
-      `${plan.name} is not available on the ${cycle.label} cycle`,
+      `${plan.name} is not available on the ${cycle.label} cycle`
     );
   }
 
@@ -325,7 +344,7 @@ export async function resolveQuote(
     // either reject or silently treat as "enter your own amount" —
     // exactly the ambiguity manual verification cannot resolve.
     throw new QuoteError(
-      `${plan.name} has no valid price configured for ${cycle.label}`,
+      `${plan.name} has no valid price configured for ${cycle.label}`
     );
   }
 
@@ -335,7 +354,8 @@ export async function resolveQuote(
     cycleId: cycle.id,
     cycleLabel: cycle.label,
     cycleMonths: Number(cycle.months ?? 0),
-    cycleDurationDays: cycle.duration_days == null ? null : Number(cycle.duration_days),
+    cycleDurationDays:
+      cycle.duration_days == null ? null : Number(cycle.duration_days),
     amount,
     currency: settings.currency || 'INR',
   };
@@ -344,14 +364,14 @@ export async function resolveQuote(
 /** Preview the window a quote would grant, for the confirmation UI. */
 export function previewQuoteWindow(
   quote: Pick<ResolvedQuote, 'cycleMonths' | 'cycleDurationDays'>,
-  from: Date = new Date(),
+  from: Date = new Date()
 ): Date {
   return addDuration(
     from,
     resolveCycleDuration({
       months: quote.cycleMonths,
       duration_days: quote.cycleDurationDays,
-    }),
+    })
   );
 }
 
@@ -364,10 +384,10 @@ export function previewQuoteWindow(
 // `string`-typed variable collapses that inference to GenericStringError
 // and the result is no longer assignable to AccountSubscriptionRow.
 const ACCOUNT_SUBSCRIPTION_COLUMNS =
-  'subscription_status, trial_started_at, trial_ends_at, subscription_plan_id, subscription_plan_name, subscription_cycle_label, subscription_started_at, subscription_ends_at, subscription_note' as const;
+  'subscription_status, trial_started_at, trial_ends_at, subscription_plan_id, subscription_plan_name, subscription_cycle_label, subscription_started_at, subscription_ends_at, subscription_note, selected_plan_id, selected_cycle_id, plan_selected_at, plan_selection_required' as const;
 
 export async function getAccountSubscription(
-  accountId: string,
+  accountId: string
 ): Promise<AccountSubscriptionRow | null> {
   const admin = supabaseAdmin();
   const { data, error } = await admin
@@ -384,6 +404,175 @@ export async function getAccountSubscription(
 }
 
 /**
+ * Rejection of an unusable plan choice.
+ *
+ * Its own class rather than reusing `SubscriptionMutationError`, which
+ * lives in `activate.ts` — and `activate.ts` already imports from this
+ * module, so borrowing it would make the two files circular. Carries a
+ * numeric `status`, which is all `toBillingErrorResponse` needs to turn
+ * it into a response with the message intact.
+ */
+export class PlanSelectionError extends Error {
+  readonly status: number;
+  constructor(message: string, status = 400) {
+    super(message);
+    this.status = status;
+    this.name = 'PlanSelectionError';
+  }
+}
+
+/**
+ * A saved plan choice, resolved into the names and price the UI shows.
+ *
+ * Returns null unless BOTH ids are set AND both rows still exist AND the
+ * pair is still priced. That last condition matters: an admin can delete
+ * a cycle or unprice a plan after a customer chose it, and a "Pay now"
+ * button that leads to an unpriceable quote is worse than no button —
+ * the caller renders "choose a plan" instead, which is the truth.
+ */
+export async function getSelectedPlan(
+  accountId: string
+): Promise<SelectedPlanSummary | null> {
+  const admin = supabaseAdmin();
+
+  const { data: account } = await admin
+    .from('accounts')
+    .select('selected_plan_id, selected_cycle_id, plan_selected_at')
+    .eq('id', accountId)
+    .maybeSingle();
+
+  const planId = account?.selected_plan_id as string | null | undefined;
+  const cycleId = account?.selected_cycle_id as string | null | undefined;
+  // Half a selection cannot be priced, so it is not a selection.
+  if (!planId || !cycleId) return null;
+
+  const [{ data: plan }, { data: cycle }, { data: price }] = await Promise.all([
+    admin
+      .from('subscription_plans')
+      .select('id, name')
+      .eq('id', planId)
+      .maybeSingle(),
+    admin
+      .from('billing_cycles')
+      .select('id, label, months, duration_days')
+      .eq('id', cycleId)
+      .maybeSingle(),
+    admin
+      .from('subscription_plan_prices')
+      .select('amount, is_visible')
+      .eq('plan_id', planId)
+      .eq('cycle_id', cycleId)
+      .maybeSingle(),
+  ]);
+
+  // The plan or cycle was deleted (both FKs are ON DELETE SET NULL, but
+  // the row can also have been made invisible), or the pair was never
+  // priced. Either way there is nothing to charge for.
+  if (!plan || !cycle || !price || price.is_visible === false) return null;
+
+  const settings = await getSubscriptionSettings();
+
+  return {
+    planId: plan.id as string,
+    planName: plan.name as string,
+    cycleId: cycle.id as string,
+    cycleLabel: cycle.label as string,
+    amount: toAmount(price.amount),
+    currency: settings.currency,
+    selectedAt: (account?.plan_selected_at as string | null) ?? null,
+  };
+}
+
+/**
+ * Record the plan a customer chose, without charging them.
+ *
+ * Called by both routes out of /upgrade-plan — "Continue to payment" and
+ * "Start with trial" — because in both cases we now know what they want.
+ * Storing it on the pay path too is what makes an abandoned checkout
+ * recoverable: they land back on their chosen term rather than a blank
+ * price list.
+ *
+ * Clearing `plan_selection_required` here (rather than on first
+ * dashboard visit) is deliberate: the flag means "has not chosen yet",
+ * and this is the moment that stops being true.
+ *
+ * Validates against the catalogue with the service role because the
+ * catalogue tables are RLS-closed to clients — the browser cannot read a
+ * price, so it must not be trusted to name a valid (plan, cycle) pair.
+ */
+export async function setSelectedPlan(
+  accountId: string,
+  planId: string,
+  cycleId: string
+): Promise<SelectedPlanSummary> {
+  const admin = supabaseAdmin();
+
+  const [{ data: plan }, { data: cycle }, { data: price }] = await Promise.all([
+    admin
+      .from('subscription_plans')
+      .select('id, name, is_visible')
+      .eq('id', planId)
+      .maybeSingle(),
+    admin
+      .from('billing_cycles')
+      .select('id, label, is_visible')
+      .eq('id', cycleId)
+      .maybeSingle(),
+    admin
+      .from('subscription_plan_prices')
+      .select('amount, is_visible')
+      .eq('plan_id', planId)
+      .eq('cycle_id', cycleId)
+      .maybeSingle(),
+  ]);
+
+  // Rejected rather than stored: a selection we cannot price would put a
+  // dead "Pay now" button in Billing and a broken redirect at trial end.
+  if (!plan || plan.is_visible === false) {
+    throw new PlanSelectionError('That plan is not available.', 400);
+  }
+  if (!cycle || cycle.is_visible === false) {
+    throw new PlanSelectionError('That billing term is not available.', 400);
+  }
+  if (!price || price.is_visible === false) {
+    throw new PlanSelectionError(
+      'That plan and billing term combination is not priced.',
+      400
+    );
+  }
+
+  const { error } = await admin
+    .from('accounts')
+    .update({
+      selected_plan_id: planId,
+      selected_cycle_id: cycleId,
+      plan_selected_at: new Date().toISOString(),
+      plan_selection_required: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', accountId);
+
+  if (error) {
+    throw new PlanSelectionError(
+      `Could not save your plan choice: ${error.message}`,
+      500
+    );
+  }
+
+  const settings = await getSubscriptionSettings();
+
+  return {
+    planId: plan.id as string,
+    planName: plan.name as string,
+    cycleId: cycle.id as string,
+    cycleLabel: cycle.label as string,
+    amount: toAmount(price.amount),
+    currency: settings.currency,
+    selectedAt: new Date().toISOString(),
+  };
+}
+
+/**
  * The account owner's name + email, for the member-blocked screen.
  *
  * Resolved via `accounts.owner_user_id` -> that user's profile. Account
@@ -393,7 +582,7 @@ export async function getAccountSubscription(
  * get right.
  */
 export async function getAccountOwnerContact(
-  accountId: string,
+  accountId: string
 ): Promise<AccountOwnerContact | null> {
   const admin = supabaseAdmin();
 
@@ -450,7 +639,7 @@ function normalisePaymentRequest(row: Record<string, unknown>): PaymentRequest {
 
 /** Most recent submission for an account, whatever its status. */
 export async function getLatestPaymentRequest(
-  accountId: string,
+  accountId: string
 ): Promise<PaymentRequest | null> {
   const admin = supabaseAdmin();
   const { data, error } = await admin
@@ -475,7 +664,7 @@ export async function getLatestPaymentRequest(
  * check that produces a readable error instead of a 23505).
  */
 export async function getPendingPaymentRequest(
-  accountId: string,
+  accountId: string
 ): Promise<PaymentRequest | null> {
   const admin = supabaseAdmin();
   const { data, error } = await admin
@@ -492,9 +681,254 @@ export async function getPendingPaymentRequest(
   return data ? normalisePaymentRequest(data as Record<string, unknown>) : null;
 }
 
+/**
+ * Project a stored payment row down to what its payer may see.
+ *
+ * Shared by every customer-facing route that returns payments, so the
+ * projection cannot drift between them. That matters more than the
+ * duplication it saves: `payment_requests` carries
+ * `reviewed_by_user_id`, and a second hand-written projection is
+ * exactly how that ends up on the wire one day.
+ */
+export function toCustomerPaymentRecord(
+  row: PaymentRequest
+): CustomerPaymentRecord {
+  return {
+    id: row.id,
+    // First segment of the UUID, uppercased. Enough to disambiguate a
+    // customer's own handful of payments when they email support, and
+    // it needs no extra column. Not shown as an invoice number, because
+    // it is not sequential and pretending otherwise invites questions
+    // about the gaps.
+    reference: row.id.split('-')[0]?.toUpperCase() ?? row.id,
+    planName: row.plan_name_snapshot,
+    cycleLabel: row.cycle_label_snapshot,
+    expectedAmount: row.expected_amount,
+    paidAmount: row.paid_amount,
+    currency: row.currency,
+    transactionRef: row.transaction_ref,
+    payerName: row.payer_name,
+    payerUpiId: row.payer_upi_id,
+    payerBank: row.payer_bank,
+    paidAt: row.paid_at,
+    status: row.status,
+    reviewNote: row.review_note,
+    reviewedAt: row.reviewed_at,
+    activatedFrom: row.activated_from,
+    activatedUntil: row.activated_until,
+    createdAt: row.created_at,
+  };
+}
+
+/** Page size for both customer history lists. */
+export const CUSTOMER_HISTORY_PAGE_SIZE = 10;
+
+/** Clamp a page number coming off a query string. */
+function safePage(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}
+
+/**
+ * One page of this account's payments, newest first.
+ *
+ * Paged in the DATABASE with `count: 'exact'` + `.range()`, not by
+ * fetching everything and slicing. The super-admin events route
+ * over-fetches 1000 rows and pages in memory, but it has to — it filters
+ * and text-searches after the query. Nothing here does, so there is no
+ * reason to ship rows the customer will not see, and no silent ceiling
+ * at row 1000.
+ */
+export async function listCustomerPaymentsPage(
+  accountId: string,
+  page: unknown = 1,
+  pageSize: number = CUSTOMER_HISTORY_PAGE_SIZE
+): Promise<CustomerHistoryPage<CustomerPaymentRecord>> {
+  const admin = supabaseAdmin();
+  const current = safePage(page);
+  const from = (current - 1) * pageSize;
+
+  const { data, error, count } = await admin
+    .from('payment_requests')
+    .select('*', { count: 'exact' })
+    .eq('account_id', accountId)
+    .order('created_at', { ascending: false })
+    .range(from, from + pageSize - 1);
+
+  if (error) {
+    console.error('[subscription] payment page read failed:', error.message);
+    return { items: [], page: current, pageSize, total: 0, totalPages: 1 };
+  }
+
+  const total = count ?? 0;
+  return {
+    items: (data ?? [])
+      .map((r) => normalisePaymentRequest(r as Record<string, unknown>))
+      .map(toCustomerPaymentRecord),
+    page: current,
+    pageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+
+/**
+ * Lifetime payment totals for this account, across every page.
+ *
+ * A separate query rather than a sum over the current page, because the
+ * summary must not move when the customer pages. Selects three columns
+ * and no row bodies, so it stays cheap even on an account with a long
+ * history.
+ */
+export async function getCustomerPaymentSummary(accountId: string): Promise<{
+  totalsByCurrency: { currency: string; amount: number }[];
+  approvedCount: number;
+  pendingCount: number;
+  rejectedCount: number;
+}> {
+  const admin = supabaseAdmin();
+  const { data, error } = await admin
+    .from('payment_requests')
+    .select('status, paid_amount, currency')
+    .eq('account_id', accountId);
+
+  const empty = {
+    totalsByCurrency: [],
+    approvedCount: 0,
+    pendingCount: 0,
+    rejectedCount: 0,
+  };
+
+  if (error) {
+    console.error('[subscription] payment summary read failed:', error.message);
+    return empty;
+  }
+
+  const totals = new Map<string, number>();
+  let approvedCount = 0;
+  let pendingCount = 0;
+  let rejectedCount = 0;
+
+  for (const raw of data ?? []) {
+    const row = raw as Record<string, unknown>;
+    const status = String(row.status);
+
+    if (status === 'approved') approvedCount += 1;
+    else if (status === 'pending') pendingCount += 1;
+    else if (status === 'rejected') rejectedCount += 1;
+
+    // Only APPROVED money counts toward a total paid. A pending row is
+    // money the customer says they sent that nobody has verified, and a
+    // rejected one is explicitly not revenue — including either would
+    // show a figure the business does not agree with.
+    if (status !== 'approved') continue;
+
+    const currency = String(row.currency || 'INR');
+    // PostgREST serialises NUMERIC as a string; `toAmount` is what stops
+    // this addition silently concatenating.
+    totals.set(
+      currency,
+      (totals.get(currency) ?? 0) + toAmount(row.paid_amount)
+    );
+  }
+
+  return {
+    totalsByCurrency: [...totals.entries()]
+      .map(([currency, amount]) => ({ currency, amount }))
+      .sort((a, b) => b.amount - a.amount),
+    approvedCount,
+    pendingCount,
+    rejectedCount,
+  };
+}
+
+/**
+ * Plan changes the customer did NOT pay for directly: trial start,
+ * support-granted time, expiry, a block.
+ *
+ * Two filters do the work, and both are deliberate:
+ *
+ *   1. An event-type allowlist. `payment_submitted` / `payment_approved`
+ *      / `payment_rejected` are excluded because every one of them is
+ *      already a row in the payments list — showing both would make one
+ *      payment look like two events.
+ *
+ *   2. `payment_request_id IS NULL`. `subscription_activated` and
+ *      `subscription_extended` are written BOTH when an admin approves a
+ *      payment and when an admin comps time by hand; the event type
+ *      alone cannot tell them apart. Keeping only the rows with no
+ *      linked payment leaves exactly the changes that have no receipt,
+ *      which is the whole point of this list.
+ *
+ * Service role because `subscription_events` has RLS on with no
+ * policies — a client read returns nothing by design. Account scoping
+ * is therefore this function's responsibility, not the database's.
+ */
+export async function listCustomerPlanActivity(
+  accountId: string,
+  page: unknown = 1,
+  pageSize: number = CUSTOMER_HISTORY_PAGE_SIZE
+): Promise<CustomerHistoryPage<CustomerPlanActivity>> {
+  const CUSTOMER_VISIBLE_EVENTS: SubscriptionEventType[] = [
+    'trial_started',
+    'trial_extended',
+    'subscription_activated',
+    'subscription_extended',
+    'subscription_revoked',
+    'subscription_expired',
+  ];
+
+  const admin = supabaseAdmin();
+  const current = safePage(page);
+  const from = (current - 1) * pageSize;
+
+  const { data, error, count } = await admin
+    .from('subscription_events')
+    // Column list, not `*`. An added operator-only column must not
+    // silently start shipping to customers.
+    .select(
+      'id, event_type, plan_name, cycle_label, window_kind, duration_days, duration_months, ends_at, created_at',
+      { count: 'exact' }
+    )
+    .eq('account_id', accountId)
+    .in('event_type', CUSTOMER_VISIBLE_EVENTS)
+    .is('payment_request_id', null)
+    .order('created_at', { ascending: false })
+    .range(from, from + pageSize - 1);
+
+  if (error) {
+    console.error('[subscription] plan activity read failed:', error.message);
+    return { items: [], page: current, pageSize, total: 0, totalPages: 1 };
+  }
+
+  const total = count ?? 0;
+  return {
+    items: (data ?? []).map((r) => {
+      const row = r as Record<string, unknown>;
+      return {
+        id: String(row.id),
+        eventType: row.event_type as SubscriptionEventType,
+        planName: (row.plan_name as string | null) ?? null,
+        cycleLabel: (row.cycle_label as string | null) ?? null,
+        windowKind: (row.window_kind as 'paid' | 'trial' | null) ?? null,
+        durationDays:
+          row.duration_days == null ? null : Number(row.duration_days),
+        durationMonths:
+          row.duration_months == null ? null : Number(row.duration_months),
+        endsAt: (row.ends_at as string | null) ?? null,
+        createdAt: String(row.created_at ?? ''),
+      };
+    }),
+    page: current,
+    pageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+
 export async function listPaymentRequestsForAccount(
   accountId: string,
-  limit = 20,
+  limit = 20
 ): Promise<PaymentRequest[]> {
   const admin = supabaseAdmin();
   const { data, error } = await admin
@@ -508,7 +942,9 @@ export async function listPaymentRequestsForAccount(
     console.error('[subscription] payment history read failed:', error.message);
     return [];
   }
-  return (data ?? []).map((r) => normalisePaymentRequest(r as Record<string, unknown>));
+  return (data ?? []).map((r) =>
+    normalisePaymentRequest(r as Record<string, unknown>)
+  );
 }
 
 // ------------------------------------------------------------
@@ -527,6 +963,25 @@ export interface SubscriptionEventInput {
   paymentRequestId?: string | null;
   actorUserId?: string | null;
   note?: string | null;
+  /**
+   * How much time this event granted, as the operator requested it
+   * (migration 081).
+   *
+   * Deliberately the REQUESTED duration, not the difference between the
+   * old and new end dates: those diverge, because a renewal extends from
+   * the existing end date while a lapsed account restarts from today. Only
+   * this says what was actually chosen.
+   */
+  durationMonths?: number | null;
+  durationDays?: number | null;
+  /** The end date this event replaced, so the move reads on its own. */
+  previousEndsAt?: Date | string | null;
+  /**
+   * Which window moved. `subscription_extended` cannot distinguish paid
+   * time from trial days on its own, and they are separate fields in the
+   * admin UI.
+   */
+  windowKind?: 'paid' | 'trial' | null;
 }
 
 /**
@@ -538,39 +993,44 @@ export interface SubscriptionEventInput {
  * so they surface in monitoring instead of vanishing.
  */
 export async function logSubscriptionEvent(
-  input: SubscriptionEventInput,
+  input: SubscriptionEventInput
 ): Promise<void> {
   const admin = supabaseAdmin();
-  const endsAt =
-    input.endsAt instanceof Date
-      ? input.endsAt.toISOString()
-      : (input.endsAt ?? null);
+  const iso = (v: Date | string | null | undefined): string | null =>
+    v instanceof Date ? v.toISOString() : (v ?? null);
 
   const { error } = await admin.from('subscription_events').insert({
     account_id: input.accountId,
     event_type: input.eventType,
     from_status: input.fromStatus ?? null,
     to_status: input.toStatus ?? null,
-    ends_at: endsAt,
+    ends_at: iso(input.endsAt),
     plan_name: input.planName ?? null,
     cycle_label: input.cycleLabel ?? null,
     amount: input.amount ?? null,
     payment_request_id: input.paymentRequestId ?? null,
     actor_user_id: input.actorUserId ?? null,
     note: input.note ?? null,
+    // Migration 081. Nullable throughout: an event that moves a date
+    // without a duration (revoke, expire, an exact-date correction) has
+    // none, and that absence is meaningful rather than missing data.
+    duration_months: input.durationMonths ?? null,
+    duration_days: input.durationDays ?? null,
+    previous_ends_at: iso(input.previousEndsAt),
+    window_kind: input.windowKind ?? null,
   });
 
   if (error) {
     console.error(
       `[subscription] audit write failed (${input.eventType} on ${input.accountId}):`,
-      error.message,
+      error.message
     );
   }
 }
 
 export async function listSubscriptionEvents(
   accountId: string,
-  limit = 50,
+  limit = 50
 ): Promise<Record<string, unknown>[]> {
   const admin = supabaseAdmin();
   const { data, error } = await admin

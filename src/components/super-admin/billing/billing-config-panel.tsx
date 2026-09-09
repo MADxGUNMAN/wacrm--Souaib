@@ -130,6 +130,38 @@ const COPY_GROUPS: {
     ],
   },
   {
+    title: 'Trial onboarding & upcoming plan',
+    description:
+      'New signups pick a plan before entering the CRM. These are the badges on each plan card, the trial button beside “Continue to payment”, and the unpaid-plan card in Settings → Billing. The trial itself is switched on under Trial & enforcement.',
+    fields: [
+      {
+        key: 'trial_badge_template',
+        label: 'Trial badge on each card',
+        hint: 'Use {days} — it is filled from the trial length above, so this stays correct if you change it.',
+      },
+      {
+        key: 'no_card_label',
+        label: 'No-payment reassurance',
+        hint: 'The second line under the price, e.g. “No card or payment required”.',
+      },
+      { key: 'trial_cta_label', label: 'Trial button' },
+      {
+        key: 'trial_cta_note',
+        label: 'Small print under the buttons',
+        hint: 'Optional. Leave empty to hide it.',
+        multiline: true,
+      },
+      {
+        key: 'upcoming_plan_label',
+        label: '“Upcoming plan” heading',
+        hint: 'Titles the unpaid-plan card in Settings → Billing.',
+      },
+      { key: 'upcoming_unpaid_label', label: '“Not paid” badge' },
+      { key: 'pay_now_label', label: 'Pay-now button' },
+      { key: 'change_plan_label', label: 'Change-plan button' },
+    ],
+  },
+  {
     title: 'Member blocked screen',
     description:
       'Shown to non-owners when the workspace lapses. Placeholders: {account_name}, {owner_name}, {owner_email}, {plan_name}, {expired_on}.',
@@ -502,6 +534,28 @@ export function BillingConfigPanel() {
               immediately.
             </p>
           </div>
+        </div>
+
+        {/* Operational, not cosmetic — which is why it sits here beside
+            the trial length rather than with the copy groups. Off means a
+            new signup is only ever offered the pay button, so the trial
+            effectively stops being sold even though the trigger would
+            still grant it. */}
+        <div className="mt-4 flex items-start justify-between gap-4 rounded-lg border border-slate-200 p-4">
+          <div>
+            <p className="text-sm font-medium text-slate-800">
+              Offer the trial on the plan page
+            </p>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Shows the trial and “no card” badges on each plan card plus the
+              “Start with trial” button. Turn off to require payment up front —
+              new signups then see only the pay button.
+            </p>
+          </div>
+          <Switch
+            checked={Boolean(settings?.show_trial_badges ?? true)}
+            onCheckedChange={(v: boolean) => set('show_trial_badges', v)}
+          />
         </div>
 
         <div className="mt-4 flex items-start justify-between gap-4 rounded-lg border border-slate-200 p-4">

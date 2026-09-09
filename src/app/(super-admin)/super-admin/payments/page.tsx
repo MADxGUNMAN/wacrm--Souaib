@@ -3,13 +3,20 @@
 // ============================================================
 // /super-admin/payments — the money screens.
 //
-// Two tabs:
+// Three tabs:
 //   Requests    — the manual verification queue
 //   Subscribers — every workspace's live subscription state
+//   Activity    — the full audit trail: payments AND manual changes
 //
-// The queue defaults to `pending` rather than "all": the only rows that
-// need a human are the unreviewed ones, and a queue that opens on
-// history buries the work.
+// The queue defaults to "all statuses". On initial load, if any pending
+// requests exist, it auto-switches to "pending" so action items are
+// front-and-center. If nothing is pending, it stays on "all".
+//
+// Activity was added because the first two tabs together still could not
+// answer "who granted this workspace a year of access, and when?" —
+// approving a payment left a visible row in the queue, while a manual
+// grant left nothing on screen at all. The events were being recorded the
+// whole time; nothing read them back.
 // ============================================================
 
 import { useCallback, useEffect, useState } from 'react';
@@ -18,6 +25,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CreditCard,
+  History,
   Inbox,
   Loader2,
   Search,
@@ -25,6 +33,7 @@ import {
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
+import { ActivityPanel } from '@/components/super-admin/billing/activity-panel';
 import { PaymentRequestDrawer } from '@/components/super-admin/billing/payment-request-drawer';
 import { SubscribersPanel } from '@/components/super-admin/billing/subscribers-panel';
 import { Input } from '@/components/ui/input';
@@ -47,7 +56,7 @@ import { formatCurrency } from '@/lib/currency';
 import { cn } from '@/lib/utils';
 import type { AdminPaymentRequest } from '@/types/super-admin';
 
-type Tab = 'requests' | 'subscribers';
+type Tab = 'requests' | 'subscribers' | 'activity';
 
 const STATUS_STYLE: Record<AdminPaymentRequest['status'], string> = {
   pending: 'bg-amber-50 text-amber-700',
@@ -61,20 +70,6 @@ export default function SuperAdminPaymentsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="flex items-center gap-3 text-2xl font-bold tracking-tight text-slate-900">
-          Payments &amp; subscriptions
-          {pendingCount > 0 ? (
-            <span className="inline-flex h-6 min-w-[24px] items-center justify-center rounded-full bg-amber-500 px-2 text-xs font-bold text-white">
-              {pendingCount}
-            </span>
-          ) : null}
-        </h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Verify UPI payments manually, then activate the matching subscription.
-        </p>
-      </div>
-
       {/* Simple button tabs rather than the shared Tabs primitive: this
           page keeps independent fetch state per tab, and plain buttons make
           that ownership obvious. */}
@@ -83,7 +78,11 @@ export default function SuperAdminPaymentsPage() {
           active={tab === 'requests'}
           onClick={() => setTab('requests')}
           icon={CreditCard}
-          label="Payment requests"
+          label={
+            pendingCount > 0
+              ? `Payment requests (${pendingCount})`
+              : 'Payment requests'
+          }
         />
         <TabButton
           active={tab === 'subscribers'}
@@ -91,12 +90,20 @@ export default function SuperAdminPaymentsPage() {
           icon={Users}
           label="Subscribers"
         />
+        <TabButton
+          active={tab === 'activity'}
+          onClick={() => setTab('activity')}
+          icon={History}
+          label="Activity"
+        />
       </div>
 
       {tab === 'requests' ? (
         <PaymentRequestsPanel onPendingCountChange={setPendingCount} />
-      ) : (
+      ) : tab === 'subscribers' ? (
         <SubscribersPanel />
+      ) : (
+        <ActivityPanel />
       )}
     </div>
   );
@@ -121,7 +128,7 @@ function TabButton({
         '-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors',
         active
           ? 'border-[#25D366] text-slate-900'
-          : 'border-transparent text-slate-500 hover:text-slate-800',
+          : 'border-transparent text-slate-500 hover:text-slate-800'
       )}
     >
       <Icon className="h-4 w-4" />
@@ -138,19 +145,26 @@ function PaymentRequestsPanel({
   onPendingCountChange: (n: number) => void;
 }) {
   const [requests, setRequests] = useState<AdminPaymentRequest[]>([]);
-  const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
+  const [counts, setCounts] = useState({
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+  });
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Default to the queue that needs action.
-  const [status, setStatus] = useState('pending');
+  // Start with "all" so the page always opens showing every request.
+  // After the first fetch, if there are pending requests needing action,
+  // auto-switch to the "pending" queue so they are not buried.
+  const [status, setStatus] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
 
   const [selected, setSelected] = useState<AdminPaymentRequest | null>(null);
 
@@ -174,7 +188,7 @@ function PaymentRequestsPanel({
       if (debounced) params.set('search', debounced);
 
       const res = await fetch(
-        `/api/super-admin/billing/payment-requests?${params.toString()}`,
+        `/api/super-admin/billing/payment-requests?${params.toString()}`
       );
       if (!res.ok) throw new Error('Failed to load payment requests');
       const data = await res.json();
@@ -185,12 +199,31 @@ function PaymentRequestsPanel({
       setTotalPages(data.totalPages ?? 1);
       onPendingCountChange(data.counts?.pending ?? 0);
       setError(null);
+
+      // On the very first load, if pending requests exist, auto-switch
+      // to the pending queue so action items are front-and-center.
+      if (!initialLoadDone) {
+        setInitialLoadDone(true);
+        if ((data.counts?.pending ?? 0) > 0 && status === 'all') {
+          setStatus('pending');
+          // The status change will trigger a re-fetch via the useEffect
+          return;
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {
       setLoading(false);
     }
-  }, [status, sortBy, page, pageSize, debounced, onPendingCountChange]);
+  }, [
+    status,
+    sortBy,
+    page,
+    pageSize,
+    debounced,
+    onPendingCountChange,
+    initialLoadDone,
+  ]);
 
   useEffect(() => {
     void load();
@@ -199,36 +232,9 @@ function PaymentRequestsPanel({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-3 gap-3">
-        <StatusTile
-          label="Pending"
-          value={counts.pending}
-          tone="amber"
-          active={status === 'pending'}
-          onClick={() => {
-            setStatus('pending');
-            setPage(1);
-          }}
-        />
-        <StatusTile
-          label="Approved"
-          value={counts.approved}
-          tone="green"
-          active={status === 'approved'}
-          onClick={() => {
-            setStatus('approved');
-            setPage(1);
-          }}
-        />
-        <StatusTile
-          label="Rejected"
-          value={counts.rejected}
-          tone="red"
-          active={status === 'rejected'}
-          onClick={() => {
-            setStatus('rejected');
-            setPage(1);
-          }}
-        />
+        <StatusTile label="Pending" value={counts.pending} tone="amber" />
+        <StatusTile label="Approved" value={counts.approved} tone="green" />
+        <StatusTile label="Rejected" value={counts.rejected} tone="red" />
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -318,7 +324,10 @@ function PaymentRequestsPanel({
             <TableBody>
               {loading && requests.length === 0 ? (
                 <TableRow className="border-slate-200">
-                  <TableCell colSpan={8} className="h-32 text-center text-slate-400">
+                  <TableCell
+                    colSpan={8}
+                    className="h-32 text-center text-slate-400"
+                  >
                     <span className="inline-flex items-center gap-2">
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Loading requests…
@@ -327,7 +336,10 @@ function PaymentRequestsPanel({
                 </TableRow>
               ) : error ? (
                 <TableRow className="border-slate-200">
-                  <TableCell colSpan={8} className="h-32 text-center text-red-500">
+                  <TableCell
+                    colSpan={8}
+                    className="h-32 text-center text-red-500"
+                  >
                     <AlertTriangle className="mx-auto mb-2 h-6 w-6" />
                     {error}
                   </TableCell>
@@ -351,7 +363,7 @@ function PaymentRequestsPanel({
                     onClick={() => setSelected(r)}
                     className={cn(
                       'cursor-pointer border-slate-200 hover:bg-slate-50',
-                      r.status === 'pending' && 'bg-amber-50/30',
+                      r.status === 'pending' && 'bg-amber-50/30'
                     )}
                   >
                     <TableCell className="py-3.5">
@@ -360,7 +372,9 @@ function PaymentRequestsPanel({
                       </p>
                     </TableCell>
                     <TableCell>
-                      <p className="text-sm text-slate-700">{r.plan_name_snapshot}</p>
+                      <p className="text-sm text-slate-700">
+                        {r.plan_name_snapshot}
+                      </p>
                       <p className="text-xs text-slate-400">
                         {r.cycle_label_snapshot}
                       </p>
@@ -376,7 +390,7 @@ function PaymentRequestsPanel({
                       <span
                         className={cn(
                           'text-sm font-semibold',
-                          r.amount_matches ? 'text-slate-800' : 'text-red-600',
+                          r.amount_matches ? 'text-slate-800' : 'text-red-600'
                         )}
                       >
                         {formatCurrency(r.paid_amount, r.currency)}
@@ -384,7 +398,10 @@ function PaymentRequestsPanel({
                       {!r.amount_matches ? (
                         <p className="text-[10px] font-medium text-red-500">
                           {r.amount_difference < 0 ? 'short' : 'over'} by{' '}
-                          {formatCurrency(Math.abs(r.amount_difference), r.currency)}
+                          {formatCurrency(
+                            Math.abs(r.amount_difference),
+                            r.currency
+                          )}
                         </p>
                       ) : null}
                     </TableCell>
@@ -403,7 +420,7 @@ function PaymentRequestsPanel({
                       <span
                         className={cn(
                           'inline-flex rounded-full px-2 py-0.5 text-xs font-medium capitalize',
-                          STATUS_STYLE[r.status],
+                          STATUS_STYLE[r.status]
                         )}
                       >
                         {r.status}
@@ -485,14 +502,10 @@ function StatusTile({
   label,
   value,
   tone,
-  active,
-  onClick,
 }: {
   label: string;
   value: number;
   tone: 'amber' | 'green' | 'red';
-  active: boolean;
-  onClick: () => void;
 }) {
   const toneClass = {
     amber: 'text-amber-600',
@@ -501,20 +514,11 @@ function StatusTile({
   }[tone];
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'rounded-xl border bg-white p-4 text-left shadow-sm transition-colors',
-        active
-          ? 'border-[#25D366] ring-1 ring-[#25D366]/30'
-          : 'border-slate-200 hover:border-slate-300',
-      )}
-    >
+    <div className="rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm">
       <p className="text-xs font-medium tracking-wider text-slate-400 uppercase">
         {label}
       </p>
       <p className={cn('mt-1 text-2xl font-bold', toneClass)}>{value}</p>
-    </button>
+    </div>
   );
 }

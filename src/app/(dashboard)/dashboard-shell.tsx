@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { cn } from "@/lib/utils";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { hasSectionAccess } from "@/lib/auth/roles";
 import { Sidebar } from "@/components/layout/sidebar";
@@ -125,20 +126,22 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // Auto-collapse the sidebar when the user is on the Inbox page —
+  // the inbox has its own conversation list + thread + contact panel,
+  // so the full sidebar label text wastes valuable horizontal space.
+  const isInbox = pathname === '/inbox' || pathname.startsWith('/inbox');
+
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       {/* Reports this tab's online/away presence once we know a user is
           signed in. Headless — renders nothing. */}
       <PresenceHeartbeat />
-      <Sidebar open={sidebarOpen} onClose={closeSidebar} />
+      <Sidebar open={sidebarOpen} onClose={closeSidebar} collapsed={isInbox} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onOpenSidebar={() => setSidebarOpen(true)} />
+        <TrialBanner />
         {/* Thinner horizontal padding on mobile so cards have room to breathe. */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">
-          {/* Inside <main> rather than above it so the banner scrolls with
-              the content and inherits the same gutters as every page,
-              instead of pinning a second bar under the header. */}
-          <TrialBanner />
           {children}
         </main>
       </div>

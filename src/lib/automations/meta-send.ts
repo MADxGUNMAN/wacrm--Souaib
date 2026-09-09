@@ -12,6 +12,11 @@ import {
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
+import {
+  isMarketingCategory,
+  isPhoneOptedOut,
+  recordOptOutFromSendError,
+} from '@/lib/whatsapp/marketing-opt-out'
 import { supabaseAdmin } from './admin-client'
 
 // ------------------------------------------------------------
@@ -142,6 +147,36 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     throw new Error(`contact phone invalid: ${contact.phone}`)
   }
 
+  // ── Marketing opt-out suppression ──────────────────────────────
+  // This sender never loaded the template row, so it had no way to know
+  // whether it was about to send marketing. The category lookup below
+  // exists purely to answer that.
+  //
+  // Only template sends are gated: `kind: 'text'` here is a
+  // session-window reply, not marketing.
+  if (input.kind === 'template') {
+    const { data: templateRow } = await db
+      .from('message_templates')
+      .select('category')
+      .eq('account_id', input.accountId)
+      .eq('name', input.templateName)
+      .eq('language', input.language || 'en_US')
+      .maybeSingle()
+
+    // Fails closed on a missing row — an unsynced template's category is
+    // unknowable, and this only ever blocks contacts who opted out.
+    if (
+      isMarketingCategory(
+        (templateRow as { category?: string | null } | null)?.category,
+      ) &&
+      (await isPhoneOptedOut(db, input.accountId, sanitized))
+    ) {
+      throw new Error(
+        'contact opted out of marketing messages; template send suppressed',
+      )
+    }
+  }
+
   const { data: config, error: configErr } = await db
     .from('whatsapp_config')
     .select('*')
@@ -189,11 +224,29 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
       break
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      if (!isRecipientNotAllowedError(msg)) throw err
+      if (!isRecipientNotAllowedError(msg)) {
+        // 131050 = opted out at Meta's level. Record before rethrowing so
+        // the next send suppresses this number up front.
+        await recordOptOutFromSendError(db, {
+          accountId: input.accountId,
+          phone: sanitized,
+          contactId: contact.id,
+          error: err,
+        })
+        throw err
+      }
       lastError = err
     }
   }
-  if (lastError) throw lastError
+  if (lastError) {
+    await recordOptOutFromSendError(db, {
+      accountId: input.accountId,
+      phone: sanitized,
+      contactId: contact.id,
+      error: lastError,
+    })
+    throw lastError
+  }
 
   if (workingPhone !== sanitized) {
     await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)

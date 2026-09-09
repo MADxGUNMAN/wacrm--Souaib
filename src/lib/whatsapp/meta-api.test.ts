@@ -3,6 +3,12 @@ import {
   INTERACTIVE_LIMITS,
   sendInteractiveButtons,
   sendInteractiveList,
+  markMessageRead,
+  sendTypingIndicator,
+  sendContactsMessage,
+  sendLocationMessage,
+  sendLocationRequestMessage,
+  sendStickerMessage,
 } from "./meta-api";
 
 // All assertions in this file run BEFORE the network call. We stub fetch
@@ -267,3 +273,485 @@ describe("sendInteractiveList — validation", () => {
     });
   });
 });
+
+describe("markMessageRead (Parity Plan Phase 1)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends status: read with correct wamid to Meta", async () => {
+    let capturedUrl = "";
+    let capturedBody: Record<string, unknown> | null = null;
+    let capturedHeaders: HeadersInit | undefined = undefined;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        capturedUrl = url;
+        capturedBody = JSON.parse(String(init.body));
+        capturedHeaders = init.headers;
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }),
+    );
+
+    const result = await markMessageRead({
+      phoneNumberId: "phone_123",
+      accessToken: "token_abc",
+      messageId: "wamid.HBgLM...",
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(capturedUrl).toContain("/phone_123/messages");
+    expect(capturedBody).toEqual({
+      messaging_product: "whatsapp",
+      status: "read",
+      message_id: "wamid.HBgLM...",
+    });
+    expect((capturedHeaders as unknown as Record<string, string>)?.Authorization).toBe("Bearer token_abc");
+  });
+
+  it("gracefully swallows Meta error 131009 (message >30 days old) without throwing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "Message is older than 30 days and cannot be marked as read",
+              type: "OAuthException",
+              code: 131009,
+              fbtrace_id: "trace_xyz",
+            },
+          }),
+          { status: 400 },
+        );
+      }),
+    );
+
+    const result = await markMessageRead({
+      phoneNumberId: "phone_123",
+      accessToken: "token_abc",
+      messageId: "wamid.OLD",
+    });
+
+    expect(result).toEqual({ success: false, ignored: true });
+  });
+
+  it("throws MetaApiError on other unexpected failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "Invalid OAuth access token",
+              type: "OAuthException",
+              code: 190,
+            },
+          }),
+          { status: 401 },
+        );
+      }),
+    );
+
+    await expect(
+      markMessageRead({
+        phoneNumberId: "phone_123",
+        accessToken: "invalid_token",
+        messageId: "wamid.123",
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+describe("sendTypingIndicator (Parity Plan Phase 1)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends status: read + typing_indicator text payload", async () => {
+    let capturedUrl = "";
+    let capturedBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        capturedUrl = url;
+        capturedBody = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }),
+    );
+
+    const result = await sendTypingIndicator({
+      phoneNumberId: "phone_123",
+      accessToken: "token_abc",
+      messageId: "wamid.HBgLM...",
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(capturedUrl).toContain("/phone_123/messages");
+    expect(capturedBody).toEqual({
+      messaging_product: "whatsapp",
+      status: "read",
+      message_id: "wamid.HBgLM...",
+      typing_indicator: {
+        type: "text",
+      },
+    });
+  });
+
+  it("gracefully swallows error 131009 without throwing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "Message cannot be marked as read",
+              code: 131009,
+            },
+          }),
+          { status: 400 },
+        );
+      }),
+    );
+
+    const result = await sendTypingIndicator({
+      phoneNumberId: "phone_123",
+      accessToken: "token_abc",
+      messageId: "wamid.OLD",
+    });
+
+    expect(result).toEqual({ success: false, ignored: true });
+  });
+});
+
+describe("sendContactsMessage (Parity Plan Phase 3)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects empty contacts array", async () => {
+    await expect(
+      sendContactsMessage({
+        phoneNumberId: "phone_123",
+        accessToken: "token_abc",
+        to: "1234567890",
+        contacts: [],
+      }),
+    ).rejects.toThrow(/contacts array is required/);
+  });
+
+  it("rejects contact with missing formatted_name", async () => {
+    await expect(
+      sendContactsMessage({
+        phoneNumberId: "phone_123",
+        accessToken: "token_abc",
+        to: "1234567890",
+        contacts: [
+          {
+            name: { formatted_name: "   " },
+          },
+        ],
+      }),
+    ).rejects.toThrow(/Each contact must have name.formatted_name/);
+  });
+
+  it("sends correct contacts payload structure including wa_id to Meta", async () => {
+    let capturedUrl = "";
+    let capturedBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        capturedUrl = url;
+        capturedBody = JSON.parse(String(init.body));
+        return new Response(
+          JSON.stringify({ messages: [{ id: "wamid.CONTACT_MSG_1" }] }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const result = await sendContactsMessage({
+      phoneNumberId: "phone_123",
+      accessToken: "token_abc",
+      to: "1234567890",
+      contacts: [
+        {
+          name: {
+            formatted_name: "Barbara J. Johnson",
+            first_name: "Barbara",
+            last_name: "Johnson",
+          },
+          phones: [
+            {
+              phone: "+16505559999",
+              type: "Mobile",
+              wa_id: "16505559999",
+            },
+          ],
+          org: { company: "Lucky Shrub" },
+          emails: [{ email: "barbara@luckyshrub.com", type: "Work" }],
+        },
+      ],
+      contextMessageId: "wamid.REPLY_TO",
+    });
+
+    expect(result).toEqual({ messageId: "wamid.CONTACT_MSG_1" });
+    expect(capturedUrl).toContain("/phone_123/messages");
+    expect(capturedBody).toEqual({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: "1234567890",
+      type: "contacts",
+      contacts: [
+        {
+          name: {
+            formatted_name: "Barbara J. Johnson",
+            first_name: "Barbara",
+            last_name: "Johnson",
+          },
+          phones: [
+            {
+              phone: "+16505559999",
+              type: "Mobile",
+              wa_id: "16505559999",
+            },
+          ],
+          org: { company: "Lucky Shrub" },
+          emails: [{ email: "barbara@luckyshrub.com", type: "Work" }],
+        },
+      ],
+      context: {
+        message_id: "wamid.REPLY_TO",
+      },
+    });
+  });
+});
+
+describe("sendLocationMessage (Parity Plan Phase 2)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects latitude out of range", async () => {
+    await expect(
+      sendLocationMessage({
+        phoneNumberId: "phone_123",
+        accessToken: "token_abc",
+        to: "1234567890",
+        latitude: 95.5,
+        longitude: -122.16,
+      }),
+    ).rejects.toThrow(/Invalid latitude/);
+  });
+
+  it("rejects longitude out of range", async () => {
+    await expect(
+      sendLocationMessage({
+        phoneNumberId: "phone_123",
+        accessToken: "token_abc",
+        to: "1234567890",
+        latitude: 37.44,
+        longitude: 195.0,
+      }),
+    ).rejects.toThrow(/Invalid longitude/);
+  });
+
+  it("sends correct location payload to Meta API", async () => {
+    let capturedUrl = "";
+    let capturedBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        capturedUrl = url;
+        capturedBody = JSON.parse(String(init.body));
+        return new Response(
+          JSON.stringify({ messages: [{ id: "wamid.LOC_MSG_1" }] }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const result = await sendLocationMessage({
+      phoneNumberId: "phone_123",
+      accessToken: "token_abc",
+      to: "1234567890",
+      latitude: 37.4421,
+      longitude: -122.1615,
+      name: "Philz Coffee",
+      address: "101 Forest Ave, Palo Alto",
+      contextMessageId: "wamid.PARENT_1",
+    });
+
+    expect(result).toEqual({ messageId: "wamid.LOC_MSG_1" });
+    expect(capturedUrl).toContain("/phone_123/messages");
+    expect(capturedBody).toEqual({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: "1234567890",
+      type: "location",
+      location: {
+        latitude: "37.4421",
+        longitude: "-122.1615",
+        name: "Philz Coffee",
+        address: "101 Forest Ave, Palo Alto",
+      },
+      context: {
+        message_id: "wamid.PARENT_1",
+      },
+    });
+  });
+});
+
+describe("sendLocationRequestMessage (Parity Plan Phase 2)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects empty bodyText", async () => {
+    await expect(
+      sendLocationRequestMessage({
+        phoneNumberId: "phone_123",
+        accessToken: "token_abc",
+        to: "1234567890",
+        bodyText: "   ",
+      }),
+    ).rejects.toThrow(/bodyText is required/);
+  });
+
+  it("sends correct location_request_message interactive payload", async () => {
+    let capturedUrl = "";
+    let capturedBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        capturedUrl = url;
+        capturedBody = JSON.parse(String(init.body));
+        return new Response(
+          JSON.stringify({ messages: [{ id: "wamid.LOC_REQ_1" }] }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const result = await sendLocationRequestMessage({
+      phoneNumberId: "phone_123",
+      accessToken: "token_abc",
+      to: "1234567890",
+      bodyText: "Where should we deliver your order?",
+      contextMessageId: "wamid.PARENT_2",
+    });
+
+    expect(result).toEqual({ messageId: "wamid.LOC_REQ_1" });
+    expect(capturedUrl).toContain("/phone_123/messages");
+    expect(capturedBody).toEqual({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: "1234567890",
+      type: "interactive",
+      interactive: {
+        type: "location_request_message",
+        body: {
+          text: "Where should we deliver your order?",
+        },
+        action: {
+          name: "send_location",
+        },
+      },
+      context: {
+        message_id: "wamid.PARENT_2",
+      },
+    });
+  });
+});
+
+describe("sendStickerMessage (Parity Plan Phase 5)", () => {
+  it("rejects when both link and mediaId are missing", async () => {
+    await expect(
+      sendStickerMessage({
+        phoneNumberId: "phone_123",
+        accessToken: "token_abc",
+        to: "1234567890",
+      })
+    ).rejects.toThrow(/requires either a link or mediaId/);
+  });
+
+  it("sends correct sticker payload with public WebP link", async () => {
+    let capturedUrl = "";
+    let capturedBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        capturedUrl = url;
+        capturedBody = JSON.parse(String(init.body));
+        return new Response(
+          JSON.stringify({ messages: [{ id: "wamid.STICKER_1" }] }),
+          { status: 200 }
+        );
+      })
+    );
+
+    const result = await sendStickerMessage({
+      phoneNumberId: "phone_123",
+      accessToken: "token_abc",
+      to: "1234567890",
+      link: "https://example.com/sticker.webp",
+      contextMessageId: "wamid.REPLY_TO",
+    });
+
+    expect(result).toEqual({ messageId: "wamid.STICKER_1" });
+    expect(capturedUrl).toContain("/phone_123/messages");
+    expect(capturedBody).toEqual({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: "1234567890",
+      type: "sticker",
+      sticker: {
+        link: "https://example.com/sticker.webp",
+      },
+      context: {
+        message_id: "wamid.REPLY_TO",
+      },
+    });
+  });
+
+  it("sends correct sticker payload with Meta mediaId", async () => {
+    let capturedBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        capturedBody = JSON.parse(String(init.body));
+        return new Response(
+          JSON.stringify({ messages: [{ id: "wamid.STICKER_2" }] }),
+          { status: 200 }
+        );
+      })
+    );
+
+    const result = await sendStickerMessage({
+      phoneNumberId: "phone_123",
+      accessToken: "token_abc",
+      to: "1234567890",
+      mediaId: "meta_media_999",
+    });
+
+    expect(result).toEqual({ messageId: "wamid.STICKER_2" });
+    expect(capturedBody).toEqual({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: "1234567890",
+      type: "sticker",
+      sticker: {
+        id: "meta_media_999",
+      },
+    });
+  });
+});
+
+

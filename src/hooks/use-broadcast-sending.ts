@@ -8,6 +8,8 @@ import {
   localInputToMs,
   type BroadcastSendExtras,
 } from '@/lib/whatsapp/template-send-inputs';
+import { normalizePhone } from '@/lib/whatsapp/phone-utils';
+import { isMarketingCategory } from '@/lib/whatsapp/marketing-opt-out';
 
 export type CustomFieldOperator = 'is' | 'is_not' | 'contains';
 
@@ -24,6 +26,8 @@ export interface AudienceConfig {
   csvContacts?: { phone: string; name?: string }[];
   /** Contacts carrying any of these tags are subtracted from the result. */
   excludeTagIds?: string[];
+  /** Contacts manually unselected/excluded by the user in the recipient review modal. */
+  excludedContactIds?: string[];
 }
 
 /**
@@ -59,6 +63,8 @@ interface BroadcastPayload {
    * these do not, and there is exactly one countdown per broadcast.
    */
   sendExtras?: BroadcastSendExtras;
+  /** If continuing an existing draft, update its row rather than creating a new one */
+  draftId?: string;
 }
 
 interface UseBroadcastSendingReturn {
@@ -84,7 +90,8 @@ function sleep(ms: number) {
 
 interface BroadcastApiResult {
   phone: string;
-  status: 'sent' | 'failed';
+  /** 'skipped' = suppressed server-side because the contact opted out. */
+  status: 'sent' | 'failed' | 'skipped';
   whatsapp_message_id?: string;
   error?: string;
 }
@@ -197,6 +204,49 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
 
+  /**
+   * Remove contacts on the marketing suppression list.
+   *
+   * Matched on digits-only phone because that is the suppression key —
+   * `marketing_opt_outs` is deliberately not keyed on contact_id, so an
+   * opt-out survives a contact being deleted and re-imported.
+   *
+   * On a query error this removes NOTHING and warns: the server-side
+   * filter in /api/whatsapp/broadcast is the real gate, so failing open
+   * here costs accuracy in the preview, not compliance.
+   */
+  async function subtractOptedOut(
+    supabase: ReturnType<typeof createClient>,
+    account: string,
+    contacts: Contact[],
+  ): Promise<Contact[]> {
+    if (contacts.length === 0) return contacts;
+
+    const { data, error } = await supabase
+      .from('marketing_opt_outs')
+      .select('phone_normalized')
+      .eq('account_id', account);
+
+    if (error) {
+      console.warn(
+        '[broadcast] could not read the opt-out list; the server will still filter:',
+        error.message,
+      );
+      return contacts;
+    }
+
+    const suppressed = new Set(
+      (data ?? [])
+        .map((r) => (r as { phone_normalized?: string }).phone_normalized)
+        .filter((p): p is string => Boolean(p)),
+    );
+    if (suppressed.size === 0) return contacts;
+
+    return contacts.filter(
+      (c) => !suppressed.has(normalizePhone(c.phone ?? '')),
+    );
+  }
+
   async function resolveAudience(audience: AudienceConfig): Promise<Contact[]> {
     const supabase = createClient();
 
@@ -245,6 +295,12 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
         .in('tag_id', audience.excludeTagIds);
       const excludedIds = new Set((excludeRows ?? []).map((r) => r.contact_id));
       contacts = contacts.filter((c) => !excludedIds.has(c.id));
+    }
+
+    // Apply manual contact exclusions (unselected in recipient review modal)
+    if (audience.excludedContactIds && audience.excludedContactIds.length > 0) {
+      const manualExcludedSet = new Set(audience.excludedContactIds);
+      contacts = contacts.filter((c) => !manualExcludedSet.has(c.id));
     }
 
     return contacts;
@@ -390,44 +446,100 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
       // ── Step 1: Resolve audience contacts ─────────────────────────
       setProgress(5);
-      const contacts = await resolveAudience(payload.audience);
+      const resolved = await resolveAudience(payload.audience);
+
+      // Drop contacts who opted out of marketing BEFORE any
+      // broadcast_recipients rows are written, so a suppressed contact
+      // never becomes a recipient at all. The server re-checks on send
+      // (this hook is only the client half and could be bypassed), but
+      // filtering here keeps the campaign's own numbers honest.
+      //
+      // Marketing only — a utility or authentication template still goes
+      // to everyone.
+      const contacts = isMarketingCategory(payload.template.category)
+        ? await subtractOptedOut(supabase, accountId, resolved)
+        : resolved;
 
       if (contacts.length === 0) {
-        throw new Error('No contacts found for this audience.');
+        throw new Error(
+          resolved.length > 0
+            ? 'Every contact in this audience has opted out of marketing messages.'
+            : 'No contacts found for this audience.'
+        );
       }
 
-      // ── Step 2: Create broadcast row ──────────────────────────────
+      // ── Step 2: Create or Update broadcast row ───────────────────
       setProgress(10);
-      const { data: broadcast, error: broadcastError } = await supabase
-        .from('broadcasts')
-        .insert({
-          user_id: user.id,
-          account_id: accountId,
-          name: payload.name,
-          template_name: payload.template.name,
-          template_language: payload.template.language ?? 'en_US',
-          template_variables: payload.variables,
-          audience_filter: {
-            type: payload.audience.type,
-            tagIds: payload.audience.tagIds,
-            customField: payload.audience.customField,
-            excludeTagIds: payload.audience.excludeTagIds,
-          },
-          status: 'sending',
-          total_recipients: contacts.length,
-          sent_count: 0,
-          delivered_count: 0,
-          read_count: 0,
-          replied_count: 0,
-          failed_count: 0,
-        })
-        .select()
-        .single();
+      let broadcast: any;
 
-      if (broadcastError || !broadcast) {
-        throw new Error(
-          `Failed to create broadcast: ${broadcastError?.message ?? 'unknown error'}`,
-        );
+      if (payload.draftId) {
+        const { data: updated, error: updateError } = await supabase
+          .from('broadcasts')
+          .update({
+            name: payload.name,
+            template_name: payload.template.name,
+            template_language: payload.template.language ?? 'en_US',
+            template_variables: payload.variables,
+            audience_filter: {
+              type: payload.audience.type,
+              tagIds: payload.audience.tagIds,
+              customField: payload.audience.customField,
+              excludeTagIds: payload.audience.excludeTagIds,
+              excludedContactIds: payload.audience.excludedContactIds,
+            },
+            status: 'sending',
+            total_recipients: contacts.length,
+            sent_count: 0,
+            delivered_count: 0,
+            read_count: 0,
+            replied_count: 0,
+            failed_count: 0,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', payload.draftId)
+          .select()
+          .single();
+
+        if (updateError || !updated) {
+          throw new Error(
+            `Failed to update draft broadcast: ${updateError?.message ?? 'unknown error'}`,
+          );
+        }
+        broadcast = updated;
+      } else {
+        const { data: inserted, error: broadcastError } = await supabase
+          .from('broadcasts')
+          .insert({
+            user_id: user.id,
+            account_id: accountId,
+            name: payload.name,
+            template_name: payload.template.name,
+            template_language: payload.template.language ?? 'en_US',
+            template_variables: payload.variables,
+            audience_filter: {
+              type: payload.audience.type,
+              tagIds: payload.audience.tagIds,
+              customField: payload.audience.customField,
+              excludeTagIds: payload.audience.excludeTagIds,
+              excludedContactIds: payload.audience.excludedContactIds,
+            },
+            status: 'sending',
+            total_recipients: contacts.length,
+            sent_count: 0,
+            delivered_count: 0,
+            read_count: 0,
+            replied_count: 0,
+            failed_count: 0,
+          })
+          .select()
+          .single();
+
+        if (broadcastError || !inserted) {
+          throw new Error(
+            `Failed to create broadcast: ${broadcastError?.message ?? 'unknown error'}`,
+          );
+        }
+        broadcast = inserted;
       }
 
       // ── Step 3: Insert recipient rows ─────────────────────────────
@@ -519,6 +631,13 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
         ...(offerExpiresAtMs ? { offerExpiresAtMs } : {}),
         ...(cards ? { cards } : {}),
         ...(extraButtonParams ? { buttonParams: extraButtonParams } : {}),
+        ...(extras?.catalogThumbnailProductId ? { catalogThumbnailProductId: extras.catalogThumbnailProductId } : {}),
+        ...(extras?.mpm ? { mpm: extras.mpm } : {}),
+        ...(extras?.orderDetails ? { orderDetails: extras.orderDetails } : {}),
+        ...(extras?.orderStatus?.orderReferenceId ? { orderReferenceId: extras.orderStatus.orderReferenceId } : {}),
+        ...(extras?.orderStatus?.orderStatus ? { orderStatus: extras.orderStatus.orderStatus } : {}),
+        ...(extras?.orderStatus?.orderStatusDescription ? { orderStatusDescription: extras.orderStatus.orderStatusDescription } : {}),
+        ...(extras?.authCode ? { body: [extras.authCode] } : {}),
       };
       const messageParams =
         Object.keys(sharedParams).length > 0 ? sharedParams : undefined;
@@ -613,6 +732,18 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
                   sent_at: new Date().toISOString(),
                   whatsapp_message_id: result.whatsapp_message_id ?? null,
                   error_message: null,
+                })
+                .eq('id', recipient.id);
+            } else if (result.status === 'skipped') {
+              // Suppressed server-side (marketing opt-out). NOT counted as
+              // a failure — the aggregate trigger ignores 'skipped', so a
+              // compliant send does not look like a broken one.
+              await supabase
+                .from('broadcast_recipients')
+                .update({
+                  status: 'skipped',
+                  error_message:
+                    result.error ?? 'Recipient opted out of marketing messages',
                 })
                 .eq('id', recipient.id);
             } else {

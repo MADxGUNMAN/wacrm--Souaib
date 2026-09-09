@@ -4,13 +4,14 @@ import {
   KeyRound,
   LayoutGrid,
   Palette,
-  PlugZap,
   Shield,
   Smartphone,
   Tags,
   User,
   UsersRound,
   Zap,
+  BellRing,
+  BellOff,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -28,7 +29,11 @@ export const SETTINGS_SECTIONS = [
   'security',
   'appearance',
   'billing',
-  'whatsapp-setup',
+  // NOTE: 'whatsapp-setup' deliberately absent. Guided Embedded Signup and
+  // the manual credential form are two ways to connect the same number, not
+  // two features, so they are one section with a mode tab —
+  // `?tab=whatsapp&mode=manual`. `?tab=whatsapp-setup` resolves here; see
+  // resolveSection below.
   'whatsapp',
   // NOTE: 'templates' deliberately absent. Templates moved to their own
   // top-level route (/templates) — a three-step creation wizard does not
@@ -40,6 +45,17 @@ export const SETTINGS_SECTIONS = [
   'deals',
   'members',
   'api',
+  // Owner-only by default. Unlike every other pane, an absent
+  // `settings_alerts` permission DENIES — see
+  // OWNER_ONLY_SETTINGS_SECTIONS in @/lib/auth/roles.
+  'alerts',
+  // NOTE the id: exactly ONE hyphen, deliberately. Section permission
+  // keys are derived as `settings_${section.replace('-', '_')}` in
+  // canAccessSettingsSection, and `String.replace` with a string pattern
+  // swaps only the FIRST match — so an id like 'opt-in-out' would derive
+  // the broken key `settings_opt_in-out` and never match the stored
+  // permission. 'opt-out' derives `settings_opt_out`.
+  'opt-out',
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
@@ -55,23 +71,87 @@ export interface SectionMeta {
 }
 
 export const SECTION_META: Record<SettingsSection, SectionMeta> = {
-  overview: { id: 'overview', label: 'Overview', icon: LayoutGrid, group: 'top' },
-  profile: { id: 'profile', label: 'Your profile', icon: User, group: 'account' },
-  security: { id: 'security', label: 'Login & security', icon: Shield, group: 'account' },
-  appearance: { id: 'appearance', label: 'Appearance', icon: Palette, group: 'account' },
+  overview: {
+    id: 'overview',
+    label: 'Overview',
+    icon: LayoutGrid,
+    group: 'top',
+  },
+  profile: {
+    id: 'profile',
+    label: 'Your profile',
+    icon: User,
+    group: 'account',
+  },
+  security: {
+    id: 'security',
+    label: 'Login & security',
+    icon: Shield,
+    group: 'account',
+  },
+  appearance: {
+    id: 'appearance',
+    label: 'Appearance',
+    icon: Palette,
+    group: 'account',
+  },
   // Workspace-scoped, not account-scoped: the subscription belongs to the
   // whole workspace, and only its owner can change it.
-  billing: { id: 'billing', label: 'Billing & plan', icon: CreditCard, group: 'workspace' },
-  'whatsapp-setup': { id: 'whatsapp-setup', label: 'WhatsApp Setup', icon: Smartphone, group: 'workspace' },
-  whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
-  'quick-replies': { id: 'quick-replies', label: 'Quick replies', icon: Zap, group: 'workspace' },
-  fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
-  deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
-  members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace' },
+  billing: {
+    id: 'billing',
+    label: 'Billing & plan',
+    icon: CreditCard,
+    group: 'workspace',
+  },
+  whatsapp: {
+    id: 'whatsapp',
+    label: 'WhatsApp',
+    icon: Smartphone,
+    group: 'workspace',
+  },
+  'quick-replies': {
+    id: 'quick-replies',
+    label: 'Quick replies',
+    icon: Zap,
+    group: 'workspace',
+  },
+  fields: {
+    id: 'fields',
+    label: 'Fields & tags',
+    icon: Tags,
+    group: 'workspace',
+  },
+  deals: {
+    id: 'deals',
+    label: 'Deals & currency',
+    icon: Coins,
+    group: 'workspace',
+  },
+  members: {
+    id: 'members',
+    label: 'Team members',
+    icon: UsersRound,
+    group: 'workspace',
+  },
   api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
+  alerts: {
+    id: 'alerts',
+    label: 'Usage alerts',
+    icon: BellRing,
+    group: 'workspace',
+  },
+  'opt-out': {
+    id: 'opt-out',
+    label: 'Opt-in / opt-out',
+    icon: BellOff,
+    group: 'workspace',
+  },
 };
 
-export const RAIL_GROUPS: { label: string | null; group: SectionMeta['group'] }[] = [
+export const RAIL_GROUPS: {
+  label: string | null;
+  group: SectionMeta['group'];
+}[] = [
   { label: null, group: 'top' },
   { label: 'Account', group: 'account' },
   { label: 'Workspace', group: 'workspace' },
@@ -89,6 +169,9 @@ function isSection(value: string | null): value is SettingsSection {
  */
 export function resolveSection(raw: string | null): SettingsSection {
   if (raw === 'tags' || raw === 'custom-fields') return 'fields';
+  // The guided setup pane merged into the WhatsApp section (it is now the
+  // default tab there), so old links land on exactly what they asked for.
+  if (raw === 'whatsapp-setup') return 'whatsapp';
   if (isSection(raw)) return raw;
   return DEFAULT_SECTION;
 }

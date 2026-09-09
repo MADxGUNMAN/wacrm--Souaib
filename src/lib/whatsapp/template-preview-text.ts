@@ -104,7 +104,7 @@ function parseFormatting(
     cursor = best.close + best.token.length;
   }
 
-  return segments.filter((s) => s.text.length > 0);
+  return segments.filter((s) => typeof s?.text === 'string' && s.text.length > 0);
 }
 
 /** Matches `{{1}}` and `{{order_id}}` — positional and named alike. */
@@ -134,8 +134,8 @@ function resolvePlaceholders(
         out.push({ text: text.slice(last, match.index), ...styles });
       }
       const key = match[1];
-      const value = values[key];
-      if (value !== undefined && value !== '') {
+      const value = values ? values[key] : undefined;
+      if (typeof value === 'string' && value.length > 0) {
         out.push({ text: value, ...styles });
       } else {
         // Keep the original spelling so the operator can see WHICH
@@ -150,7 +150,7 @@ function resolvePlaceholders(
     }
   }
 
-  return out.filter((s) => s.text.length > 0);
+  return out.filter((s) => typeof s?.text === 'string' && s.text.length > 0);
 }
 
 /**

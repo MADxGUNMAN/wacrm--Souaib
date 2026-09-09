@@ -33,6 +33,7 @@ describe('parseContactCsv', () => {
     expect(parseContactCsv(csv)).toEqual({
       hasTagsColumn: true,
       hasCompanyColumn: false,
+      customFieldColumns: [],
       rows: [
         {
           phone: '+15551234567',
@@ -40,6 +41,7 @@ describe('parseContactCsv', () => {
           email: undefined,
           company: undefined,
           tagNames: ['VIP', 'Lead'],
+          customFields: undefined,
         },
         {
           phone: '+15559876543',
@@ -47,18 +49,20 @@ describe('parseContactCsv', () => {
           email: undefined,
           company: undefined,
           tagNames: ['Customer'],
+          customFields: undefined,
         },
       ],
     });
   });
 
-  it('returns empty tagNames when tags column is absent', () => {
+  it('returns empty tagNames and customFieldColumns when absent', () => {
     const csv = `phone,name
 +15551234567,Alice`;
 
     expect(parseContactCsv(csv)).toEqual({
       hasTagsColumn: false,
       hasCompanyColumn: false,
+      customFieldColumns: [],
       rows: [
         {
           phone: '+15551234567',
@@ -66,8 +70,29 @@ describe('parseContactCsv', () => {
           email: undefined,
           company: undefined,
           tagNames: [],
+          customFields: undefined,
         },
       ],
+    });
+  });
+
+  it('detects and parses dynamic custom field columns like Order ID and City', () => {
+    const csv = `phone,name,email,company,tags,Order ID,City
++15551234567,Alice,alice@example.com,Acme,VIP,ORD-9921,New York
++15559876543,Bob,bob@example.com,TechCorp,,ORD-9922,London`;
+
+    const result = parseContactCsv(csv);
+    expect(result.hasTagsColumn).toBe(true);
+    expect(result.hasCompanyColumn).toBe(true);
+    expect(result.customFieldColumns).toEqual(['Order ID', 'City']);
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0].customFields).toEqual({
+      'Order ID': 'ORD-9921',
+      City: 'New York',
+    });
+    expect(result.rows[1].customFields).toEqual({
+      'Order ID': 'ORD-9922',
+      City: 'London',
     });
   });
 });

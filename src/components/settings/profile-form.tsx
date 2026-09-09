@@ -2,18 +2,21 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Upload, Trash2, Mail, CircleAlert } from 'lucide-react';
+import {
+  Loader2,
+  Upload,
+  Trash2,
+  Mail,
+  CircleAlert,
+  Camera,
+} from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-} from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   Dialog,
@@ -24,6 +27,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useTranslations } from 'next-intl';
+import { isValidEmail } from '@/lib/validation/email';
+import { uploadAccountMedia } from '@/lib/storage/upload-media';
 import { SettingsPanelHead } from './settings-panel-head';
 
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
@@ -33,11 +38,6 @@ const ALLOWED_MIME = new Set([
   'image/webp',
   'image/gif',
 ]);
-
-// Rough email shape check — the real validator is Supabase Auth, which
-// rejects anything malformed when we call updateUser({ email }). We
-// just want to stop obvious typos before making a network call.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 import { useSearchParams } from 'next/navigation';
 
@@ -93,7 +93,7 @@ export function ProfileForm() {
   }, [previewUrl]);
 
   const currentAvatar =
-    previewUrl ?? (!removeAvatar ? profile?.avatar_url ?? null : null);
+    previewUrl ?? (!removeAvatar ? (profile?.avatar_url ?? null) : null);
 
   const initial = (fullName || profile?.full_name || profile?.email || 'U')
     .charAt(0)
@@ -182,7 +182,10 @@ export function ProfileForm() {
       return;
     }
     const trimmedEmail = email.trim();
-    if (!EMAIL_RE.test(trimmedEmail)) {
+    // Shared validator, not a local regex: the change-email API rejects
+    // the same set, so catching it here saves a round trip instead of
+    // disagreeing with the server.
+    if (!isValidEmail(trimmedEmail)) {
       toast.error(t('invalidEmail'));
       return;
     }
@@ -193,23 +196,25 @@ export function ProfileForm() {
 
       // Upload a newly-staged image, if any.
       if (pendingAvatar) {
-        const ext =
-          pendingAvatar.name.split('.').pop()?.toLowerCase() || 'png';
-        const path = `${user.id}/avatar-${Date.now()}.${ext}`;
-        const { error: uploadError } = await supabase.storage
-          .from('avatars')
-          .upload(path, pendingAvatar, {
-            cacheControl: '3600',
-            upsert: true,
-            contentType: pendingAvatar.type,
-          });
-        if (uploadError) {
-          throw new Error(t('uploadFailed', { message: uploadError.message }));
+        const ext = pendingAvatar.name.split('.').pop()?.toLowerCase() || 'png';
+        // Own layout rather than the account-scoped default: an avatar
+        // belongs to a user, not to a tenant. Validated server-side by
+        // isSafeCustomPath before it reaches the object key.
+        const avatarPath = `${user.id}/avatar-${Date.now()}.${ext}`;
+        try {
+          const { publicUrl } = await uploadAccountMedia(
+            'avatars',
+            pendingAvatar,
+            { customPath: avatarPath }
+          );
+          nextAvatarUrl = publicUrl;
+        } catch (err) {
+          throw new Error(
+            t('uploadFailed', {
+              message: err instanceof Error ? err.message : 'Upload failed',
+            })
+          );
         }
-        const {
-          data: { publicUrl },
-        } = supabase.storage.from('avatars').getPublicUrl(path);
-        nextAvatarUrl = publicUrl;
       } else if (removeAvatar) {
         nextAvatarUrl = null;
       }
@@ -266,135 +271,160 @@ export function ProfileForm() {
     : '—';
 
   return (
-    <section className="max-w-2xl animate-in fade-in-50 duration-200">
-      <SettingsPanelHead
-        title={t('title')}
-        description={t('description')}
-      />
+    <section className="animate-in fade-in-50 max-w-2xl duration-200">
+      <SettingsPanelHead title={t('title')} description={t('description')} />
       <form onSubmit={onSubmit} className="space-y-4">
         <Card>
           <CardContent className="space-y-6">
-          {/* Avatar row */}
-          <div className="flex flex-wrap items-center gap-5">
-            <Avatar size="lg" className="size-16">
-              {currentAvatar ? (
-                <AvatarImage src={currentAvatar} alt={fullName || 'Avatar'} />
-              ) : null}
-              <AvatarFallback className="bg-primary/10 text-base text-primary">
-                {initial}
-              </AvatarFallback>
-            </Avatar>
-
-            <div className="flex flex-wrap gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                className="hidden"
-                onChange={onPickFile}
-              />
-              <Button
-                type="button"
-                variant="outline"
+            {/* Avatar section */}
+            <div className="flex flex-col items-start gap-6 pb-2 sm:flex-row sm:items-center">
+              <div
+                className="group relative shrink-0 cursor-pointer"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={saving}
+                title={t('changePhoto')}
               >
-                <Upload className="size-4" />
-                {currentAvatar ? t('changePhoto') : t('uploadPhoto')}
-              </Button>
-              {currentAvatar && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={onRemoveAvatar}
-                  disabled={saving}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <Trash2 className="size-4" />
-                  {t('remove')}
-                </Button>
-              )}
-              <p className="w-full text-xs text-muted-foreground">
-                {t('photoHint')}
-              </p>
+                <Avatar className="ring-primary/15 dark:ring-primary/25 border-background bg-muted/80 group-hover:ring-primary/30 size-20 overflow-hidden rounded-full border-2 shadow-md ring-4 transition-all duration-200 group-hover:shadow-lg">
+                  {currentAvatar ? (
+                    <AvatarImage
+                      src={currentAvatar}
+                      alt={fullName || 'Avatar'}
+                      className="size-full object-cover object-center"
+                    />
+                  ) : null}
+                  <AvatarFallback className="bg-primary/10 text-primary text-2xl font-bold">
+                    {initial}
+                  </AvatarFallback>
+                </Avatar>
+
+                {/* Hover overlay with camera icon */}
+                <div className="absolute inset-0 flex flex-col items-center justify-center rounded-full bg-black/40 text-white opacity-0 backdrop-blur-[1px] transition-opacity duration-150 group-hover:opacity-100">
+                  <Camera className="mb-0.5 size-5" />
+                  <span className="text-[10px] leading-none font-medium">
+                    Change
+                  </span>
+                </div>
+
+                {/* Badge icon */}
+                <div className="bg-primary text-primary-foreground ring-background absolute -right-0.5 -bottom-0.5 flex size-7 items-center justify-center rounded-full shadow-md ring-2 transition-transform group-hover:scale-110">
+                  <Camera className="size-3.5" />
+                </div>
+              </div>
+
+              <div className="min-w-0 flex-1 space-y-2.5">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  className="hidden"
+                  onChange={onPickFile}
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={saving}
+                    className="font-medium shadow-xs"
+                  >
+                    <Upload className="text-muted-foreground mr-1.5 size-4" />
+                    {currentAvatar ? t('changePhoto') : t('uploadPhoto')}
+                  </Button>
+                  {currentAvatar && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={onRemoveAvatar}
+                      disabled={saving}
+                      className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    >
+                      <Trash2 className="mr-1.5 size-4" />
+                      {t('remove')}
+                    </Button>
+                  )}
+                </div>
+                <p className="text-muted-foreground text-xs leading-relaxed">
+                  Square PNG, JPG, WebP, or GIF up to 2 MB. Recommended
+                  400×400px or larger.
+                </p>
+              </div>
             </div>
-          </div>
 
-          {/* Name */}
-          <div className="space-y-2">
-            <Label htmlFor="profile-full-name" className="text-foreground">
-              {t('displayName')}
-            </Label>
-            <Input
-              id="profile-full-name"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="Ada Lovelace"
-              maxLength={120}
-              disabled={saving}
-              required
-            />
-          </div>
+            {/* Name */}
+            <div className="space-y-2">
+              <Label htmlFor="profile-full-name" className="text-foreground">
+                {t('displayName')}
+              </Label>
+              <Input
+                id="profile-full-name"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Ada Lovelace"
+                maxLength={120}
+                disabled={saving}
+                required
+              />
+            </div>
 
-          {/* Email */}
-          <div className="space-y-2">
-            <Label htmlFor="profile-email" className="text-foreground">
-              {t('email')}
-            </Label>
-            <Input
-              id="profile-email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              disabled={saving}
-              required
-            />
-            {emailChangePending && (
-              <p className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                <Mail className="mt-0.5 size-3.5 shrink-0" />
-                <span>
-                  {t.rich('emailChangeHint', { 
-                    newEmail: pendingEmail || email,
-                    bold: (chunks: React.ReactNode) => <strong>{chunks}</strong>
-                  })}
-                </span>
+            {/* Email */}
+            <div className="space-y-2">
+              <Label htmlFor="profile-email" className="text-foreground">
+                {t('email')}
+              </Label>
+              <Input
+                id="profile-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={saving}
+                required
+              />
+              {emailChangePending && (
+                <p className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                  <Mail className="mt-0.5 size-3.5 shrink-0" />
+                  <span>
+                    {t.rich('emailChangeHint', {
+                      newEmail: pendingEmail || email,
+                      bold: (chunks: React.ReactNode) => (
+                        <strong>{chunks}</strong>
+                      ),
+                    })}
+                  </span>
+                </p>
+              )}
+            </div>
+
+            {/* Read-only block */}
+            <div className="border-border bg-muted rounded-lg border p-4">
+              <p className="text-muted-foreground mb-3 text-xs font-semibold tracking-wider uppercase">
+                {t('accountDetails')}
+              </p>
+              <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <dt className="text-muted-foreground">{t('role')}</dt>
+                  <dd className="text-foreground mt-0.5 font-mono">
+                    {profile?.role ?? 'user'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">{t('joined')}</dt>
+                  <dd className="text-foreground mt-0.5">{joined}</dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-muted-foreground">{t('userId')}</dt>
+                  <dd className="text-muted-foreground mt-0.5 font-mono text-xs break-all">
+                    {user?.id ?? '—'}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+
+            {!profile && (
+              <p className="text-muted-foreground flex items-center gap-2 text-sm">
+                <CircleAlert className="size-4" />
+                {t('loading')}
               </p>
             )}
-          </div>
-
-          {/* Read-only block */}
-          <div className="rounded-lg border border-border bg-muted p-4">
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              {t('accountDetails')}
-            </p>
-            <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-              <div>
-                <dt className="text-muted-foreground">{t('role')}</dt>
-                <dd className="mt-0.5 font-mono text-foreground">
-                  {profile?.role ?? 'user'}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground">{t('joined')}</dt>
-                <dd className="mt-0.5 text-foreground">{joined}</dd>
-              </div>
-              <div className="sm:col-span-2">
-                <dt className="text-muted-foreground">{t('userId')}</dt>
-                <dd className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
-                  {user?.id ?? '—'}
-                </dd>
-              </div>
-            </dl>
-          </div>
-
-          {!profile && (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <CircleAlert className="size-4" />
-              {t('loading')}
-            </p>
-          )}
-
-        </CardContent>
+          </CardContent>
         </Card>
 
         <div className="flex justify-end">
@@ -451,7 +481,10 @@ export function ProfileForm() {
               >
                 {t('cancel')}
               </Button>
-              <Button type="submit" disabled={verifyingPassword || !confirmPassword}>
+              <Button
+                type="submit"
+                disabled={verifyingPassword || !confirmPassword}
+              >
                 {verifyingPassword ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />

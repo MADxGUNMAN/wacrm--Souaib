@@ -36,7 +36,14 @@
  * list view reads.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   applyNodeChanges,
   Background,
@@ -97,6 +104,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useFlowEditor } from './flow-editor-state';
 import { NodeConfigForm } from './forms/node-config-form';
+import { NodeHelpDisclosure } from './node-doc-panel';
 
 // React-Flow node `data` payload — the bits our custom renderer needs.
 interface NodeData extends Record<string, unknown> {
@@ -265,15 +273,15 @@ const NODE_TYPES = { flow: FlowNodeCard };
  * (notably, the pan-to-flash effect). The split is required because
  * useReactFlow() must be called inside a ReactFlowProvider.
  */
-export function FlowCanvas() {
+export function FlowCanvas({ readOnly = false }: { readOnly?: boolean } = {}) {
   return (
     <ReactFlowProvider>
-      <FlowCanvasInner />
+      <FlowCanvasInner readOnly={readOnly} />
     </ReactFlowProvider>
   );
 }
 
-function FlowCanvasInner() {
+function FlowCanvasInner({ readOnly }: { readOnly: boolean }) {
   const t = useTranslations('Flows.builder');
   const {
     state,
@@ -514,7 +522,9 @@ function FlowCanvasInner() {
     return (
       <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 text-sm">
         <p>{t('noNodesYet')}</p>
-        <CanvasAddNodeButton t={t} />
+        {/* Unreachable for a read-only preview, which always ships nodes —
+            guarded anyway so the add button can never appear there. */}
+        {!readOnly && <CanvasAddNodeButton t={t} />}
       </div>
     );
   }
@@ -529,18 +539,26 @@ function FlowCanvasInner() {
           fitView
           fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
           proOptions={{ hideAttribution: true }}
-          onNodesChange={handleNodesChange}
-          onNodeDragStop={handleNodeDragStop}
-          onNodeClick={handleNodeClick}
-          onConnect={handleConnect}
-          onNodesDelete={handleNodesDelete}
-          onEdgesDelete={handleEdgesDelete}
+          // ---- Read-only mode ----
+          // Used by the opt-out preview in Settings, which renders a
+          // SYNTHETIC flow describing built-in behaviour. Every mutation
+          // handler is dropped rather than merely disabled: the preview has
+          // no flow row behind it, so a drag or a delete would edit
+          // provider state that can never be saved and would silently
+          // diverge from what the product actually does.
+          onNodesChange={readOnly ? undefined : handleNodesChange}
+          onNodeDragStop={readOnly ? undefined : handleNodeDragStop}
+          onNodeClick={readOnly ? undefined : handleNodeClick}
+          onConnect={readOnly ? undefined : handleConnect}
+          onNodesDelete={readOnly ? undefined : handleNodesDelete}
+          onEdgesDelete={readOnly ? undefined : handleEdgesDelete}
           // Default is "Backspace" only — accept both so Mac users
           // hitting Delete (Fn+Backspace) get the same behavior.
-          deleteKeyCode={['Backspace', 'Delete']}
-          nodesConnectable={true}
-          edgesFocusable={true}
-          elementsSelectable={true}
+          deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
+          nodesDraggable={!readOnly}
+          nodesConnectable={!readOnly}
+          edgesFocusable={!readOnly}
+          elementsSelectable={!readOnly}
           // Lower default min/max zoom than the lib's defaults; the
           // tiles already truncate their summary at a reasonable
           // size, so we don't need to zoom past 1.5x.
@@ -569,22 +587,29 @@ function FlowCanvasInner() {
             maskColor="color-mix(in oklch, var(--background) 70%, transparent)"
             className="!border-border !bg-card !rounded-xl !border !shadow-[0_6px_20px_-8px_rgba(0,0,0,0.5)]"
           />
-          <Panel position="top-left" className="!top-4 !left-4">
-            <CanvasAddNodeButton t={t} />
-          </Panel>
+          {!readOnly && (
+            <Panel position="top-left" className="!top-4 !left-4">
+              <CanvasAddNodeButton t={t} />
+            </Panel>
+          )}
         </ReactFlow>
       </div>
 
-      <NodeEditSheet
-        node={selectedNode}
-        isEntry={selectedNode?.node_key === entryNodeId}
-        allNodes={builderNodes}
-        onClose={() => setSelectedNodeKey(null)}
-        onUpdateConfig={onSelectedUpdateConfig}
-        onDelete={handleDeleteSelected}
-        onSetEntry={handleSetEntry}
-        t={t}
-      />
+      {/* Not mounted in read-only mode at all. The sheet carries Delete and
+          "Set as entry" actions, so rendering it would offer edits on a flow
+          that does not exist. */}
+      {!readOnly && (
+        <NodeEditSheet
+          node={selectedNode}
+          isEntry={selectedNode?.node_key === entryNodeId}
+          allNodes={builderNodes}
+          onClose={() => setSelectedNodeKey(null)}
+          onUpdateConfig={onSelectedUpdateConfig}
+          onDelete={handleDeleteSelected}
+          onSetEntry={handleSetEntry}
+          t={t}
+        />
+      )}
     </>
   );
 }
@@ -636,7 +661,9 @@ function NodeEditSheet({
           <NodeIconChip type={node.node_type} size={36} iconSize={18} />
           <div className="min-w-0 flex-1">
             <SheetTitle className="flex items-center gap-2 text-[11px] font-semibold tracking-wider uppercase">
-              <span style={{ color: c.text }}>{t(`nodes.${node.node_type}.label`)}</span>
+              <span style={{ color: c.text }}>
+                {t(`nodes.${node.node_type}.label`)}
+              </span>
               {isEntry && (
                 <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-emerald-300 uppercase">
                   {t('badgeEntry')}
@@ -653,6 +680,7 @@ function NodeEditSheet({
         </SheetHeader>
 
         <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
+          <NodeHelpDisclosure type={node.node_type} />
           <NodeConfigForm
             node={node}
             allNodes={allNodes}

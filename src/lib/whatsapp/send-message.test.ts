@@ -65,8 +65,8 @@ describe('sendMessageToConversation — param validation (pre-DB)', () => {
     );
   });
 
-  it('requires media_url for media kinds', async () => {
-    for (const kind of ['image', 'video', 'document', 'audio']) {
+  it('requires media_url for media kinds and stickers', async () => {
+    for (const kind of ['image', 'video', 'document', 'audio', 'sticker']) {
       await expectSendError(
         { ...base, messageType: kind },
         400,
@@ -127,6 +127,46 @@ describe('sendMessageToConversation — param validation (pre-DB)', () => {
       },
       400,
       /20-character limit/
+    );
+  });
+
+  it('validates location message payload', async () => {
+    // Missing location payload
+    await expectSendError(
+      { ...base, messageType: 'location' },
+      400,
+      /location payload is required/
+    );
+
+    // Invalid latitude
+    await expectSendError(
+      {
+        ...base,
+        messageType: 'location',
+        location: { latitude: 95.0, longitude: 0 },
+      },
+      400,
+      /Invalid latitude/
+    );
+
+    // Invalid longitude
+    await expectSendError(
+      {
+        ...base,
+        messageType: 'location',
+        location: { latitude: 0, longitude: 200.0 },
+      },
+      400,
+      /Invalid longitude/
+    );
+  });
+
+  it('validates location_request message payload', async () => {
+    // Missing prompt text
+    await expectSendError(
+      { ...base, messageType: 'location_request', contentText: '' },
+      400,
+      /content_text is required for location_request/
     );
   });
 
