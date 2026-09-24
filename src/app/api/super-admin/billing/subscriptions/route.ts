@@ -82,7 +82,7 @@ export async function GET(request: Request) {
     const { data: owners } = ownerIds.length
       ? await admin
           .from('profiles')
-          .select('user_id, full_name, email, is_super_admin')
+          .select('user_id, full_name, email, phone, is_super_admin')
           .in('user_id', ownerIds)
       : { data: [] };
 
@@ -127,6 +127,7 @@ export async function GET(request: Request) {
         createdAt: row.created_at,
         ownerName: (owner?.full_name as string) ?? null,
         ownerEmail: (owner?.email as string) ?? null,
+        ownerPhone: (owner?.phone as string) ?? null,
 
         storedStatus: row.subscription_status,
         // The value the UI should display — derived, so it can differ
@@ -163,11 +164,19 @@ export async function GET(request: Request) {
 
     if (search) {
       const needle = search.toLowerCase();
+      // `ownerName` stays searchable even though the table now shows the
+      // phone instead: an operator who remembers a name should still find
+      // the row. Digits are stripped from the needle and the number so a
+      // search for "98765 43210" or "+91 98765-43210" matches a stored
+      // "+919876543210" — nobody types a number back exactly as stored.
+      const digits = needle.replace(/\D/g, '');
       subscribers = subscribers.filter(
         (s) =>
           s.accountName?.toLowerCase().includes(needle) ||
           s.ownerName?.toLowerCase().includes(needle) ||
-          s.ownerEmail?.toLowerCase().includes(needle)
+          s.ownerEmail?.toLowerCase().includes(needle) ||
+          (digits.length >= 4 &&
+            s.ownerPhone?.replace(/\D/g, '').includes(digits))
       );
     }
 

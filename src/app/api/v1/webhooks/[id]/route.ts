@@ -9,6 +9,7 @@
 
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { isInvalidTextRepresentation } from '@/lib/api/v1/db-errors';
 import { normalizeEvents } from '@/lib/webhooks/events';
 import {
   WEBHOOK_PUBLIC_COLUMNS,
@@ -31,6 +32,11 @@ export async function GET(
       .eq('account_id', ctx.accountId)
       .maybeSingle();
 
+    // A malformed id can't be cast to uuid, so the query errors rather
+    // than matching nothing. That's the same outcome as an unknown id.
+    if (isInvalidTextRepresentation(error)) {
+      return fail('not_found', 'Webhook not found', 404);
+    }
     if (error) {
       console.error('[api/v1/webhooks] read error:', error);
       return fail('internal', 'Failed to read webhook', 500);
@@ -105,6 +111,9 @@ export async function PATCH(
       .select(WEBHOOK_PUBLIC_COLUMNS)
       .maybeSingle();
 
+    if (isInvalidTextRepresentation(error)) {
+      return fail('not_found', 'Webhook not found', 404);
+    }
     if (error) {
       console.error('[api/v1/webhooks] update error:', error);
       return fail('internal', 'Failed to update webhook', 500);
@@ -133,6 +142,9 @@ export async function DELETE(
       .select('id')
       .maybeSingle();
 
+    if (isInvalidTextRepresentation(error)) {
+      return fail('not_found', 'Webhook not found', 404);
+    }
     if (error) {
       console.error('[api/v1/webhooks] delete error:', error);
       return fail('internal', 'Failed to delete webhook', 500);

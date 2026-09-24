@@ -573,6 +573,9 @@ export async function POST(request: Request) {
         // Fall back to the number when the phone had no name saved, so the
         // contact is never blank.
         name: item.row.full_name || item.row.first_name || item.row.phone,
+        // Came from the phone's address book over Coexistence — distinct from
+        // 'whatsapp', which means the person actually messaged the business.
+        source: 'phone_sync',
       });
     }
 
@@ -594,6 +597,7 @@ export async function POST(request: Request) {
               user_id: resolved.userId,
               phone: item.row.phone,
               name: item.row.full_name || item.row.first_name || item.row.phone,
+              source: 'phone_sync',
             })
             .select('id')
             .single();

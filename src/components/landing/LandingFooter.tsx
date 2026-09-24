@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { MessageSquare, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import type { SiteSettings, LegalPage } from '@/types/super-admin';
 
 interface LandingFooterProps {
@@ -79,7 +79,7 @@ export function LandingFooter({ settings, legalPages }: LandingFooterProps) {
   };
 
   return (
-    <footer className="w-full border-t border-slate-200 bg-white px-6 py-12">
+    <footer className="w-full border-t border-emerald-900/10 bg-[#e0efe6] px-6 py-12 text-slate-700">
       <div
         className={`grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 ${settings?.show_newsletter ? 'lg:grid-cols-5' : ''} mx-auto max-w-7xl gap-8`}
       >
@@ -87,6 +87,7 @@ export function LandingFooter({ settings, legalPages }: LandingFooterProps) {
         <div className="col-span-1">
           {settings?.meta_partner_badge_url ? (
             <div className="mb-6 flex items-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={settings.meta_partner_badge_url}
                 alt="Meta Business Partner"
@@ -233,7 +234,7 @@ export function LandingFooter({ settings, legalPages }: LandingFooterProps) {
                 value={newsletterEmail}
                 onChange={(e) => setNewsletterEmail(e.target.value)}
                 disabled={newsletterLoading}
-                className="w-full rounded-lg border border-slate-200 px-3.5 py-2 text-xs transition-all focus:border-[#25D366] focus:ring-2 focus:ring-[#25D366]/20 focus:outline-none disabled:opacity-50"
+                className="w-full rounded-lg border border-emerald-900/15 bg-white/90 px-3.5 py-2 text-xs transition-all focus:border-[#25D366] focus:ring-2 focus:ring-[#25D366]/20 focus:outline-none disabled:opacity-50"
               />
               <button
                 type="submit"
@@ -260,6 +261,7 @@ export function LandingFooter({ settings, legalPages }: LandingFooterProps) {
       {/* BIG Branding Name */}
       {logoUrl ? (
         <div className="mx-auto mt-2 flex w-full max-w-7xl items-center justify-center overflow-hidden px-6 pt-4 pb-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={logoUrl}
             alt={siteName}
@@ -268,7 +270,7 @@ export function LandingFooter({ settings, legalPages }: LandingFooterProps) {
         </div>
       ) : null}
 
-      <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 border-t border-slate-200 pt-6 md:flex-row">
+      <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 border-t border-emerald-900/10 pt-6 md:flex-row">
         {copyrightLeftLink ? (
           <a
             href={copyrightLeftLink}

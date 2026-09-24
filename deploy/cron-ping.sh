@@ -65,7 +65,15 @@ fi
 #   auto-mail  trial and renewal reminder emails. Safe at this interval:
 #              each send is claimed by a partial unique index on
 #              auto_email_log, so 288 ticks a day still send once.
-for ep in automations flows alerts auto-mail; do
+#   broadcasts scheduled campaigns whose send time has arrived. Safe at
+#              this interval AND the one where it matters most: each
+#              broadcast is claimed by a conditional UPDATE (status
+#              'scheduled' -> 'sending' guarded by WHERE status =
+#              'scheduled'), so two overlapping ticks cannot both send
+#              it. Without that claim the failure would not be a
+#              duplicate email but the same paid marketing message
+#              arriving twice on a customer's phone.
+for ep in automations flows alerts auto-mail broadcasts; do
   # Capture body and status together so the log records what the app
   # actually said, not just that something happened.
   out=$(curl -s --max-time 60 -w '\n%{http_code}' \

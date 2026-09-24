@@ -191,6 +191,23 @@ function getSuperAdminTitle(pathname: string): {
       subtitle: 'Manage email subscriber list and export contacts',
     };
   }
+  // Both Sheet Add-on pages. Without these the pathname fell through to
+  // the default and the header read "Dashboard" above an Issue Reports
+  // table, which looked like the wrong page had loaded.
+  if (pathname.startsWith('/super-admin/sheets-addon/reports')) {
+    return {
+      title: 'Issue Reports',
+      subtitle:
+        'Problems reported from the Help & Support dialog in the Google Sheets add-on',
+    };
+  }
+  if (pathname.startsWith('/super-admin/sheets-addon/help')) {
+    return {
+      title: 'Add-on Help Content',
+      subtitle:
+        'Every heading, link and message shown in the add-on Help & Support dialog',
+    };
+  }
   if (pathname.startsWith('/super-admin/notification')) {
     return {
       title: 'Notification Center',

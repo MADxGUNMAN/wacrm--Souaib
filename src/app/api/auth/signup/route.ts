@@ -22,6 +22,7 @@ import {
   isValidEmail,
   normalizeEmail,
 } from '@/lib/validation/email';
+import { isValidE164, sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
 
 export async function POST(request: Request) {
   try {
@@ -29,10 +30,11 @@ export async function POST(request: Request) {
       email?: string;
       password?: string;
       fullName?: string;
+      phone?: string;
       inviteToken?: string;
     } | null;
 
-    const { email, password, fullName, inviteToken } = body ?? {};
+    const { email, password, fullName, phone, inviteToken } = body ?? {};
 
     // `includes('@')` was the entire check here, so `akash@junkiescoder`
     // created a real account that could never confirm — the address has
@@ -52,6 +54,34 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    // Phone is required. Re-validated here rather than trusting the
+    // form's `isValid` flag, which any client can skip — this endpoint is
+    // reachable directly.
+    //
+    // `isValidE164` is the loose, country-agnostic gate (7–15 digits, no
+    // leading zero) already used by the send pipeline. The signup form
+    // additionally applies per-country length rules via
+    // `validateCountryPhoneNumber`; deliberately NOT repeated here,
+    // because the server would then reject numbering plans the shared
+    // country table has not caught up with, locking a real customer out
+    // of signing up over a formatting opinion.
+    const digits = sanitizePhoneForMeta(typeof phone === 'string' ? phone : '');
+    if (!digits) {
+      return NextResponse.json(
+        { error: 'Phone number is required' },
+        { status: 400 }
+      );
+    }
+    if (!isValidE164(digits)) {
+      return NextResponse.json(
+        { error: 'Please enter a valid phone number' },
+        { status: 400 }
+      );
+    }
+    // Stored with the leading '+' so the super-admin panel shows a
+    // dialable, unambiguous number rather than a bare digit run.
+    const normalizedPhone = `+${digits}`;
 
     // Rate limit by email to prevent abuse
     const limit = checkRateLimit(`auth:signup:${normalizeEmail(email)}`, {
@@ -83,6 +113,12 @@ export async function POST(request: Request) {
       options: {
         data: {
           full_name: fullName?.trim() || '',
+          // Lands in auth.users.raw_user_meta_data. The profiles row does
+          // not exist yet — it is created by handle_user_update() when
+          // the confirmation link is clicked, which reads this key and
+          // passes it to bootstrap_user_account(). See migration
+          // 20260919120000_profiles_phone.sql.
+          phone: normalizedPhone,
         },
         redirectTo,
       },

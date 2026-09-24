@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
+import { ArrowRight } from 'lucide-react';
 
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -89,41 +90,50 @@ export function WhatsAppConnectBanner() {
   }
 
   return (
-    <div className="border-border bg-card flex flex-col gap-4 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-      <div className="flex items-center gap-3.5">
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[#00A884]/10 text-[#00A884]">
-          <svg
-            className="size-5 fill-current"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path d={WA_ICON_PATH} />
-          </svg>
+    <div className="border-border bg-card relative flex flex-col gap-4 overflow-hidden rounded-2xl border p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-5">
+      <div className="relative space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span className="text-foreground inline-flex items-center gap-1.5 rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-0.5 text-[11px] font-semibold dark:border-red-500/40 dark:bg-red-500/20">
+            <span className="relative flex size-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-500 opacity-75" />
+              <span className="relative inline-flex size-2 rounded-full bg-red-500" />
+            </span>
+            Action Required
+          </span>
         </div>
-        <div>
-          <h3 className="text-foreground text-sm font-semibold sm:text-base">
-            {t('title')}
-          </h3>
-          <p className="text-muted-foreground mt-0.5 text-xs sm:text-sm">
-            {t('description')}
-          </p>
-        </div>
+        <h3 className="text-foreground text-sm font-semibold tracking-tight sm:text-base">
+          {t('title')}
+        </h3>
+        <p className="text-muted-foreground max-w-2xl text-xs leading-relaxed sm:text-sm">
+          {t('description')}
+        </p>
       </div>
 
-      <div className="shrink-0 self-start sm:self-auto">
+      <div className="relative shrink-0 self-start pt-1 sm:self-auto sm:pt-0">
         {canConnect ? (
           <Link
             href="/settings?tab=whatsapp&mode=guided"
-            className="inline-flex items-center gap-2 rounded-lg bg-[#00A884] px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#008f6f] active:bg-[#007a5e]"
+            className="group animate-wa-ring relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-xl bg-gradient-to-r from-[#00A884] via-[#00b58e] to-[#008f6f] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_4px_14px_rgba(0,168,132,0.35)] transition-all duration-300 hover:scale-[1.03] hover:shadow-[0_8px_25px_rgba(0,168,132,0.55)] active:scale-[0.97]"
           >
+            {/* Smooth diagonal shimmer light streak */}
+            <span
+              className="animate-wa-shimmer pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/30 to-transparent"
+              aria-hidden="true"
+            />
+
+            {/* WhatsApp logo with interactive hover rotate/scale */}
             <svg
-              className="size-4 fill-current"
+              className="relative size-4.5 fill-current transition-transform duration-300 group-hover:scale-110 group-hover:rotate-6"
               viewBox="0 0 24 24"
               aria-hidden="true"
             >
               <path d={WA_ICON_PATH} />
             </svg>
-            <span>{t('connectButton')}</span>
+
+            <span className="relative tracking-wide">{t('connectButton')}</span>
+
+            {/* Micro-animated directional arrow */}
+            <ArrowRight className="relative size-4 transition-transform duration-300 group-hover:translate-x-1" />
           </Link>
         ) : (
           <span className="text-muted-foreground text-xs italic">

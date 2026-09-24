@@ -26,10 +26,10 @@ export const OFFLINE_AFTER_MS = 75_000;
 export const IDLE_AFTER_MS = 5 * 60_000;
 
 /** What the active client reports (and what the DB stores). */
-export type StoredPresence = "online" | "away";
+export type StoredPresence = 'online' | 'away';
 
 /** What a viewer sees — adds the derived 'offline' state. */
-export type PresenceStatus = "online" | "away" | "offline";
+export type PresenceStatus = 'online' | 'away' | 'offline';
 
 /** Raw presence row as read from the `member_presence` table. */
 export interface PresenceRow {
@@ -45,18 +45,31 @@ export interface PresenceRow {
 export function derivePresence(
   stored: StoredPresence | undefined,
   lastSeenAt: string | null | undefined,
-  now: number,
+  now: number
 ): PresenceStatus {
-  if (!stored || !lastSeenAt) return "offline";
+  if (!stored || !lastSeenAt) return 'offline';
   const last = new Date(lastSeenAt).getTime();
-  if (Number.isNaN(last)) return "offline";
-  if (now - last > OFFLINE_AFTER_MS) return "offline";
+  if (Number.isNaN(last)) return 'offline';
+  if (now - last > OFFLINE_AFTER_MS) return 'offline';
   return stored;
 }
 
+/** `2 hours` / `1 hour`. Keeps the plural rules in one place. */
+function plural(value: number, unit: string): string {
+  return `${value} ${unit}${value === 1 ? '' : 's'}`;
+}
+
 /**
- * Relative "last seen" string for tooltips. Coarse on purpose — the
- * issue calls for relative time only, never a precise timestamp.
+ * Relative "last seen" string. Coarse on purpose — relative time only,
+ * never a precise timestamp.
+ *
+ * Granularity follows WhatsApp: minutes within the hour, hours within
+ * the day, then DAYS AND HOURS beyond that ("2 days 5 hours ago").
+ * Reporting a bare "2 days ago" for anything from 48 to 71 hours hid the
+ * difference between someone who left this morning and someone who left
+ * three days ago — which is the whole question an operator is asking.
+ * The hours part is dropped when it is zero, so it reads "2 days ago"
+ * rather than "2 days 0 hours ago".
  *
  * Deliberately separate from `formatRelative` in
  * src/lib/automations/trigger-meta.ts: that one reads `Date.now()`
@@ -67,25 +80,26 @@ export function derivePresence(
  */
 export function formatLastSeen(
   lastSeenAt: string | null | undefined,
-  now: number,
+  now: number
 ): string {
-  if (!lastSeenAt) return "a while ago";
+  if (!lastSeenAt) return 'a while ago';
   const last = new Date(lastSeenAt).getTime();
-  if (Number.isNaN(last)) return "a while ago";
+  if (Number.isNaN(last)) return 'a while ago';
 
+  // Clamped at 0 so a client clock running ahead of the server reads
+  // "just now" instead of a negative duration.
   const diff = Math.max(0, now - last);
   const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins === 1) return "1 minute ago";
-  if (mins < 60) return `${mins} minutes ago`;
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${plural(mins, 'minute')} ago`;
 
   const hours = Math.floor(mins / 60);
-  if (hours === 1) return "1 hour ago";
-  if (hours < 24) return `${hours} hours ago`;
+  if (hours < 24) return `${plural(hours, 'hour')} ago`;
 
   const days = Math.floor(hours / 24);
-  if (days === 1) return "1 day ago";
-  return `${days} days ago`;
+  const remainderHours = hours % 24;
+  if (remainderHours === 0) return `${plural(days, 'day')} ago`;
+  return `${plural(days, 'day')} ${plural(remainderHours, 'hour')} ago`;
 }
 
 /**
@@ -97,14 +111,14 @@ export function formatLastSeen(
 export function presenceLabel(
   status: PresenceStatus,
   lastSeenAt: string | null | undefined,
-  now: number,
+  now: number
 ): string {
   switch (status) {
-    case "online":
-      return "Online — active now";
-    case "away":
-      return "Away — idle";
-    case "offline":
+    case 'online':
+      return 'Online — active now';
+    case 'away':
+      return 'Away — idle';
+    case 'offline':
       return `Offline — last seen ${formatLastSeen(lastSeenAt, now)}`;
   }
 }

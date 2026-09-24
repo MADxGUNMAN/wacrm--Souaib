@@ -20,3 +20,15 @@
 Dockerfile text eol=lf
 deploy/crontab text eol=lf
 *.sql text eol=lf
+
+# The Google Sheets add-on is uploaded to Apps Script by `clasp push`,
+# which reads the WORKING TREE — the same "not a checkout" path that broke
+# cron-ping.sh above, so the same fix applies. Without this pin every
+# source file ships to Google with CRLF, and `prettier --check` can never
+# pass locally either, because .prettierrc sets `endOfLine: lf` while
+# core.autocrlf=true hands the worktree CRLF.
+#
+# Existing files stay CRLF until they are re-checked-out. To apply it to
+# what is already on disk, once the tree is clean:
+#   git add --renormalize sheets-addon && git checkout -- sheets-addon
+sheets-addon/** text eol=lf

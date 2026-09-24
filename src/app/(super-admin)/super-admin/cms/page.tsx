@@ -3,15 +3,11 @@
 import Link from 'next/link';
 import {
   BookOpen,
-  FileText,
   Settings,
   LayoutTemplate,
-  Star,
-  CreditCard,
   Puzzle,
   Scale,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 
 const cmsModules = [
   {
@@ -68,6 +64,16 @@ const cmsModules = [
     color: 'text-amber-400',
     bgColor: 'bg-amber-400/10',
     borderColor: 'border-amber-400/20',
+  },
+  {
+    title: 'Google Sheets Add-on',
+    description:
+      'Manage landing page, dedicated Privacy Policy, Terms, and Marketplace links.',
+    icon: Puzzle,
+    href: '/super-admin/cms/integrations/google-sheets',
+    color: 'text-emerald-500',
+    bgColor: 'bg-emerald-500/10',
+    borderColor: 'border-emerald-500/20',
   },
 ];
 

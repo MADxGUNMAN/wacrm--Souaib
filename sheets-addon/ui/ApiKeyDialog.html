@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <base target="_top" />
+    <?!= include('ui/Shared.css'); ?>
+
+    <style>
+      body {
+        padding: 18px;
+      }
+
+      .dialog {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .dialog__card {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 18px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--card);
+      }
+
+      .dialog__head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .dialog__mark {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        border-radius: var(--radius-sm);
+        background: var(--success-soft);
+        color: #05603a;
+        flex: 0 0 auto;
+      }
+
+      .dialog__title {
+        font-size: 15px;
+      }
+
+      .dialog__subtitle {
+        font-size: 12px;
+        color: var(--muted-foreground);
+      }
+
+      .dialog__links {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 12px;
+      }
+
+      .dialog__footer {
+        text-align: center;
+        font-size: 11px;
+        color: var(--muted-foreground);
+      }
+
+      .help {
+        margin: 0;
+        padding-left: 18px;
+        font-size: 12px;
+        color: var(--muted-foreground);
+      }
+
+      .help li + li {
+        margin-top: 3px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="dialog">
+      <div class="dialog__card">
+        <div class="dialog__head">
+          <div class="dialog__mark" aria-hidden="true">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="8" cy="15" r="4" />
+              <path d="M10.85 12.15 19 4" />
+              <path d="M18 5l2 2" />
+              <path d="M15 8l2 2" />
+            </svg>
+          </div>
+          <div>
+            <h1 class="dialog__title">Replai API setup</h1>
+            <p class="dialog__subtitle">
+              WhatsApp automation for Google Sheets
+            </p>
+          </div>
+        </div>
+
+        <div class="notice notice--error hidden" id="error" role="alert"></div>
+        <div
+          class="notice notice--warning hidden"
+          id="warning"
+          role="alert"
+        ></div>
+        <div
+          class="notice notice--success hidden"
+          id="success"
+          role="status"
+        ></div>
+
+        <form id="form" novalidate>
+          <label class="field" for="api-key">
+            <span class="field__label">API key</span>
+            <span class="field__control">
+              <input
+                class="input"
+                id="api-key"
+                name="api-key"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="wacrm_live_…"
+                aria-describedby="key-hint"
+              />
+              <button
+                type="button"
+                class="input-reveal"
+                id="reveal"
+                aria-label="Show API key"
+                aria-pressed="false"
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              </button>
+            </span>
+          </label>
+
+          <p class="tiny muted" id="key-hint" style="margin-top: 6px">
+            Stored for your Google account only — other people editing this
+            spreadsheet cannot see it.
+          </p>
+
+          <button
+            type="submit"
+            class="btn btn--dark btn--block"
+            id="submit"
+            style="margin-top: 14px"
+          >
+            <span id="submit-label">Save &amp; continue</span>
+          </button>
+        </form>
+
+        <div class="dialog__links">
+          <a id="link-api-keys" href="#" target="_blank" rel="noopener"
+            >How do I get an API key?</a
+          >
+          <a
+            id="link-homepage"
+            class="hidden"
+            href="#"
+            target="_blank"
+            rel="noopener"
+            >About this add-on</a
+          >
+        </div>
+      </div>
+
+      <div class="dialog__card" id="help-card">
+        <h2 class="dialog__title" style="font-size: 13px">Where to find it</h2>
+        <ol class="help">
+          <li>In Replai, open <strong>Settings → API</strong>.</li>
+          <li>
+            Create a key and enable
+            <strong>Launch broadcast campaigns</strong>.
+          </li>
+          <li>Copy the key immediately — Replai shows it only once.</li>
+          <li>Paste it above and save.</li>
+        </ol>
+      </div>
+
+      <p class="dialog__footer" id="footer-domain"></p>
+    </div>
+
+    <script>
+      /*
+        Dialog client logic. The key is sent straight to the server for
+        validation and is never echoed back into the DOM, logged, or put
+        in a URL. On success the server has already stored it, so the
+        dialog's only remaining job is to refresh the sidebar and close.
+      */
+      (function () {
+        'use strict';
+
+        function el(id) {
+          return document.getElementById(id);
+        }
+
+        var input = el('api-key');
+        var submit = el('submit');
+        var submitLabel = el('submit-label');
+
+        function hideAll() {
+          ['error', 'warning', 'success'].forEach(function (id) {
+            el(id).classList.add('hidden');
+            el(id).textContent = '';
+          });
+          input.classList.remove('input--invalid');
+        }
+
+        function fail(message) {
+          var box = el('error');
+          box.textContent = message;
+          box.classList.remove('hidden');
+          input.classList.add('input--invalid');
+          input.focus();
+          input.select();
+        }
+
+        function busy(isBusy) {
+          submit.disabled = isBusy;
+          input.disabled = isBusy;
+          submitLabel.textContent = isBusy ? 'Checking…' : 'Save & continue';
+        }
+
+        // Populated from the server so the URL lives in exactly one place
+        // (src/Config.js) rather than being duplicated in markup.
+        google.script.run
+          .withSuccessHandler(function (boot) {
+            if (boot.apiKeysUrl) {
+              el('link-api-keys').setAttribute('href', boot.apiKeysUrl);
+            }
+            if (boot.homepageUrl) {
+              var link = el('link-homepage');
+              link.setAttribute('href', boot.homepageUrl);
+              link.classList.remove('hidden');
+            }
+            el('footer-domain').textContent = boot.apiKeysUrl
+              ? boot.apiKeysUrl.replace(/^https?:\/\//, '').split('/')[0]
+              : '';
+          })
+          .getBootstrap();
+
+        el('reveal').addEventListener('click', function () {
+          var revealed = input.getAttribute('type') === 'text';
+          input.setAttribute('type', revealed ? 'password' : 'text');
+          this.setAttribute('aria-pressed', String(!revealed));
+          this.setAttribute(
+            'aria-label',
+            revealed ? 'Show API key' : 'Hide API key'
+          );
+          input.focus();
+        });
+
+        el('form').addEventListener('submit', function (event) {
+          event.preventDefault();
+          hideAll();
+
+          var value = input.value.trim();
+          if (!value) {
+            fail('Paste your API key to continue.');
+            return;
+          }
+
+          busy(true);
+
+          google.script.run
+            .withSuccessHandler(function (result) {
+              busy(false);
+
+              if (!result.ok) {
+                fail(result.message);
+                return;
+              }
+
+              // The key is saved either way; a key without the sending
+              // permission is a half-finished setup, so say so and let
+              // the user go fix it rather than closing on a green tick.
+              if (!result.hasSendScope) {
+                var warn = el('warning');
+                warn.textContent =
+                  'Saved, but this key cannot send messages — it is missing the "Launch broadcast campaigns" permission. Update the key in Replai, then paste it again.';
+                warn.classList.remove('hidden');
+                google.script.run.refreshSidebar();
+                return;
+              }
+
+              var okBox = el('success');
+              okBox.textContent = result.message;
+              okBox.classList.remove('hidden');
+
+              // Re-render the sidebar server-side, then close. A modal
+              // cannot reach into the sidebar's document, so this is the
+              // only reliable way to get the two views back in sync.
+              google.script.run.refreshSidebar();
+              setTimeout(function () {
+                google.script.host.close();
+              }, 900);
+            })
+            .withFailureHandler(function (err) {
+              busy(false);
+              fail(
+                'Could not reach the add-on: ' +
+                  (err && err.message ? err.message : err)
+              );
+            })
+            .saveApiKey(value);
+        });
+
+        input.focus();
+      })();
+    </script>
+  </body>
+</html>

@@ -12,6 +12,10 @@ import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { cn } from '@/lib/utils';
 import { avatarColor, avatarInitials } from '@/lib/avatar-color';
+import {
+  primaryContactName,
+  whatsappNameSuffix,
+} from '@/lib/contacts/display-name';
 import type { Contact, Deal, ContactNote, Tag } from '@/types';
 import {
   Phone,
@@ -51,6 +55,8 @@ import { DealForm } from '@/components/pipelines/deal-form';
 import { addContactTag, deleteContactTag } from '@/lib/contacts/tag-api';
 import { formatCurrency } from '@/lib/currency';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
+import { formatPhoneNumber } from '@/lib/phone/countries';
+import { getContactSource } from '@/lib/contacts/contact-source';
 // Status is read and written through the API route, NOT by importing
 // `marketing-opt-out.ts` — that module pulls the Meta API layer into the
 // client bundle. The route also stamps `actor_user_id` on the audit row,
@@ -127,6 +133,7 @@ function SectionHeader({
 export function ContactSidebar({ contact }: ContactSidebarProps) {
   const tSidebar = useTranslations('Inbox.sidebar');
   const tThread = useTranslations('Inbox.messageThread');
+  const tSource = useTranslations('Contacts.sources');
   const { user, accountId } = useAuth();
 
   const [copied, setCopied] = useState(false);
@@ -369,7 +376,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
 
   const handleCopyPhone = useCallback(async () => {
     if (!contact?.phone) return;
-    await navigator.clipboard.writeText(contact.phone);
+    await navigator.clipboard.writeText(formatPhoneNumber(contact.phone));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [contact]);
@@ -489,7 +496,11 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
     );
   }
 
-  const displayName = contact.name || contact.phone;
+  const displayName = primaryContactName(contact, contact.phone ?? 'Unknown');
+  // Their own WhatsApp name, when it differs from the saved one. This is the
+  // panel where "who am I actually talking to" gets checked, so both belong
+  // here — unlike the conversation list, which shows the saved name alone.
+  const waSuffix = whatsappNameSuffix(contact);
   const initials = avatarInitials(contact.name, '#');
 
   const renderDealCard = (deal: Deal) => (
@@ -664,8 +675,16 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <h3 className="text-foreground truncate text-sm font-semibold">
+              <h3
+                className="text-foreground truncate text-sm font-semibold"
+                title={waSuffix ? `${displayName} ~${waSuffix}` : displayName}
+              >
                 {displayName}
+                {waSuffix && (
+                  <span className="text-muted-foreground ml-1 font-normal">
+                    ~{waSuffix}
+                  </span>
+                )}
               </h3>
               {contact.company && (
                 <p className="text-muted-foreground truncate text-xs">
@@ -675,10 +694,12 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
               <button
                 type="button"
                 onClick={handleCopyPhone}
-                className="text-muted-foreground hover:text-foreground mt-1 flex max-w-full cursor-pointer items-center gap-1.5 text-xs"
+                className="text-muted-foreground hover:text-foreground mt-1 flex max-w-full cursor-pointer items-center gap-1.5 font-mono text-xs"
               >
                 <Phone className="size-3 shrink-0" />
-                <span className="truncate">{contact.phone}</span>
+                <span className="truncate">
+                  {formatPhoneNumber(contact.phone)}
+                </span>
                 {copied ? (
                   <Check className="text-primary size-3 shrink-0" />
                 ) : (
@@ -691,6 +712,20 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
                   <span className="truncate">{contact.email}</span>
                 </div>
               )}
+              {/* Where this person came from. Matters most right here: an
+                  agent opening a thread with someone a campaign created is
+                  looking at a number nobody chose to add. */}
+              {(() => {
+                const display = getContactSource(contact.source);
+                return (
+                  <span
+                    className={`mt-1.5 inline-flex items-center self-start rounded-full border px-2 py-0.5 text-[10px] font-medium ${display.classes}`}
+                    title={tSource(display.hint)}
+                  >
+                    {tSource(display.label)}
+                  </span>
+                );
+              })()}
             </div>
           </div>
 

@@ -1,0 +1,233 @@
+<style>
+  /*
+    Sheets fixes the sidebar at ~300px and gives it its own scroll
+    container, so everything here is single-column and nothing relies on
+    a viewport width.
+  */
+  .shell {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    padding: 14px 14px 18px;
+  }
+
+  /*
+    There is deliberately NO header row in this panel.
+
+    Sheets already draws the product name and the close button in its own
+    bar above the iframe, and we cannot add to that row — so any header of
+    ours is either a duplicate of the name or a nearly empty strip. Both
+    were built and both looked worse than nothing. The brand mark moved
+    into the workspace card and Reload moved next to Disconnect, which
+    costs no vertical space at all.
+  */
+
+  /*
+    Brand mark, in the workspace card.
+
+    NO tile or coloured backing: the PNG is a finished logo with its own
+    shape, and sitting it on a brand-green square made the whole thing read
+    as one green blob instead of a logo.
+  */
+  .account__logo {
+    display: block;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+  }
+
+  /*
+    Flex column with a gap, NOT a bare block.
+
+    The account card and the view below it are siblings here, and with no
+    gap between them the rules list header sat flush against the card —
+    which is what made the green "New rule" button look like it was
+    overlapping the card above. Hidden views use `display: none`, so the
+    gap collapses for them instead of leaving a phantom band.
+  */
+  .shell__body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 14px;
+    /* No padding-top: with the header row gone, `.shell`'s own padding is
+       the only gap wanted between Sheets' title bar and the first card. */
+  }
+
+  .shell__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted-foreground);
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .stack--tight {
+    gap: 8px;
+  }
+
+  /*
+    Empty state — centred, one clear action, and given a card of its own
+    so the first screen an operator ever sees looks composed rather than
+    like text dropped onto a blank panel.
+  */
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 28px 16px 24px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card);
+    box-shadow: var(--shadow-sm);
+    text-align: center;
+  }
+
+  .empty__icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+
+  .empty__title {
+    font-size: 14px;
+  }
+
+  .empty__text {
+    font-size: 12px;
+    color: var(--muted-foreground);
+    /* Keeps the sentence from running the full 300px, which reads badly. */
+    max-width: 30ch;
+  }
+
+  .empty .btn {
+    margin-top: 2px;
+  }
+
+  /* Connect / reconnect panel. */
+  .panel {
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .panel__title {
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+
+  .panel__text {
+    font-size: 12px;
+    color: var(--muted-foreground);
+  }
+
+  .steps {
+    margin: 10px 0 0;
+    padding-left: 18px;
+    font-size: 12px;
+    color: var(--muted-foreground);
+  }
+
+  .steps li + li {
+    margin-top: 4px;
+  }
+
+  /*
+    Connected-workspace card. Kept visually quieter than a rule card — it
+    is standing context, not something to act on — but it still gets a
+    border and a hairline shadow so it reads as a distinct block rather
+    than blending into the header above it.
+  */
+  .account {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* Mark and label left, the two controls hard right. The label takes the
+     slack rather than `space-between` spreading four children evenly. */
+  .account__row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .account__row .account__label {
+    flex: 1 1 auto;
+  }
+
+  .account__label {
+    font-size: 11px;
+    color: var(--muted-foreground);
+  }
+
+  .account__value {
+    font-size: 12px;
+    font-weight: 500;
+    /* Long emails and masked keys must not widen the 300px column. */
+    overflow-wrap: anywhere;
+  }
+
+  /* The disconnect confirm prompt. Only rendered while the button is primed. */
+  .account__warn {
+    margin-top: 6px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--destructive-soft);
+    color: #912018;
+  }
+
+  .link-btn {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--primary-hover);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .skeleton {
+    height: 12px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #eef0f3, #f7f8fa, #eef0f3);
+    background-size: 200% 100%;
+    animation: shimmer 1.2s linear infinite;
+  }
+
+  @keyframes shimmer {
+    to {
+      background-position: -200% 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton {
+      animation: none;
+    }
+  }
+</style>

@@ -155,7 +155,7 @@ export interface TemplateSendPlan {
  * `example` inaccessible.
  */
 function asMediaHeader(
-  header: ReturnType<typeof getHeader>,
+  header: ReturnType<typeof getHeader>
 ): Extract<
   NonNullable<ReturnType<typeof getHeader>>,
   { format: 'IMAGE' | 'VIDEO' | 'DOCUMENT' }
@@ -165,9 +165,7 @@ function asMediaHeader(
   return header;
 }
 
-function urlSlots(
-  buttons: ReturnType<typeof getButtons>,
-): UrlButtonSlot[] {
+function urlSlots(buttons: ReturnType<typeof getButtons>): UrlButtonSlot[] {
   const out: UrlButtonSlot[] = [];
   buttons.forEach((b, index) => {
     // A static URL is already baked into the approved template; only a
@@ -179,9 +177,7 @@ function urlSlots(
   return out;
 }
 
-function copyCodeSlots(
-  buttons: ReturnType<typeof getButtons>,
-): CopyCodeSlot[] {
+function copyCodeSlots(buttons: ReturnType<typeof getButtons>): CopyCodeSlot[] {
   const out: CopyCodeSlot[] = [];
   buttons.forEach((b, index) => {
     if (b.type === 'COPY_CODE') {
@@ -258,7 +254,7 @@ export function buildSendPlan(row: TemplateRowLike): TemplateSendPlan {
         bodyVarCount: extractVariableIndices(cardBody?.text ?? '').length,
         urlButtons: urlSlots(getButtons(card.components)),
       };
-    },
+    }
   );
 
   const plan: Omit<TemplateSendPlan, 'needsNoInput'> = {
@@ -291,7 +287,7 @@ export function buildSendPlan(row: TemplateRowLike): TemplateSendPlan {
 }
 
 function planNeedsNoInput(
-  plan: Omit<TemplateSendPlan, 'needsNoInput'>,
+  plan: Omit<TemplateSendPlan, 'needsNoInput'>
 ): boolean {
   // Authentication always needs the code.
   if (plan.isAuthentication) return false;
@@ -304,7 +300,8 @@ function planNeedsNoInput(
   // An MPM template stores no products and an invoice stores no order, so
   // neither can ever be sent without input. A catalogue button CAN — the
   // thumbnail is optional and Meta falls back to the first catalogue item.
-  if (plan.commerce === 'mpm' || plan.commerce === 'order_details') return false;
+  if (plan.commerce === 'mpm' || plan.commerce === 'order_details')
+    return false;
   if (plan.bodyVarCount > 0) return false;
   if (plan.bodyParamNames.length > 0) return false;
   if (plan.headerVarCount > 0) return false;
@@ -316,7 +313,7 @@ function planNeedsNoInput(
     (card) =>
       card.bodyVarCount === 0 &&
       card.urlButtons.length === 0 &&
-      Boolean(card.media.defaultUrl),
+      Boolean(card.media.defaultUrl)
   );
 }
 
@@ -351,13 +348,112 @@ export function msToLocalInput(ms: number | undefined): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-    d.getHours(),
+    d.getHours()
   )}:${pad(d.getMinutes())}`;
 }
 
 /** Now + n hours as a datetime-local string. A starting point, not a default. */
 export function defaultOfferExpiryLocal(hoursFromNow = 24): string {
   return msToLocalInput(Date.now() + hoursFromNow * 60 * 60 * 1000);
+}
+
+// ============================================================
+// Schedule validation
+// ============================================================
+
+/**
+ * The smallest gap we accept between "now" and a scheduled send.
+ *
+ * The sweep that executes scheduled broadcasts runs every five minutes,
+ * so a send booked for 30 seconds' time would fire late and look broken.
+ * Requiring two minutes makes the first tick after the chosen time the
+ * one that sends it, and stops "schedule" being used as a confusing
+ * synonym for "send now" — which the Send now button already does, with
+ * live progress the scheduled path cannot show.
+ */
+export const MIN_SCHEDULE_LEAD_MS = 2 * 60 * 1000;
+
+export type ScheduleProblem =
+  'empty' | 'unparseable' | 'past' | 'too_soon' | 'too_far';
+
+/**
+ * How far ahead a broadcast may be booked.
+ *
+ * Meta expires an approved template's usability far less predictably than
+ * a year, and an audience resolved today is increasingly wrong the longer
+ * it waits — recipients opt out, contacts get deleted. A cap keeps a
+ * forgotten campaign from firing at a wildly stale audience.
+ */
+export const MAX_SCHEDULE_AHEAD_MS = 90 * 24 * 60 * 60 * 1000;
+
+export interface ScheduleValidation {
+  ok: boolean;
+  problem: ScheduleProblem | null;
+  /** Epoch ms of the chosen instant. Null unless `ok`. */
+  atMs: number | null;
+  /** Operator-facing reason. Null when `ok`. */
+  message: string | null;
+}
+
+/**
+ * Validate a `datetime-local` value chosen for a scheduled send.
+ *
+ * Pure and clock-injectable so the boundaries are unit-testable — an
+ * off-by-one here means a campaign that either fires immediately or never
+ * fires at all, and neither is discoverable by looking at the UI.
+ */
+export function validateScheduleAt(
+  localValue: string,
+  now: number = Date.now()
+): ScheduleValidation {
+  if (!localValue?.trim()) {
+    return {
+      ok: false,
+      problem: 'empty',
+      atMs: null,
+      message: 'Pick the date and time this should send.',
+    };
+  }
+
+  const atMs = localInputToMs(localValue);
+  if (atMs === undefined) {
+    return {
+      ok: false,
+      problem: 'unparseable',
+      atMs: null,
+      message: 'That date and time could not be read. Pick it again.',
+    };
+  }
+
+  if (atMs <= now) {
+    return {
+      ok: false,
+      problem: 'past',
+      atMs,
+      message: 'That time has already passed. Pick a time in the future.',
+    };
+  }
+
+  if (atMs - now < MIN_SCHEDULE_LEAD_MS) {
+    return {
+      ok: false,
+      problem: 'too_soon',
+      atMs,
+      message:
+        'Schedule at least 2 minutes ahead — or use Send now if you want it to go immediately.',
+    };
+  }
+
+  if (atMs - now > MAX_SCHEDULE_AHEAD_MS) {
+    return {
+      ok: false,
+      problem: 'too_far',
+      atMs,
+      message: 'Broadcasts can be scheduled up to 90 days ahead.',
+    };
+  }
+
+  return { ok: true, problem: null, atMs, message: null };
 }
 
 /** The map pin for a LOCATION header. All four fields are required. */
@@ -463,7 +559,12 @@ export interface OrderDetailsValues {
   referenceId: string;
   currency: string;
   goodsType: 'physical-goods' | 'digital-goods';
-  items: { name: string; amount: string; quantity: string; retailerId: string }[];
+  items: {
+    name: string;
+    amount: string;
+    quantity: string;
+    retailerId: string;
+  }[];
   taxAmount: string;
   shippingAmount: string;
   discountAmount: string;
@@ -494,12 +595,117 @@ export function orderDetailsTotal(values: OrderDetailsValues): number {
     return Number.isFinite(n) ? n : 0;
   };
   return (
-    subtotal + num(values.taxAmount) + num(values.shippingAmount) - num(values.discountAmount)
+    subtotal +
+    num(values.taxAmount) +
+    num(values.shippingAmount) -
+    num(values.discountAmount)
   );
 }
 
 function filled(v: string | undefined): boolean {
   return Boolean(v && v.trim().length > 0);
+}
+
+// ============================================================
+// Wizard state -> send values
+// ============================================================
+
+/**
+ * Turn the broadcast wizard's own state into the `SendValues` the send
+ * builder consumes.
+ *
+ * ─── Why this exists ──────────────────────────────────────────────
+ *
+ * This mapping had grown THREE independent copies: the send hook's
+ * inline `sharedParams`, the personalize step's completeness-check
+ * `useMemo`, and (about to be) a test send. They had already drifted —
+ * the same class of bug `buildTemplateSendRequest` was written to stop,
+ * where a surface silently omits a field and one template type fails
+ * only from one screen.
+ *
+ * Everything here is recipient-INDEPENDENT by construction. Body values
+ * are the caller's business because they resolve per contact; that is
+ * exactly the axis along which a broadcast and a test send differ, so it
+ * is the one thing this function refuses to guess.
+ *
+ * Empty/absent values are OMITTED rather than passed as empty strings:
+ * the builder treats a present-but-empty field as "the operator supplied
+ * nothing", and Meta rejects empty parameters outright.
+ */
+export function sendValuesFromExtras(args: {
+  extras: BroadcastSendExtras | undefined;
+  /**
+   * Operator-supplied media URL for an IMAGE/VIDEO/DOCUMENT header.
+   * Ignored unless the template actually has a media header — passing it
+   * for a text header would have the builder attach media Meta never
+   * approved.
+   */
+  headerMediaUrl?: string;
+  /** True when the template's header is image/video/document. */
+  isMediaHeader: boolean;
+  /** Positional body values, already resolved for this recipient. */
+  body?: string[];
+  /** NAMED-format body values, already resolved for this recipient. */
+  namedBody?: Record<string, string>;
+}): SendValues {
+  const { extras, isMediaHeader, body, namedBody } = args;
+  const headerMediaUrl = args.headerMediaUrl?.trim();
+
+  const offerExpiresAtMs = extras?.offerExpiryLocal
+    ? localInputToMs(extras.offerExpiryLocal)
+    : undefined;
+  const cards = extras?.cards?.length ? extras.cards : undefined;
+  const buttonParams =
+    extras?.buttonParams && Object.keys(extras.buttonParams).length > 0
+      ? extras.buttonParams
+      : undefined;
+
+  return {
+    // An authentication template carries its one-time code in body[0].
+    // The explicit `body` argument wins so a caller can override it.
+    ...(body && body.length > 0
+      ? { body }
+      : extras?.authCode
+        ? { body: [extras.authCode] }
+        : {}),
+    ...(namedBody && Object.keys(namedBody).length > 0 ? { namedBody } : {}),
+    ...(isMediaHeader && headerMediaUrl ? { headerMediaUrl } : {}),
+    ...(extras?.headerLocation
+      ? { headerLocation: extras.headerLocation }
+      : {}),
+    ...(offerExpiresAtMs ? { offerExpiresAtMs } : {}),
+    ...(cards ? { cards } : {}),
+    ...(buttonParams ? { buttonParams } : {}),
+    ...(extras?.catalogThumbnailProductId
+      ? { catalogThumbnailProductId: extras.catalogThumbnailProductId }
+      : {}),
+    ...(extras?.mpm ? { mpm: extras.mpm } : {}),
+    ...(extras?.orderDetails ? { orderDetails: extras.orderDetails } : {}),
+    ...(extras?.orderStatus?.orderReferenceId
+      ? { orderReferenceId: extras.orderStatus.orderReferenceId }
+      : {}),
+    ...(extras?.orderStatus?.orderStatus
+      ? { orderStatus: extras.orderStatus.orderStatus }
+      : {}),
+    ...(extras?.orderStatus?.orderStatusDescription
+      ? { orderStatusDescription: extras.orderStatus.orderStatusDescription }
+      : {}),
+  };
+}
+
+/**
+ * True when a template's header carries media, so a supplied URL is
+ * meaningful. Centralised because three call sites were each repeating
+ * the same three-way string comparison.
+ */
+export function isMediaHeaderType(
+  headerType: string | null | undefined
+): boolean {
+  return (
+    headerType === 'image' ||
+    headerType === 'video' ||
+    headerType === 'document'
+  );
 }
 
 /**
@@ -514,7 +720,7 @@ function filled(v: string | undefined): boolean {
  */
 export function missingSendValues(
   plan: TemplateSendPlan,
-  values: SendValues,
+  values: SendValues
 ): string[] {
   const missing: string[] = [];
 
@@ -524,7 +730,8 @@ export function missingSendValues(
   }
 
   for (let i = 0; i < plan.bodyVarCount; i++) {
-    if (!filled(values.body?.[i])) missing.push(`Message variable {{${i + 1}}}`);
+    if (!filled(values.body?.[i]))
+      missing.push(`Message variable {{${i + 1}}}`);
   }
 
   for (const name of plan.bodyParamNames) {
@@ -595,7 +802,7 @@ export function missingSendValues(
       (i) =>
         i.name.trim() !== '' &&
         Number.isFinite(Number.parseFloat(i.amount)) &&
-        Number.parseInt(i.quantity, 10) > 0,
+        Number.parseInt(i.quantity, 10) > 0
     );
     if (items.length === 0) {
       missing.push('At least one item with a name, price and quantity');
@@ -622,16 +829,16 @@ export function missingSendValues(
       // told "sent" for an offer that is already dead on arrival.
       missing.push('An offer expiry in the future (the one set has passed)');
     }
-    if (plan.offer.code && !filled(values.buttonParams?.[plan.offer.code.index])) {
+    if (
+      plan.offer.code &&
+      !filled(values.buttonParams?.[plan.offer.code.index])
+    ) {
       if (!plan.offer.code.defaultCode) missing.push('The offer code');
     }
   }
 
   for (const slot of plan.copyCodeButtons) {
-    if (
-      !filled(values.buttonParams?.[slot.index]) &&
-      !slot.defaultCode
-    ) {
+    if (!filled(values.buttonParams?.[slot.index]) && !slot.defaultCode) {
       missing.push(`The code for the "${slot.text}" button`);
     }
   }

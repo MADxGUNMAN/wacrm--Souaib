@@ -15,8 +15,17 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Search, User, Phone, Building, Mail, Check, Loader2 } from 'lucide-react';
+import {
+  Search,
+  User,
+  Phone,
+  Building,
+  Mail,
+  Check,
+  Loader2,
+} from 'lucide-react';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
+import { formatPhoneNumber } from '@/lib/phone/countries';
 import type { WhatsAppContactCard } from '@/lib/whatsapp/meta-api';
 import { toast } from 'sonner';
 
@@ -43,7 +52,9 @@ export function ContactPickerDialog({
   const [searchQuery, setSearchQuery] = useState('');
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedContact, setSelectedContact] = useState<CrmContact | null>(null);
+  const [selectedContact, setSelectedContact] = useState<CrmContact | null>(
+    null
+  );
   const [submitting, setSubmitting] = useState(false);
 
   // Manual contact form state
@@ -64,7 +75,9 @@ export function ContactPickerDialog({
 
       if (query.trim()) {
         const q = `%${query.trim()}%`;
-        req = req.or(`name.ilike.${q},phone.ilike.${q},company.ilike.${q},email.ilike.${q}`);
+        req = req.or(
+          `name.ilike.${q},phone.ilike.${q},company.ilike.${q},email.ilike.${q}`
+        );
       }
 
       const { data, error } = await req;
@@ -100,7 +113,8 @@ export function ContactPickerDialog({
       const cleanPhone = sanitizePhoneForMeta(selectedContact.phone);
       const nameParts = (selectedContact.name || 'Contact').trim().split(/\s+/);
       const firstName = nameParts[0] || 'Contact';
-      const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : undefined;
+      const lastName =
+        nameParts.length > 1 ? nameParts.slice(1).join(' ') : undefined;
 
       const card: WhatsAppContactCard = {
         name: {
@@ -143,7 +157,8 @@ export function ContactPickerDialog({
       const cleanPhone = sanitizePhoneForMeta(manualPhone.trim());
       const nameParts = manualName.trim().split(/\s+/);
       const firstName = nameParts[0] || 'Contact';
-      const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : undefined;
+      const lastName =
+        nameParts.length > 1 ? nameParts.slice(1).join(' ') : undefined;
 
       const card: WhatsAppContactCard = {
         name: {
@@ -158,7 +173,9 @@ export function ContactPickerDialog({
             wa_id: cleanPhone || undefined,
           },
         ],
-        org: manualCompany.trim() ? { company: manualCompany.trim() } : undefined,
+        org: manualCompany.trim()
+          ? { company: manualCompany.trim() }
+          : undefined,
         emails: manualEmail.trim()
           ? [{ email: manualEmail.trim(), type: 'Work' }]
           : undefined,
@@ -179,20 +196,23 @@ export function ContactPickerDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base font-semibold">
-            <User className="h-5 w-5 text-primary" />
+            <User className="text-primary h-5 w-5" />
             Share Contact Card
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'crm' | 'manual')}>
-          <TabsList className="grid w-full grid-cols-2 mb-3">
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v as 'crm' | 'manual')}
+        >
+          <TabsList className="mb-3 grid w-full grid-cols-2">
             <TabsTrigger value="crm">From CRM</TabsTrigger>
             <TabsTrigger value="manual">Manual Entry</TabsTrigger>
           </TabsList>
 
           <TabsContent value="crm" className="space-y-3">
             <div className="relative">
-              <Search className="text-muted-foreground absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" />
+              <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
               <Input
                 placeholder="Search CRM contacts..."
                 value={searchQuery}
@@ -204,10 +224,10 @@ export function ContactPickerDialog({
             <ScrollArea className="h-64 rounded-md border p-2">
               {loading ? (
                 <div className="flex h-full items-center justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  <Loader2 className="text-muted-foreground h-6 w-6 animate-spin" />
                 </div>
               ) : contacts.length === 0 ? (
-                <div className="py-8 text-center text-sm text-muted-foreground">
+                <div className="text-muted-foreground py-8 text-center text-sm">
                   No contacts found.
                 </div>
               ) : (
@@ -229,24 +249,25 @@ export function ContactPickerDialog({
                             : 'hover:bg-muted/70'
                         }`}
                       >
-                        <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex min-w-0 items-center gap-3">
                           <Avatar className="h-9 w-9 shrink-0">
                             <AvatarFallback className="bg-primary/20 text-primary text-xs font-medium">
                               {initials}
                             </AvatarFallback>
                           </Avatar>
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-foreground">
+                            <p className="text-foreground truncate text-sm font-medium">
                               {c.name || 'Unnamed Contact'}
                             </p>
-                            <p className="truncate text-xs text-muted-foreground">
-                              {c.phone} {c.company ? `• ${c.company}` : ''}
+                            <p className="text-muted-foreground truncate font-mono text-xs">
+                              {formatPhoneNumber(c.phone)}{' '}
+                              {c.company ? `• ${c.company}` : ''}
                             </p>
                           </div>
                         </div>
 
                         {isSelected && (
-                          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                          <div className="bg-primary text-primary-foreground flex h-6 w-6 shrink-0 items-center justify-center rounded-full">
                             <Check className="h-3.5 w-3.5" />
                           </div>
                         )}
@@ -280,9 +301,11 @@ export function ContactPickerDialog({
           <TabsContent value="manual" className="space-y-3">
             <div className="space-y-3">
               <div>
-                <Label htmlFor="manual-name" className="text-xs">Full Name *</Label>
+                <Label htmlFor="manual-name" className="text-xs">
+                  Full Name *
+                </Label>
                 <div className="relative mt-1">
-                  <User className="text-muted-foreground absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" />
+                  <User className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
                   <Input
                     id="manual-name"
                     placeholder="e.g. Barbara Johnson"
@@ -294,9 +317,11 @@ export function ContactPickerDialog({
               </div>
 
               <div>
-                <Label htmlFor="manual-phone" className="text-xs">Phone Number *</Label>
+                <Label htmlFor="manual-phone" className="text-xs">
+                  Phone Number *
+                </Label>
                 <div className="relative mt-1">
-                  <Phone className="text-muted-foreground absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" />
+                  <Phone className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
                   <Input
                     id="manual-phone"
                     placeholder="e.g. +1 650 555 9999"
@@ -308,9 +333,11 @@ export function ContactPickerDialog({
               </div>
 
               <div>
-                <Label htmlFor="manual-company" className="text-xs">Company / Title (Optional)</Label>
+                <Label htmlFor="manual-company" className="text-xs">
+                  Company / Title (Optional)
+                </Label>
                 <div className="relative mt-1">
-                  <Building className="text-muted-foreground absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" />
+                  <Building className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
                   <Input
                     id="manual-company"
                     placeholder="e.g. Lucky Shrub"
@@ -322,9 +349,11 @@ export function ContactPickerDialog({
               </div>
 
               <div>
-                <Label htmlFor="manual-email" className="text-xs">Email (Optional)</Label>
+                <Label htmlFor="manual-email" className="text-xs">
+                  Email (Optional)
+                </Label>
                 <div className="relative mt-1">
-                  <Mail className="text-muted-foreground absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" />
+                  <Mail className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
                   <Input
                     id="manual-email"
                     placeholder="e.g. barbara@example.com"
@@ -342,7 +371,9 @@ export function ContactPickerDialog({
               </Button>
               <Button
                 onClick={handleSendManualContact}
-                disabled={!manualName.trim() || !manualPhone.trim() || submitting}
+                disabled={
+                  !manualName.trim() || !manualPhone.trim() || submitting
+                }
               >
                 {submitting ? (
                   <>

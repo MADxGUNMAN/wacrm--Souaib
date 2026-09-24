@@ -5,6 +5,7 @@
 
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { isInvalidTextRepresentation } from '@/lib/api/v1/db-errors';
 import {
   CONVERSATION_SELECT,
   normalizeConversation,
@@ -27,13 +28,20 @@ export async function GET(
       .eq('account_id', ctx.accountId)
       .maybeSingle();
 
+    // A malformed id can't be cast to uuid, so the query errors rather
+    // than matching nothing. That's the same outcome as an unknown id.
+    if (isInvalidTextRepresentation(error)) {
+      return fail('not_found', 'Conversation not found', 404);
+    }
     if (error) {
       console.error('[api/v1/conversations] read error:', error);
       return fail('internal', 'Failed to read conversation', 500);
     }
     if (!data) return fail('not_found', 'Conversation not found', 404);
 
-    return ok(serializeConversation(normalizeConversation(data as Conversation)));
+    return ok(
+      serializeConversation(normalizeConversation(data as Conversation))
+    );
   } catch (err) {
     return toApiErrorResponse(err);
   }

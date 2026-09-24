@@ -4,6 +4,7 @@ import {
   KeyRound,
   LayoutGrid,
   Palette,
+  Puzzle,
   Shield,
   Smartphone,
   Tags,
@@ -45,6 +46,11 @@ export const SETTINGS_SECTIONS = [
   'deals',
   'members',
   'api',
+  // Single word, deliberately — see the note on 'opt-out' below. A key
+  // like 'app-integrations' would derive `settings_app_integrations`
+  // correctly, but only by luck of having exactly one hyphen; 'integrations'
+  // removes the trap entirely.
+  'integrations',
   // Owner-only by default. Unlike every other pane, an absent
   // `settings_alerts` permission DENIES — see
   // OWNER_ONLY_SETTINGS_SECTIONS in @/lib/auth/roles.
@@ -134,6 +140,12 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
     group: 'workspace',
   },
   api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
+  integrations: {
+    id: 'integrations',
+    label: 'App integrations',
+    icon: Puzzle,
+    group: 'workspace',
+  },
   alerts: {
     id: 'alerts',
     label: 'Usage alerts',

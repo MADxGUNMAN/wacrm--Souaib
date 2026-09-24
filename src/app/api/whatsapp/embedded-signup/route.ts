@@ -9,9 +9,13 @@ import {
 
 import { META_API_BASE } from '@/lib/whatsapp/graph-version';
 import { requestCoexistenceSync } from '@/lib/whatsapp/coexistence-sync';
+import { generateTwoStepPin } from '@/lib/whatsapp/two-step-pin';
 import { expiresInToTimestamp } from '@/lib/whatsapp/token-expiry';
 import { upgradeToNonExpiringToken } from '@/lib/whatsapp/token-upgrade';
-import { resolveConnectionMode } from '@/lib/whatsapp/connection-mode';
+import {
+  reconcileConnectionMode,
+  resolveConnectionMode,
+} from '@/lib/whatsapp/connection-mode';
 
 /**
  * Exchange an Embedded Signup token code for the customer's business token.
@@ -189,7 +193,11 @@ export async function POST(request: Request) {
     // an echo is proof rather than inference.
     // Lives in connection-mode.ts so the precedence rule is unit-testable;
     // as an inline ternary it was wrong for months with nothing to catch it.
-    const connectionMode = resolveConnectionMode({
+    //
+    // This is still only an INFERENCE at this point. It gets checked against
+    // Meta's own view of the number in step 4 below, once we have a token and
+    // a phone_number_id to ask about — see `reconcileConnectionMode`.
+    const inferredConnectionMode = resolveConnectionMode({
       finishEvent,
       requestedFeatureType,
     });
@@ -327,12 +335,49 @@ export async function POST(request: Request) {
       );
     }
 
+    // ── Confirm the connection mode against Meta ─────────────
+    //
+    // The inference above can be wrong whenever `finish_event` failed to
+    // arrive, which happens for ordinary reasons (popup closed a beat early, a
+    // browser extension blocking cross-origin messages). In that case the mode
+    // came from what the operator picked in our modal, and they are free to
+    // change their mind inside Meta's UI.
+    //
+    // `is_on_biz_app` on the phone number settles it. Note it is NOT
+    // `platform_type` — that reports CLOUD_API for coexistence and plain Cloud
+    // API alike, so reconciling on it would demote every correct coexistence
+    // row. The reasoning and the live evidence are in connection-mode.ts.
+    //
+    // Done HERE, before the upsert, so a wrong mode is never written in the
+    // first place. Writing then correcting would still fire the coexistence
+    // history sync below at an account that cannot serve it, which is a
+    // one-shot request with only 3 lifetime attempts.
+    const reconciled = reconcileConnectionMode({
+      inferred: inferredConnectionMode,
+      isOnBizApp: phoneInfo.is_on_biz_app,
+    });
+    const connectionMode = reconciled.mode;
+
+    if (reconciled.corrected) {
+      console.warn(
+        '[embedded-signup] connection mode corrected by Meta:',
+        reconciled.reason
+      );
+    }
+
     // Step 5: Subscribe the WABA to our App's Webhook
+    //
+    // The outcome is captured rather than discarded. `subscribed_apps_at`
+    // exists on the row and was never being written by this route, so the
+    // registration diagnostics reported every Embedded Signup account as
+    // unsubscribed even when the call had succeeded.
+    let subscribedAt: string | null = null;
     try {
       await subscribeWabaToApp({
         wabaId,
         accessToken,
       });
+      subscribedAt = new Date().toISOString();
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Unknown Meta API error';
@@ -383,6 +428,7 @@ export async function POST(request: Request) {
           // expiry — see token-expiry.ts, where null is explicitly NOT
           // treated as expired.
           token_expires_at: expiresInToTimestamp(exchange.expiresIn),
+          subscribed_apps_at: subscribedAt,
           // Clear any previous disconnect. Reconnecting IS the fix for most
           // coexistence disconnect reasons, so leaving a stale reason behind
           // would keep showing the operator a problem they just solved.
@@ -401,11 +447,74 @@ export async function POST(request: Request) {
       );
     }
 
-    // Note: We skip the `registerPhoneNumber` step (requiring a PIN) here because
-    // Embedded Signup v4 doesn't explicitly give us the PIN. The phone number is
-    // usually automatically registered during the embedded signup flow if the user
-    // provided the PIN in the popup. If it isn't, the user will see the "Not registered"
-    // banner and can enter a PIN manually later.
+    // ── Register the number on the Cloud API ─────────────────
+    //
+    // This step used to be skipped, on the assumption that Meta
+    // "usually" registers the number itself during the popup. That
+    // assumption holds for REAL phone numbers and is false for VIRTUAL
+    // ones, which is how two accounts ended up permanently unusable:
+    //
+    //   status:        PENDING
+    //   platform_type: NOT_APPLICABLE   ← never on the Cloud API
+    //   code_verification_status: VERIFIED  ← the OTP was done
+    //
+    // Meta's own dashboard showed them Pending too, so nothing was
+    // mis-reported — the number genuinely could not send a single
+    // message, and no path existed inside the CRM to finish the job.
+    //
+    // WHY A GENERATED PIN
+    //
+    // /register requires a 6-digit `pin`, and Embedded Signup neither
+    // collects one nor returns one. On a number with no two-step
+    // verification yet, the PIN passed here BECOMES the permanent PIN, so
+    // it is generated with a CSPRNG and stored encrypted; Meta cannot
+    // read a PIN back, making this row the only copy.
+    //
+    // Non-fatal by contract. The account is connected and the token is
+    // saved by this point; a failed registration must leave the operator
+    // with a retry, not with a failed onboarding and no credentials. The
+    // reason is persisted to `last_registration_error` and surfaced in
+    // Settings behind a "Complete registration" button.
+    let registered = false;
+    let registrationError: string | null = null;
+    try {
+      const pin = generateTwoStepPin();
+      await registerPhoneNumber({ phoneNumberId, accessToken, pin });
+      registered = true;
+
+      const { error: pinError } = await supabase
+        .from('whatsapp_config')
+        .update({
+          registered_at: new Date().toISOString(),
+          // Only written after Meta accepted it. Storing a PIN Meta
+          // rejected would be worse than storing none: it would look
+          // authoritative while opening nothing.
+          two_step_pin: encrypt(pin),
+          last_registration_error: null,
+        })
+        .eq('account_id', accountId);
+
+      if (pinError) {
+        // The number IS registered on Meta's side at this point, so this
+        // is not a registration failure — it is a lost PIN, which the
+        // operator needs to know about because it cannot be recovered.
+        console.error(
+          '[embedded-signup] number registered but PIN could not be saved:',
+          pinError.message
+        );
+      }
+    } catch (err) {
+      registrationError =
+        err instanceof Error ? err.message : 'Unknown Meta API error';
+      console.error(
+        '[embedded-signup] phone number /register failed:',
+        registrationError
+      );
+      await supabase
+        .from('whatsapp_config')
+        .update({ last_registration_error: registrationError })
+        .eq('account_id', accountId);
+    }
 
     // ── Make the connection permanent ────────────────────────
     //
@@ -497,8 +606,15 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       connection_mode: connectionMode,
+      // Surfaced so support can see that Meta overrode our inference rather
+      // than having to reconstruct it from server logs.
+      connection_mode_corrected: reconciled.corrected,
       token_permanent: tokenPermanent,
       sync_requested: syncRequested,
+      // Surfaced so the client can tell "connected and live" from
+      // "connected but cannot send yet", which used to look identical.
+      registered,
+      registration_error: registrationError,
       phone_info: phoneInfo,
       waba_id: wabaId,
       phone_number_id: phoneNumberId,

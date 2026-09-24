@@ -31,6 +31,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import {
+  ACCOUNT_ACTIVITY_LABEL,
+  accountActivityTooltip,
+  deriveAccountActivity,
+} from '@/lib/super-admin/account-status';
 
 export default function SuperAdminAccountsPage() {
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
@@ -273,19 +278,38 @@ export default function SuperAdminAccountsPage() {
                           <div>
                             <div className="flex items-center gap-2 text-slate-900">
                               {acc.account_name}
+                              {/* Banned is shown INSTEAD of activity here to
+                                  keep the row narrow; the deep-dive header
+                                  shows both. Activity comes from the shared
+                                  helper so this badge and that header can
+                                  never disagree again. */}
                               {acc.is_banned ? (
-                                <span className="rounded border border-red-500/30 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-red-600 uppercase">
+                                <span
+                                  className="rounded border border-red-500/30 bg-red-500/20 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-red-600 uppercase"
+                                  title="Banned by a super admin — no access, regardless of activity."
+                                >
                                   Banned
                                 </span>
-                              ) : acc.whatsapp_status === 'connected' ||
-                                acc.messages_30d > 0 ? (
-                                <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-emerald-700 uppercase">
-                                  Active
-                                </span>
                               ) : (
-                                <span className="rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-slate-500 uppercase">
-                                  Inactive
-                                </span>
+                                (() => {
+                                  const input = {
+                                    whatsappStatus: acc.whatsapp_status,
+                                    messages30d: acc.messages_30d,
+                                  };
+                                  const activity = deriveAccountActivity(input);
+                                  return (
+                                    <span
+                                      className={
+                                        activity === 'active'
+                                          ? 'rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-emerald-700 uppercase'
+                                          : 'rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-slate-500 uppercase'
+                                      }
+                                      title={accountActivityTooltip(input)}
+                                    >
+                                      {ACCOUNT_ACTIVITY_LABEL[activity]}
+                                    </span>
+                                  );
+                                })()
                               )}
                             </div>
                             <div className="text-xs text-slate-500">

@@ -1,0 +1,8 @@
+# clasp pushes everything under rootDir unless told otherwise, and it
+# rejects any .json other than appsscript.json. Deny-all, then re-allow
+# exactly the three things that belong in the Apps Script project.
+**/**
+
+!appsscript.json
+!src/**/*.js
+!ui/**/*.html

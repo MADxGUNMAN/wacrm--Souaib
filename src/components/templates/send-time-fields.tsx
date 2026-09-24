@@ -18,6 +18,7 @@
 import { useEffect, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { DateTimePickerField } from '@/components/ui/datetime-picker-field';
 import { MediaUploadField } from '@/components/media/media-upload-field';
 import {
   Clock,
@@ -88,11 +89,11 @@ export function OfferExpiryField({
         <Label className="text-popover-foreground text-xs">
           Offer expires at
         </Label>
-        <Input
-          type="datetime-local"
+        <DateTimePickerField
           value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="border-border bg-muted text-foreground"
+          onChange={onChange}
+          placeholder="Pick offer expiration date & time"
+          className="border-border bg-card text-foreground"
         />
         <p className="text-muted-foreground text-[10px]">
           {offer.hasExpiration

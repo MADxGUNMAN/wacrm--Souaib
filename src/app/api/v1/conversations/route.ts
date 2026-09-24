@@ -8,6 +8,7 @@
 
 import { requireApiKey } from '@/lib/auth/api-context';
 import { okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { isInvalidTextRepresentation } from '@/lib/api/v1/db-errors';
 import {
   parseListParams,
   keysetFilter,
@@ -45,6 +46,13 @@ export async function GET(request: Request) {
     if (kf) query = query.or(kf);
 
     const { data, error } = await query;
+    // `contact_id` is the only uuid-typed filter here (`status` is text
+    // and `cursor` is server-minted), so a failed cast can only be that
+    // parameter. Name it instead of returning a 500 the caller can't act
+    // on.
+    if (isInvalidTextRepresentation(error)) {
+      return fail('bad_request', "'contact_id' must be a valid UUID", 400);
+    }
     if (error) {
       console.error('[api/v1/conversations] list error:', error);
       return fail('internal', 'Failed to list conversations', 500);

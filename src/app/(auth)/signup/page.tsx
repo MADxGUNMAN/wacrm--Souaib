@@ -7,6 +7,7 @@ import { useBranding } from '@/hooks/use-branding';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PhoneInput } from '@/components/ui/phone-input';
 import { EMAIL_INVALID_MESSAGE, isValidEmail } from '@/lib/validation/email';
 import {
   Eye,
@@ -33,6 +34,11 @@ function SignupPageInner() {
   const { logoUrl, faviconUrl: iconUrl, siteName } = useBranding();
 
   const [fullName, setFullName] = useState('');
+  // Full E.164 (e.g. +919876543210) as emitted by PhoneInput, plus the
+  // component's own per-country validity verdict. Both are needed: the
+  // string is what we submit, the flag is what gates the submit.
+  const [phone, setPhone] = useState('');
+  const [isPhoneValid, setIsPhoneValid] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -52,6 +58,14 @@ function SignupPageInner() {
     // confirmation link can ever reach.
     if (!isValidEmail(email)) {
       setError(EMAIL_INVALID_MESSAGE);
+      return;
+    }
+
+    // PhoneInput shows its own inline, country-specific message (e.g.
+    // "must be exactly 10 digits"). This guard only has to stop the
+    // submit; repeating the detail here would contradict it.
+    if (!isPhoneValid) {
+      setError('Please enter a valid phone number');
       return;
     }
 
@@ -75,6 +89,7 @@ function SignupPageInner() {
           email,
           password,
           fullName,
+          phone,
           inviteToken: inviteToken || undefined,
         }),
       });
@@ -315,6 +330,47 @@ function SignupPageInner() {
                   autoComplete="name"
                   className="auth-input h-11 rounded-xl border-slate-200 bg-white px-3.5 text-sm text-slate-900 shadow-2xs transition-all placeholder:text-slate-400 hover:border-slate-300 focus:border-[#25D366] focus:ring-4 focus:ring-[#25D366]/15"
                 />
+              </div>
+
+              {/* Phone number — required, validated per country */}
+              <div className="flex flex-col gap-1.5">
+                <Label
+                  htmlFor="phone"
+                  className="text-sm font-medium text-slate-700"
+                >
+                  Phone Number <span className="text-red-500">*</span>
+                </Label>
+                {/* PhoneInput is built for the themed app shell: it styles
+                    itself from the `--muted` / `--border` / `--foreground`
+                    CSS variables, which default to the DARK palette
+                    (globals.css sets the dark values on `:root`). This page
+                    is hard-coded light, so the control would render dark on
+                    a white card. `data-mode="light"` re-declares those
+                    variables for this subtree only — the same mechanism the
+                    theme switcher uses — instead of forking the shared
+                    component, which the contacts and broadcast screens also
+                    depend on.
+
+                    The arbitrary selectors only fix GEOMETRY (the control
+                    is h-9 by default; every field on this form is h-11 with
+                    a pill radius). Colours are left to the variables. */}
+                <div data-mode="light">
+                  <PhoneInput
+                    id="phone"
+                    value={phone}
+                    defaultCountryCode="IN"
+                    required
+                    placeholder="98765 43210"
+                    onChange={(fullE164, valid) => {
+                      setPhone(fullE164);
+                      setIsPhoneValid(valid);
+                      // Clear a stale "valid phone number" banner as soon
+                      // as the field is being corrected.
+                      setError(null);
+                    }}
+                    className="[&>div]:h-11 [&>div]:rounded-xl [&>div]:border-slate-200 [&>div]:bg-white [&>div]:shadow-2xs [&>div>button]:h-11 [&>div>button]:rounded-l-xl [&>div>button]:bg-slate-50 [&>div>input]:h-11"
+                  />
+                </div>
               </div>
 
               {/* Email */}

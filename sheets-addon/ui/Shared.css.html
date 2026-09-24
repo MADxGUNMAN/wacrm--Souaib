@@ -1,0 +1,299 @@
+<style>
+  /*
+    Design tokens lifted from the CRM's own light theme
+    (src/app/globals.css, default `emerald` theme) and written as the
+    nearest hex: the sidebar renders inside an HtmlService iframe with no
+    access to the app's stylesheet, and oklch() buys nothing here.
+
+    Deliberate divergence from the reference product: the layout is
+    copied, the colour is ours. Indigo/purple would look like someone
+    else's tool bolted onto Replai.
+  */
+  :root {
+    --primary: #25d366;
+    --primary-hover: #20b958;
+    --primary-foreground: #ffffff;
+
+    --background: #fbfbfd;
+    --foreground: #2b2c31;
+    --card: #ffffff;
+    --muted: #f4f4f7;
+    --muted-foreground: #6f7280;
+    --border: #e6e6eb;
+
+    --destructive: #d92d20;
+    --destructive-soft: #fef3f2;
+    --warning: #f5a524;
+    --warning-soft: #fffaeb;
+    --success-soft: #ecfdf3;
+
+    --radius: 10px;
+    --radius-sm: 6px;
+
+    /*
+      Two steps only. A sidebar is 300px of mostly-cards, and more than
+      two elevations there stops reading as hierarchy and starts reading
+      as noise.
+    */
+    --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+    --shadow-md:
+      0 2px 6px rgba(16, 24, 40, 0.07), 0 1px 2px rgba(16, 24, 40, 0.04);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family:
+      'Google Sans',
+      Roboto,
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Never remove the focus ring: the sidebar is routinely driven from
+     the keyboard because the mouse is busy in the sheet itself. */
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+
+  h1,
+  h2,
+  h3 {
+    margin: 0;
+    font-weight: 600;
+  }
+
+  p {
+    margin: 0;
+  }
+
+  a {
+    color: var(--primary-hover);
+    text-decoration: none;
+  }
+
+  a:hover,
+  a:focus-visible {
+    text-decoration: underline;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-height: 34px;
+    padding: 0 14px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: var(--muted);
+    color: var(--foreground);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    /* A button label must never be the reason the sidebar scrolls
+       sideways, so it wraps to one line and the box holds its shape. */
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+
+  .btn:hover:not([disabled]) {
+    background: #eceef1;
+  }
+
+  /* A press that visibly registers is most of what makes a control feel
+     solid rather than like a styled div. */
+  .btn:active:not([disabled]) {
+    transform: translateY(0.5px);
+  }
+
+  .btn[disabled] {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  /* Compact variant, for action buttons that share a row with a heading. */
+  .btn--sm {
+    min-height: 28px;
+    padding: 0 10px;
+    font-size: 11.5px;
+  }
+
+  .btn--primary {
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .btn--primary:hover:not([disabled]) {
+    background: var(--primary-hover);
+  }
+
+  .btn--dark {
+    background: #1f2124;
+    color: #ffffff;
+  }
+
+  .btn--dark:hover:not([disabled]) {
+    background: #30333a;
+  }
+
+  .btn--block {
+    width: 100%;
+  }
+
+  .btn--quiet {
+    background: var(--card);
+    border-color: var(--border);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .btn--quiet:hover:not([disabled]) {
+    border-color: #d6d7de;
+    background: var(--muted);
+  }
+
+  .field {
+    display: block;
+  }
+
+  .field__label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .field__control {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .input {
+    width: 100%;
+    min-height: 36px;
+    padding: 7px 38px 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--card);
+    color: var(--foreground);
+    font: inherit;
+    font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px;
+  }
+
+  .input:focus {
+    border-color: var(--primary);
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.18);
+  }
+
+  .input--invalid {
+    border-color: var(--destructive);
+  }
+
+  .input-reveal {
+    position: absolute;
+    right: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+  }
+
+  .input-reveal:hover {
+    background: var(--muted);
+    color: var(--foreground);
+  }
+
+  .notice {
+    display: flex;
+    gap: 8px;
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--muted);
+    font-size: 12px;
+  }
+
+  .notice--error {
+    border-color: #fda29b;
+    background: var(--destructive-soft);
+    color: #912018;
+  }
+
+  .notice--warning {
+    border-color: #fec84b;
+    background: var(--warning-soft);
+    color: #7a4100;
+  }
+
+  .notice--success {
+    border-color: #a6f4c5;
+    background: var(--success-soft);
+    color: #05603a;
+  }
+
+  .muted {
+    color: var(--muted-foreground);
+  }
+
+  .tiny {
+    font-size: 11px;
+  }
+
+  .hidden {
+    display: none !important;
+  }
+
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.45);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* Respect the OS setting — a perpetual spinner is a known trigger. */
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation-duration: 2.5s;
+    }
+  }
+</style>

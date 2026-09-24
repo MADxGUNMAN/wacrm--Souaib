@@ -53,7 +53,7 @@ Do NOT proceed until the tool responds successfully.
 
 Use the `append_rows` MCP tool to append to the sheet. **Never overwrite or insert — always append.**
 
-### Column Format (8 columns: A through H)
+### Column Format (10 columns: A through J)
 
 | Column | Header | What to Write |
 |--------|--------|---------------|
@@ -64,7 +64,9 @@ Use the `append_rows` MCP tool to append to the sheet. **Never overwrite or inse
 | **E** | Priority | One of: `High (Blocker)`, `High`, `Medium`, `Low` — judge by impact and urgency |
 | **F** | Target Files & Modules | Key files touched, separated by `\n`. Use relative paths from src/. If many files, use `src/ (CRM Features & APIs)` as a catch-all. |
 | **G** | Assignee | `Souaib` (always) |
-| **H** | Technical Architecture & Gotchas | The most important technical insight, root cause, or verification result. End with ` (Completed: DD-MM-YYYY \| HH:MM AM/PM)` using current local time. Truncate to ~200 chars if needed, ending with `...` |
+| **H** | Technical Architecture & Gotchas | The most important technical insight, root cause, or verification result. Truncate to ~200 chars if needed, ending with `...` (Do NOT include date/time here anymore). |
+| **I** | Date | `DD-MM-YYYY` using current local date (IST, UTC+5:30, e.g. `10-09-2026`). |
+| **J** | Time | `HH:MM AM/PM` using current local time (IST, UTC+5:30, e.g. `10:45 AM`). |
 
 ### Example append_rows Call
 
@@ -72,7 +74,7 @@ Use the `append_rows` MCP tool to append to the sheet. **Never overwrite or inse
 Tool: append_rows
 Arguments: {
   "spreadsheet_id": "1BkG_eKhAmYR4_4rCbZgrnB8t265D-XxfxYFyniD3Jmc",
-  "range": "'Implementation Roadmap'!A:H",
+  "range": "'Implementation Roadmap'!A:J",
   "values": [
     [
       "TASK-170",
@@ -82,7 +84,9 @@ Arguments: {
       "Low",
       "src/app/globals.css\nsrc/components/tremor/bar-chart.tsx\nsrc/components/dashboard/response-time-chart.tsx",
       "Souaib",
-      "SVG components are naturally focusable by browsers; explicit tabIndex={-1} and pointer-events-none on axis ticks prevent UI artifacts. (Completed: 27-08-2026 | 02:30 PM)"
+      "SVG components are naturally focusable by browsers; explicit tabIndex={-1} and pointer-events-none on axis ticks prevent UI artifacts.",
+      "27-08-2026",
+      "02:30 PM"
     ]
   ],
   "input_option": "RAW"

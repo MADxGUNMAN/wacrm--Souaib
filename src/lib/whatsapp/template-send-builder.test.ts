@@ -74,11 +74,14 @@ describe('buildSendComponents — header', () => {
   });
 
   it('throws when TEXT header has {{1}} but no value was supplied', () => {
+    // Asserts on the REQUEST PATH, not the prose. These messages reach
+    // external API callers, and naming the internal field instead of where
+    // the value goes in the body is what caused a real support ticket.
     expect(() =>
       buildSendComponents(
         row({ header_type: 'text', header_content: 'Hello {{1}}' })
       )
-    ).toThrow(/Header text variable \{\{1\}\}/);
+    ).toThrow(/template\.params\.headerText/);
   });
 
   it('auto-includes IMAGE header from the stored sample URL', () => {
@@ -145,8 +148,24 @@ describe('buildSendComponents — header', () => {
 
   it('throws on media header with no link OR id available', () => {
     expect(() => buildSendComponents(row({ header_type: 'image' }))).toThrow(
-      /requires a media link or id/
+      /template\.params\.headerMediaUrl/
     );
+  });
+
+  it('names the document header format and the request path in the error', () => {
+    // The exact ticket this wording exists for: a caller sent
+    // `headerMediaUrl` at the TOP LEVEL of the request body, where nothing
+    // reads it, and the old message ("pass headerMediaUrl") gave them no
+    // way to discover it belongs under `template.params`.
+    let message = '';
+    try {
+      buildSendComponents(row({ header_type: 'document' }));
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain('document header');
+    expect(message).toContain('template.params.headerMediaUrl');
+    expect(message).toContain('template.params.headerMediaId');
   });
 });
 
@@ -184,7 +203,7 @@ describe('buildSendComponents — buttons', () => {
           buttons: [{ type: 'URL', text: 'Track', url: 'https://x.com/{{1}}' }],
         })
       )
-    ).toThrow(/URL button #1 uses \{\{1\}\}/);
+    ).toThrow(/template\.params\.buttonParams\["0"\]/);
   });
 
   it('uses the correct index when QR buttons precede the URL button', () => {

@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Required. Without it a link opens inside the HtmlService iframe,
+         which Google blocks, and the button appears to do nothing. -->
+    <base target="_top" />
+    <?!= include('ui/Shared.css'); ?>
+
+    <style>
+      body {
+        padding: 0;
+      }
+
+      /* Fixed header + scrolling body. A support screen where the phone
+         number scrolls out of view defeats its own purpose. */
+      .help {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+
+      .help__head {
+        flex: 0 0 auto;
+        padding: 14px 18px;
+        background: var(--primary);
+        color: var(--primary-foreground);
+        text-align: center;
+      }
+
+      .help__title {
+        font-size: 15px;
+        font-weight: 600;
+      }
+
+      .help__subtitle {
+        margin-top: 2px;
+        font-size: 11.5px;
+        opacity: 0.9;
+      }
+
+      .help__body {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        padding: 14px 18px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .help__section {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+
+      .help__heading {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .help__note {
+        font-size: 11px;
+        color: var(--muted-foreground);
+      }
+
+      /* A support option. An <a> not a button: it is a navigation, and
+         middle-click / copy-link should work. */
+      .help__link {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 10px 11px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--card);
+        box-shadow: var(--shadow-sm);
+        color: var(--foreground);
+        text-decoration: none;
+      }
+
+      .help__link:hover,
+      .help__link:focus-visible {
+        border-color: #d6d7de;
+        background: var(--muted);
+        text-decoration: none;
+      }
+
+      .help__link-icon {
+        display: flex;
+        flex: 0 0 auto;
+        color: var(--primary-hover);
+      }
+
+      .help__link-text {
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+
+      .help__link-label {
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .help__link-sub {
+        font-size: 11px;
+        color: var(--muted-foreground);
+      }
+
+      /* Maintenance action: a row with its own explanation and button. */
+      .help__action {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 11px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--card);
+      }
+
+      .help__action-text {
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+
+      .help__action-label {
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .help__action-sub {
+        font-size: 11px;
+        color: var(--muted-foreground);
+      }
+
+      .help__danger {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        padding: 11px 12px;
+        border: 1px solid #fec84b;
+        border-radius: var(--radius-sm);
+        background: var(--warning-soft);
+      }
+
+      .help__danger-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: #7a4100;
+      }
+
+      .help__danger-text {
+        font-size: 11px;
+        color: #7a4100;
+      }
+
+      .btn--danger {
+        align-self: flex-start;
+        background: var(--destructive);
+        color: #ffffff;
+      }
+
+      .btn--danger:hover:not([disabled]) {
+        background: #b42318;
+      }
+
+      .help__textarea {
+        width: 100%;
+        min-height: 74px;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--card);
+        color: var(--foreground);
+        font: inherit;
+        font-size: 12px;
+        resize: vertical;
+      }
+
+      .help__textarea:focus {
+        border-color: var(--primary);
+        outline: none;
+        box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.18);
+      }
+
+      .help__counter {
+        font-size: 10.5px;
+        color: var(--muted-foreground);
+        text-align: right;
+      }
+
+      .help__footer {
+        padding-top: 2px;
+        font-size: 11px;
+        text-align: center;
+      }
+
+      .help__state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        padding: 36px 18px;
+        text-align: center;
+      }
+
+      /* Skeleton rows while loading. Cheaper to read than a spinner
+         because the shape of what is coming is already visible. */
+      .help__skeleton {
+        height: 42px;
+        border-radius: var(--radius-sm);
+        background: linear-gradient(
+          90deg,
+          var(--muted) 25%,
+          #eceef1 50%,
+          var(--muted) 75%
+        );
+        background-size: 200% 100%;
+        animation: help-shimmer 1.3s ease-in-out infinite;
+      }
+
+      @keyframes help-shimmer {
+        0% {
+          background-position: 200% 0;
+        }
+        100% {
+          background-position: -200% 0;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .help__skeleton {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="help">
+      <!-- Header text is filled from the server. It starts EMPTY rather
+           than holding placeholder copy, because a hardcoded string here
+           would flash before the real one and look like a glitch. -->
+      <div class="help__head">
+        <div class="help__title" id="head-title"></div>
+        <div class="help__subtitle hidden" id="head-subtitle"></div>
+      </div>
+
+      <div class="help__body">
+        <!-- Loading -->
+        <div id="state-loading" class="help__section">
+          <div class="help__skeleton"></div>
+          <div class="help__skeleton"></div>
+          <div class="help__skeleton"></div>
+        </div>
+
+        <!-- The single failure state. Deliberately NOT a fallback copy of
+             the dialog: if the content cannot be loaded, the dialog says
+             so and offers a retry. Showing stale or invented support
+             details would be worse than showing none. -->
+        <div id="state-error" class="help__state hidden">
+          <p class="notice notice--error" id="error-message"></p>
+          <button type="button" class="btn btn--quiet" id="retry">
+            Try again
+          </button>
+          <p class="help__note">
+            The maintenance actions below still work without a connection.
+          </p>
+        </div>
+
+        <div id="state-content" class="hidden"></div>
+
+        <!-- Maintenance lives outside #state-content on purpose: removing
+             triggers and disconnecting are local operations that need no
+             network, and they are exactly what someone reaches for when
+             the network is the problem. -->
+        <div id="offline-actions" class="help__section hidden">
+          <div class="help__heading" id="maint-heading"></div>
+          <div class="help__note hidden" id="maint-description"></div>
+
+          <div class="help__action">
+            <div class="help__action-text">
+              <div class="help__action-label" id="reinstall-label"></div>
+              <div class="help__action-sub hidden" id="reinstall-description"></div>
+            </div>
+            <button type="button" class="btn btn--sm btn--quiet" id="reinstall">
+              Run
+            </button>
+          </div>
+
+          <div class="help__action">
+            <div class="help__action-text">
+              <div class="help__action-label" id="disconnect-label"></div>
+              <div
+                class="help__action-sub hidden"
+                id="disconnect-description"
+              ></div>
+            </div>
+            <button type="button" class="btn btn--sm btn--quiet" id="disconnect">
+              Disconnect
+            </button>
+          </div>
+
+          <p class="notice hidden" id="maint-result"></p>
+        </div>
+
+        <!-- Reset + Report render here, after maintenance, so the dialog
+             reads support → resources → maintenance → reset → report.
+             Dedicated containers (rather than appending to the body) mean
+             a Retry empties them instead of appending a second copy of
+             every section. -->
+        <div id="state-tail" class="help__section hidden"></div>
+        <div id="state-footer" class="hidden"></div>
+      </div>
+    </div>
+
+    <script>
+      /*
+        Dialog client logic.
+
+        One rule governs this file: it contains NO user-facing copy. Every
+        label, heading and message is read from the server payload. If a
+        string were hardcoded here it would silently override whatever an
+        operator typed in Super Admin, and nothing in the rendered dialog
+        would show which of the two was winning.
+
+        The only literals are for controls whose wording is not editable
+        (Run, Disconnect, Try again) and for failure messages produced by
+        the add-on itself, which the server by definition cannot supply
+        because it could not be reached.
+      */
+      (function () {
+        'use strict';
+
+        var MESSAGE_MAX = 4000;
+        var content = null;
+
+        function el(id) {
+          return document.getElementById(id);
+        }
+
+        function show(id, visible) {
+          el(id).classList[visible ? 'remove' : 'add']('hidden');
+        }
+
+        /** Set text and hide the element entirely when the text is blank. */
+        function setText(id, value) {
+          var node = el(id);
+          var text = value == null ? '' : String(value);
+          node.textContent = text;
+          node.classList[text.trim() ? 'remove' : 'add']('hidden');
+          return text.trim() !== '';
+        }
+
+        // Inline SVG for the closed icon set. The dialog has no icon
+        // library and cannot load one, which is why the server constrains
+        // `icon` to these six names.
+        var ICONS = {
+          whatsapp:
+            '<path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l4.9-1.4A10 10 0 1 0 12 2Z"/>',
+          mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/>',
+          calendar:
+            '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/>',
+          book: '<path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4Z"/><path d="M18 8h2v12H8"/>',
+          globe:
+            '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z"/>',
+          link: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
+        };
+
+        function iconSvg(name) {
+          var path = ICONS[name] || ICONS.link;
+          return (
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" ' +
+            'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+            'stroke-linejoin="round" aria-hidden="true">' +
+            path +
+            '</svg>'
+          );
+        }
+
+        /* --------------------------------------------------------------
+           Rendering
+           -------------------------------------------------------------- */
+
+        function linkRow(link) {
+          var row = document.createElement('a');
+          row.className = 'help__link';
+          row.setAttribute('href', link.url);
+          // mailto: must stay in the same tab; an http link should not
+          // replace the dialog.
+          if (link.url.indexOf('mailto:') !== 0) {
+            row.setAttribute('target', '_blank');
+            row.setAttribute('rel', 'noopener');
+          }
+
+          var icon = document.createElement('span');
+          icon.className = 'help__link-icon';
+          icon.innerHTML = iconSvg(link.icon);
+
+          var text = document.createElement('span');
+          text.className = 'help__link-text';
+
+          var label = document.createElement('span');
+          label.className = 'help__link-label';
+          // textContent throughout: operator-authored strings are data,
+          // never markup.
+          label.textContent = link.label || link.url;
+          text.appendChild(label);
+
+          if (link.description) {
+            var sub = document.createElement('span');
+            sub.className = 'help__link-sub';
+            sub.textContent = link.description;
+            text.appendChild(document.createElement('br'));
+            text.appendChild(sub);
+          }
+
+          row.appendChild(icon);
+          row.appendChild(text);
+          return row;
+        }
+
+        function linkSection(heading, links) {
+          if (!links || !links.length) return null;
+
+          var section = document.createElement('div');
+          section.className = 'help__section';
+
+          if (heading && heading.trim()) {
+            var head = document.createElement('div');
+            head.className = 'help__heading';
+            head.textContent = heading;
+            section.appendChild(head);
+          }
+
+          links.forEach(function (link) {
+            section.appendChild(linkRow(link));
+          });
+
+          return section;
+        }
+
+        function resetSection(settings) {
+          if (!settings.is_reset_enabled) return null;
+
+          var box = document.createElement('div');
+          box.className = 'help__danger';
+
+          if (settings.reset_heading) {
+            var title = document.createElement('div');
+            title.className = 'help__danger-title';
+            title.textContent = settings.reset_heading;
+            box.appendChild(title);
+          }
+
+          if (settings.reset_description) {
+            var text = document.createElement('div');
+            text.className = 'help__danger-text';
+            text.textContent = settings.reset_description;
+            box.appendChild(text);
+          }
+
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'btn btn--sm btn--danger';
+          button.textContent = settings.reset_button_label || 'Reset';
+          box.appendChild(button);
+
+          var result = document.createElement('p');
+          result.className = 'notice hidden';
+          box.appendChild(result);
+
+          /*
+            Two-step arm/confirm.
+
+            This deletes the user's API key, every rule in the spreadsheet
+            and all its triggers, and rules exist ONLY in the spreadsheet
+            — there is no server copy to restore from. A single click is
+            the wrong gesture for that. The confirm step names the live
+            rule count so the number is in front of the user at the moment
+            they commit, and it disarms itself after 6s so a dialog left
+            open cannot be confirmed by a stray later click.
+          */
+          var armed = false;
+          var disarmTimer = null;
+          var originalLabel = button.textContent;
+
+          function disarm() {
+            armed = false;
+            button.textContent = originalLabel;
+            if (disarmTimer) {
+              clearTimeout(disarmTimer);
+              disarmTimer = null;
+            }
+          }
+
+          button.addEventListener('click', function () {
+            if (!armed) {
+              armed = true;
+              // Read from the outcome, which carries the locally-counted
+              // rule total alongside the server's copy.
+              var count = content && content.ruleCount;
+              var confirmLabel =
+                settings.reset_confirm_label || originalLabel;
+              button.textContent =
+                typeof count === 'number' && count > 0
+                  ? confirmLabel +
+                    ' (' +
+                    count +
+                    (count === 1 ? ' rule' : ' rules') +
+                    ')'
+                  : confirmLabel;
+              disarmTimer = setTimeout(disarm, 6000);
+              return;
+            }
+
+            disarm();
+            button.disabled = true;
+            button.textContent = 'Resetting…';
+
+            google.script.run
+              .withSuccessHandler(function (outcome) {
+                result.className = 'notice notice--success';
+                result.textContent =
+                  outcome.clearedRules > 0
+                    ? 'Done. Removed ' +
+                      outcome.clearedRules +
+                      (outcome.clearedRules === 1 ? ' rule' : ' rules') +
+                      ', your API key and all triggers.'
+                    : 'Done. Removed your API key and all triggers.';
+                button.textContent = originalLabel;
+                // Not re-enabled: there is nothing left to reset, and a
+                // live button would invite a pointless second click.
+              })
+              .withFailureHandler(function (err) {
+                result.className = 'notice notice--error';
+                result.textContent =
+                  'Could not complete the reset: ' +
+                  (err && err.message ? err.message : err);
+                button.disabled = false;
+                button.textContent = originalLabel;
+              })
+              .resetEverything();
+          });
+
+          return box;
+        }
+
+        function reportSection(settings) {
+          if (!settings.is_report_enabled) return null;
+
+          var section = document.createElement('div');
+          section.className = 'help__section';
+
+          if (settings.report_heading) {
+            var head = document.createElement('div');
+            head.className = 'help__heading';
+            head.textContent = settings.report_heading;
+            section.appendChild(head);
+          }
+
+          if (settings.report_intro) {
+            var intro = document.createElement('div');
+            intro.className = 'help__note';
+            intro.textContent = settings.report_intro;
+            section.appendChild(intro);
+          }
+
+          var textarea = document.createElement('textarea');
+          textarea.className = 'help__textarea';
+          textarea.setAttribute('maxlength', String(MESSAGE_MAX));
+          textarea.setAttribute(
+            'aria-label',
+            settings.report_heading || 'Report an issue'
+          );
+          if (settings.report_placeholder) {
+            textarea.setAttribute('placeholder', settings.report_placeholder);
+          }
+          section.appendChild(textarea);
+
+          var counter = document.createElement('div');
+          counter.className = 'help__counter';
+          section.appendChild(counter);
+
+          var submit = document.createElement('button');
+          submit.type = 'button';
+          submit.className = 'btn btn--primary btn--block';
+          submit.textContent = settings.report_button_label || 'Submit';
+          submit.disabled = true;
+          section.appendChild(submit);
+
+          var result = document.createElement('p');
+          result.className = 'notice hidden';
+          section.appendChild(result);
+
+          function sync() {
+            var length = textarea.value.trim().length;
+            submit.disabled = length === 0;
+            // Only count down near the ceiling; a counter on an empty box
+            // reads as a limit rather than a hint.
+            counter.textContent =
+              textarea.value.length > MESSAGE_MAX - 500
+                ? MESSAGE_MAX - textarea.value.length + ' characters left'
+                : '';
+          }
+
+          textarea.addEventListener('input', sync);
+          sync();
+
+          submit.addEventListener('click', function () {
+            var message = textarea.value.trim();
+            if (!message) return;
+
+            submit.disabled = true;
+            textarea.disabled = true;
+            var label = submit.textContent;
+            submit.textContent = 'Sending…';
+            result.classList.add('hidden');
+
+            google.script.run
+              .withSuccessHandler(function (outcome) {
+                submit.textContent = label;
+
+                if (!outcome.ok) {
+                  result.className = 'notice notice--error';
+                  result.textContent = outcome.message;
+                  textarea.disabled = false;
+                  submit.disabled = false;
+                  return;
+                }
+
+                // Success wording is operator-authored; the server does
+                // not echo it back, so it comes from the content already
+                // loaded.
+                result.className = 'notice notice--success';
+                result.textContent = settings.report_success_message;
+                textarea.value = '';
+                // Left disabled: the report is in. Re-enabling invites an
+                // accidental duplicate of something already filed.
+              })
+              .withFailureHandler(function (err) {
+                submit.textContent = label;
+                result.className = 'notice notice--error';
+                result.textContent =
+                  'Could not submit the report: ' +
+                  (err && err.message ? err.message : err);
+                textarea.disabled = false;
+                submit.disabled = false;
+              })
+              .submitIssueReport(message);
+          });
+
+          return section;
+        }
+
+        function render(outcome) {
+          content = outcome;
+          var payload = outcome.content;
+          var settings = payload.settings;
+
+          // Emptied first, so a Retry after a successful render replaces
+          // the sections instead of stacking a second set beneath them.
+          var host = el('state-content');
+          var tail = el('state-tail');
+          var footerHost = el('state-footer');
+          host.textContent = '';
+          tail.textContent = '';
+          footerHost.textContent = '';
+
+          setText('head-title', settings.dialog_title);
+          setText('head-subtitle', settings.dialog_subtitle);
+
+          [
+            linkSection(settings.support_heading, payload.support),
+            linkSection(settings.resources_heading, payload.resources),
+          ].forEach(function (node) {
+            if (node) host.appendChild(node);
+          });
+
+          // Maintenance copy fills the always-present block above the tail.
+          setText('maint-heading', settings.maintenance_heading);
+          setText('maint-description', settings.maintenance_description);
+          setText('reinstall-label', settings.reinstall_label);
+          setText('reinstall-description', settings.reinstall_description);
+          setText('disconnect-label', settings.disconnect_label);
+          setText('disconnect-description', settings.disconnect_description);
+
+          [resetSection(settings), reportSection(settings)].forEach(
+            function (node) {
+              if (node) tail.appendChild(node);
+            }
+          );
+
+          if (settings.footer_text) {
+            var footer = document.createElement('p');
+            footer.className = 'help__footer';
+            if (settings.footer_url) {
+              var anchor = document.createElement('a');
+              anchor.setAttribute('href', settings.footer_url);
+              anchor.setAttribute('target', '_blank');
+              anchor.setAttribute('rel', 'noopener');
+              anchor.textContent = settings.footer_text;
+              footer.appendChild(anchor);
+            } else {
+              footer.textContent = settings.footer_text;
+            }
+            footerHost.appendChild(footer);
+          }
+
+          show('state-loading', false);
+          show('state-error', false);
+          show('state-content', true);
+          show('offline-actions', true);
+          show('state-tail', tail.childNodes.length > 0);
+          show('state-footer', footerHost.childNodes.length > 0);
+        }
+
+        function fail(message) {
+          show('state-loading', false);
+          show('state-content', false);
+          // Reset and Report both need server-supplied copy, so they stay
+          // hidden rather than rendering unlabelled controls.
+          show('state-tail', false);
+          show('state-footer', false);
+          show('state-error', true);
+          el('error-message').textContent = message;
+
+          // The header has no copy yet, so give it the one label that is
+          // not operator-editable: the menu item the user just clicked.
+          if (!el('head-title').textContent) {
+            el('head-title').textContent = 'Help & Support';
+          }
+
+          // Maintenance still works offline, and the labels came from the
+          // server we could not reach — so name the buttons plainly.
+          if (!el('reinstall-label').textContent) {
+            setText('reinstall-label', 'Reinstall automatic triggers');
+          }
+          if (!el('disconnect-label').textContent) {
+            setText('disconnect-label', 'Disconnect this account');
+          }
+          show('offline-actions', true);
+        }
+
+        /* --------------------------------------------------------------
+           Maintenance actions (no network required)
+           -------------------------------------------------------------- */
+
+        function maintResult(kind, message) {
+          var box = el('maint-result');
+          box.className = 'notice notice--' + kind;
+          box.textContent = message;
+          box.classList.remove('hidden');
+        }
+
+        el('reinstall').addEventListener('click', function () {
+          var button = this;
+          button.disabled = true;
+          var label = button.textContent;
+          button.textContent = 'Working…';
+
+          google.script.run
+            .withSuccessHandler(function (outcome) {
+              button.disabled = false;
+              button.textContent = label;
+              maintResult(outcome.ok ? 'success' : 'error', outcome.message);
+            })
+            .withFailureHandler(function (err) {
+              button.disabled = false;
+              button.textContent = label;
+              maintResult(
+                'error',
+                'Could not reinstall the triggers: ' +
+                  (err && err.message ? err.message : err)
+              );
+            })
+            .reinstallTriggers();
+        });
+
+        /* Two-step, matching the sidebar's own Disconnect: the API key is
+           shown once by Replai and cannot be recovered after this. */
+        (function () {
+          var button = el('disconnect');
+          var armed = false;
+          var timer = null;
+          var original = button.textContent;
+
+          button.addEventListener('click', function () {
+            if (!armed) {
+              armed = true;
+              button.textContent = 'Confirm?';
+              timer = setTimeout(function () {
+                armed = false;
+                button.textContent = original;
+              }, 6000);
+              return;
+            }
+
+            armed = false;
+            if (timer) clearTimeout(timer);
+            button.disabled = true;
+
+            google.script.run
+              .withSuccessHandler(function () {
+                button.textContent = original;
+                maintResult(
+                  'success',
+                  'Disconnected. Your rules are still saved in this spreadsheet.'
+                );
+              })
+              .withFailureHandler(function (err) {
+                button.disabled = false;
+                button.textContent = original;
+                maintResult(
+                  'error',
+                  'Could not disconnect: ' +
+                    (err && err.message ? err.message : err)
+                );
+              })
+              .disconnectAccount();
+          });
+        })();
+
+        /* --------------------------------------------------------------
+           Boot
+           -------------------------------------------------------------- */
+
+        function load() {
+          show('state-loading', true);
+          show('state-error', false);
+          show('state-content', false);
+          show('state-tail', false);
+          show('state-footer', false);
+
+          google.script.run
+            .withSuccessHandler(function (outcome) {
+              if (!outcome.ok) {
+                fail(outcome.message);
+                return;
+              }
+              render(outcome);
+            })
+            .withFailureHandler(function (err) {
+              fail(
+                'Could not load support content: ' +
+                  (err && err.message ? err.message : err)
+              );
+            })
+            .getHelpContent();
+        }
+
+        el('retry').addEventListener('click', load);
+        load();
+      })();
+    </script>
+  </body>
+</html>

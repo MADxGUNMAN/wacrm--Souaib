@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/dialog';
 import { DatePickerField } from '@/components/ui/date-picker-field';
 import { Input } from '@/components/ui/input';
+import { PhoneDisplay } from '@/components/ui/phone-display';
 import {
   Select,
   SelectContent,
@@ -295,12 +296,25 @@ export function SubscribersPanel() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <p
-                        className="max-w-[170px] truncate text-sm text-slate-700"
-                        title={row.ownerName ?? undefined}
-                      >
-                        {row.ownerName ?? '—'}
-                      </p>
+                      {/* The phone sits where the owner NAME used to.
+                          Workspaces are named after their owner at signup
+                          (bootstrap_user_account defaults the account name
+                          to the full name), so this column repeated the
+                          Workspace column on almost every row and told the
+                          operator nothing new. The number is the one piece
+                          of contact detail that was not reachable from any
+                          screen.
+
+                          Tabular figures so the numbers align down the
+                          column and a wrong digit is easy to spot. */}
+                      <div className="max-w-[190px]">
+                        <PhoneDisplay
+                          phone={row.ownerPhone}
+                          copyable
+                          className="text-sm"
+                          emptyPlaceholder="— no phone on file"
+                        />
+                      </div>
                       {/* Emails truncate at the DOMAIN, which is precisely
                           the part that distinguishes two similar addresses.
                           A mistyped "@gamil.com" next to the real

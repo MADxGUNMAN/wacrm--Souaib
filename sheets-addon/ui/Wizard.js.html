@@ -1,0 +1,1165 @@
+<script>
+  /*
+    The two-step rule wizard.
+
+    Step 1 decides WHEN a rule fires (sheet, trigger, conditions), step 2
+    decides WHAT it sends (campaign, phone column, variable mapping,
+    media). Splitting it that way is the reference product's shape and it
+    survives a 300px column, which a single long form does not.
+
+    On validation duplication: step 1 is checked here for instant
+    feedback, and the server re-validates everything in
+    ReplaiRuleSchema.validate before anything is stored. The server is
+    the authority — this copy only decides whether "Next step" is
+    allowed, so the two drifting apart can delay a message but never
+    store a broken rule.
+  */
+  var ReplaiWizard = (function () {
+    'use strict';
+
+    var el = ReplaiUI.el;
+    var toggle = ReplaiUI.toggle;
+
+    var ctx = null; // sheet names, trigger types, operators, media types
+    var draft = null;
+    var columns = []; // headers of draft.sheetName
+    var campaigns = [];
+    var detail = null; // selected campaign's template info
+    var step = 1;
+    var editing = false;
+
+    var ERROR_STEP = {
+      name: 1,
+      sheetName: 1,
+      triggerType: 1,
+      conditions: 1,
+      conditionsMissing: 1,
+      campaign: 2,
+      phoneColumn: 2,
+      countryCode: 2,
+      variables: 2,
+      media: 2,
+    };
+
+    function blankDraft() {
+      return {
+        id: '',
+        name: '',
+        enabled: true,
+        sheetName: '',
+        triggerType: '',
+        conditions: [],
+        campaign: {
+          id: '',
+          name: '',
+          templateName: '',
+          templateLanguage: '',
+          variableCount: 0,
+          mediaRequired: false,
+        },
+        // Only used by Time-Based Reminder. Filled from the server's
+        // defaultSchedule once context loads, so a brand-new rule starts
+        // at the document's existing reminder hour rather than 09:00.
+        schedule: {
+          frequency: 'daily',
+          hour: 9,
+          minute: 0,
+          dayOfWeek: 1,
+          dayOfMonth: 1,
+        },
+        phoneColumn: '',
+        nameColumn: '',
+        countryCode: '',
+        variables: [],
+        media: { type: 'none', source: 'url', column: '', url: '' },
+      };
+    }
+
+    // ---- small DOM helpers -------------------------------------------
+
+    function option(value, label) {
+      var node = document.createElement('option');
+      node.value = value;
+      node.textContent = label;
+      return node;
+    }
+
+    function fillSelect(select, items, placeholder, selected) {
+      select.textContent = '';
+      if (placeholder !== null) select.appendChild(option('', placeholder));
+      items.forEach(function (item) {
+        select.appendChild(option(item.value, item.label));
+      });
+      select.value = selected || '';
+    }
+
+    function columnOptions() {
+      return columns.map(function (column) {
+        return {
+          value: column.name,
+          label: column.name + ' (' + column.letter + ')',
+        };
+      });
+    }
+
+    function setError(field, text) {
+      var node = el('err-' + field);
+      if (!node) return;
+      node.textContent = text || '';
+      toggle(node, !text);
+    }
+
+    function clearErrors() {
+      [
+        'name',
+        'sheetName',
+        'triggerType',
+        'conditionsMissing',
+        'schedule',
+        'campaign',
+        'phoneColumn',
+        'countryCode',
+        'variables',
+        'media',
+      ].forEach(function (field) {
+        setError(field, '');
+      });
+      toggle(el('wiz-error'), true);
+      var rows = document.querySelectorAll('.cond__error, .var__error');
+      for (var i = 0; i < rows.length; i++) {
+        rows[i].textContent = '';
+        rows[i].classList.add('hidden');
+      }
+    }
+
+    function banner(text) {
+      var node = el('wiz-error');
+      node.textContent = text;
+      toggle(node, !text);
+    }
+
+    function operatorMeta(id) {
+      for (var i = 0; i < ctx.operators.length; i++) {
+        if (ctx.operators[i].id === id) return ctx.operators[i];
+      }
+      return null;
+    }
+
+    // ---- step 1 ------------------------------------------------------
+
+    function conditionRow(condition, index) {
+      var row = document.createElement('div');
+      row.className = 'cond';
+
+      var head = document.createElement('div');
+      head.className = 'cond__head';
+
+      var label = document.createElement('span');
+      label.className = 'cond__index';
+      label.textContent = 'Condition ' + (index + 1);
+      head.appendChild(label);
+
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'icon-btn icon-btn--danger';
+      remove.setAttribute('aria-label', 'Remove condition ' + (index + 1));
+      remove.setAttribute('title', 'Remove condition');
+      remove.textContent = '✕';
+      remove.addEventListener('click', function () {
+        draft.conditions.splice(index, 1);
+        renderConditions();
+      });
+      head.appendChild(remove);
+      row.appendChild(head);
+
+      // column
+      var columnField = document.createElement('div');
+      columnField.className = 'cond__field';
+      var columnSelect = document.createElement('select');
+      columnSelect.className = 'select';
+      columnSelect.setAttribute(
+        'aria-label',
+        'Column for condition ' + (index + 1)
+      );
+      fillSelect(
+        columnSelect,
+        columnOptions(),
+        'Select column…',
+        condition.column
+      );
+      columnSelect.addEventListener('change', function () {
+        condition.column = this.value;
+      });
+      columnField.appendChild(columnSelect);
+      row.appendChild(columnField);
+
+      // operator, grouped exactly as the reference dropdown is
+      var operatorField = document.createElement('div');
+      operatorField.className = 'cond__field';
+      var operatorSelect = document.createElement('select');
+      operatorSelect.className = 'select';
+      operatorSelect.setAttribute('aria-label', 'Condition for ' + (index + 1));
+
+      var groups = {
+        Comparison: document.createElement('optgroup'),
+        'Date-aware': document.createElement('optgroup'),
+      };
+      groups.Comparison.label = 'Comparison';
+      groups['Date-aware'].label = 'Date-aware';
+      ctx.operators.forEach(function (operator) {
+        var target = operator.isDate ? groups['Date-aware'] : groups.Comparison;
+        target.appendChild(option(operator.id, operator.label));
+      });
+      operatorSelect.appendChild(groups.Comparison);
+      operatorSelect.appendChild(groups['Date-aware']);
+      operatorSelect.value = condition.operator || 'equals';
+      condition.operator = operatorSelect.value;
+      operatorField.appendChild(operatorSelect);
+      row.appendChild(operatorField);
+
+      // value — shape depends entirely on the operator
+      var valueField = document.createElement('div');
+      valueField.className = 'cond__field';
+      var valueInput = document.createElement('input');
+      valueInput.className = 'text';
+      valueInput.value = condition.value || '';
+      valueInput.addEventListener('input', function () {
+        condition.value = this.value;
+      });
+      valueField.appendChild(valueInput);
+      row.appendChild(valueField);
+
+      function applyOperator() {
+        var meta = operatorMeta(condition.operator);
+        var kind = meta ? meta.valueKind : 'text';
+        // 'Is empty' has nothing to compare against, and a day count is
+        // not free text — showing the wrong control is how a rule ends up
+        // with a value that is silently ignored.
+        toggle(valueField, kind === 'none');
+        if (kind === 'days') {
+          valueInput.type = 'number';
+          valueInput.min = '0';
+          valueInput.step = '1';
+          valueInput.placeholder = 'Number of days';
+          valueInput.setAttribute('aria-label', 'Number of days');
+        } else {
+          valueInput.type = 'text';
+          valueInput.removeAttribute('min');
+          valueInput.removeAttribute('step');
+          valueInput.placeholder = kind === 'number' ? 'e.g. 500' : 'Value';
+          valueInput.setAttribute('aria-label', 'Value to compare against');
+        }
+        if (kind === 'none') {
+          condition.value = '';
+          valueInput.value = '';
+        }
+      }
+
+      operatorSelect.addEventListener('change', function () {
+        condition.operator = this.value;
+        applyOperator();
+      });
+      applyOperator();
+
+      var error = document.createElement('p');
+      error.className = 'row__error cond__error hidden';
+      row.appendChild(error);
+
+      return row;
+    }
+
+    function renderConditions() {
+      var host = el('conditions');
+      host.textContent = '';
+
+      if (!columns.length) {
+        var hint = document.createElement('p');
+        hint.className = 'row__hint';
+        hint.textContent = draft.sheetName
+          ? 'No column names found in row 1 of that sheet.'
+          : 'Choose a target sheet first — conditions work on its columns.';
+        host.appendChild(hint);
+        return;
+      }
+
+      if (!draft.conditions.length) {
+        var empty = document.createElement('p');
+        empty.className = 'row__hint';
+        empty.textContent =
+          draft.triggerType === 'new_row'
+            ? 'No conditions: every new row will send.'
+            : 'Add a condition to decide which rows send.';
+        host.appendChild(empty);
+        return;
+      }
+
+      draft.conditions.forEach(function (condition, index) {
+        host.appendChild(conditionRow(condition, index));
+      });
+    }
+
+    function renderTriggerHint() {
+      var hint = '';
+      for (var i = 0; i < ctx.triggerTypes.length; i++) {
+        if (ctx.triggerTypes[i].id === draft.triggerType) {
+          hint = ctx.triggerTypes[i].hint;
+        }
+      }
+      ReplaiUI.setText('trigger-hint', hint);
+    }
+
+    function pad(n) {
+      return (n < 10 ? '0' : '') + n;
+    }
+
+    /** True when the selected trigger carries a schedule. */
+    function usesSchedule() {
+      for (var i = 0; i < ctx.triggerTypes.length; i++) {
+        if (ctx.triggerTypes[i].id === draft.triggerType) {
+          return ctx.triggerTypes[i].usesSchedule === true;
+        }
+      }
+      return false;
+    }
+
+    /**
+     * The Time configuration group.
+     *
+     * Rebuilt rather than merely re-shown, so switching trigger type can
+     * never leave a weekday select populated from a previous render.
+     */
+    function renderSchedule() {
+      var show = usesSchedule();
+      toggle(el('schedule-group'), !show);
+      if (!show) return;
+
+      var plan = draft.schedule;
+
+      fillSelect(
+        el('rule-frequency'),
+        ctx.frequencies.map(function (item) {
+          return { value: item.id, label: item.label };
+        }),
+        null,
+        plan.frequency
+      );
+
+      // 'HH:MM' is exactly what <input type="time"> wants, whatever format
+      // it chooses to display.
+      el('rule-time').value =
+        pad(plan.hour) + ':' + pad(plan.minute === undefined ? 0 : plan.minute);
+
+      fillSelect(
+        el('rule-dow'),
+        ctx.daysOfWeek.map(function (day) {
+          return { value: String(day.id), label: day.label };
+        }),
+        null,
+        String(plan.dayOfWeek)
+      );
+
+      el('rule-dom').value = plan.dayOfMonth;
+
+      // Only the control the chosen frequency actually uses. A visible
+      // "Day of week" on a Daily rule reads as something that matters.
+      toggle(el('dow-row'), plan.frequency !== 'weekly');
+      toggle(el('dom-row'), plan.frequency !== 'monthly');
+
+      var frequencyHint = '';
+      for (var f = 0; f < ctx.frequencies.length; f++) {
+        if (ctx.frequencies[f].id === plan.frequency) {
+          frequencyHint = ctx.frequencies[f].hint;
+        }
+      }
+      ReplaiUI.setText('frequency-hint', frequencyHint);
+
+      // Says what it actually does. Google will not let an add-on check
+      // more often than hourly, and it picks the minute within the hour
+      // itself — so promising an exact time would be wrong on every run.
+      ReplaiUI.setText(
+        'time-hint',
+        'Runs within that hour, in the spreadsheet timezone' +
+          (ctx.timezone ? ' (' + ctx.timezone + ')' : '') +
+          '. Google does not allow an add-on to check more often than once' +
+          ' an hour, so an exact minute cannot be guaranteed.'
+      );
+    }
+
+    function loadColumns(then) {
+      if (!draft.sheetName) {
+        columns = [];
+        if (then) then();
+        return;
+      }
+      google.script.run
+        .withSuccessHandler(function (result) {
+          columns = result.headers || [];
+          var info = '';
+          if (result.duplicates && result.duplicates.length) {
+            // Columns are matched by name, so two columns sharing one is
+            // genuinely ambiguous. Say which, rather than picking silently.
+            info =
+              'Duplicate column name(s): ' +
+              result.duplicates.join(', ') +
+              '. Only the first is available.';
+          } else if (result.ok) {
+            info = result.rowCount + ' data row(s) in this sheet.';
+          } else {
+            info = result.message;
+          }
+          ReplaiUI.setText('sheet-info', info);
+          toggle(el('sheet-info'), !info);
+          if (then) then();
+        })
+        .withFailureHandler(function (err) {
+          columns = [];
+          ReplaiUI.setText('sheet-info', ReplaiUI.message(err));
+          toggle(el('sheet-info'), false);
+          if (then) then();
+        })
+        .getSheetColumns(draft.sheetName);
+    }
+
+    // ---- step 2 ------------------------------------------------------
+
+    function renderColumnPickers() {
+      fillSelect(
+        el('rule-phone'),
+        columnOptions(),
+        'Select column…',
+        draft.phoneColumn
+      );
+      fillSelect(
+        el('rule-contact-name'),
+        columnOptions(),
+        'None',
+        draft.nameColumn
+      );
+      fillSelect(
+        el('rule-media-column'),
+        columnOptions(),
+        'Select column…',
+        draft.media.column
+      );
+      el('rule-country').value = draft.countryCode || '';
+    }
+
+    function variableRow(index) {
+      var variable = draft.variables[index];
+
+      var row = document.createElement('div');
+      row.className = 'var';
+
+      var head = document.createElement('div');
+      head.className = 'var__head';
+
+      var token = document.createElement('span');
+      token.className = 'var__token';
+      // A NAMED template labels its placeholders; a positional one does
+      // not, so fall back to the {{n}} the template actually contains.
+      var names = (detail && detail.variableNames) || [];
+      token.textContent = names[index]
+        ? names[index]
+        : '{{' + (index + 1) + '}}';
+      head.appendChild(token);
+
+      var seg = document.createElement('div');
+      seg.className = 'seg';
+      seg.setAttribute('role', 'group');
+      seg.setAttribute('aria-label', 'Source for variable ' + (index + 1));
+
+      var columnBtn = document.createElement('button');
+      columnBtn.type = 'button';
+      columnBtn.className = 'seg__btn';
+      columnBtn.textContent = 'Column';
+
+      var fixedBtn = document.createElement('button');
+      fixedBtn.type = 'button';
+      fixedBtn.className = 'seg__btn';
+      fixedBtn.textContent = 'Fixed';
+
+      seg.appendChild(columnBtn);
+      seg.appendChild(fixedBtn);
+      head.appendChild(seg);
+      row.appendChild(head);
+
+      var columnSelect = document.createElement('select');
+      columnSelect.className = 'select';
+      columnSelect.setAttribute(
+        'aria-label',
+        'Column for variable ' + (index + 1)
+      );
+      fillSelect(
+        columnSelect,
+        columnOptions(),
+        'Select column…',
+        variable.column
+      );
+      columnSelect.addEventListener('change', function () {
+        variable.column = this.value;
+      });
+      row.appendChild(columnSelect);
+
+      var fixedInput = document.createElement('input');
+      fixedInput.className = 'text';
+      fixedInput.type = 'text';
+      fixedInput.placeholder = 'Same value for every row';
+      fixedInput.value = variable.value || '';
+      fixedInput.addEventListener('input', function () {
+        variable.value = this.value;
+      });
+      row.appendChild(fixedInput);
+
+      var error = document.createElement('p');
+      error.className = 'row__error var__error hidden';
+      row.appendChild(error);
+
+      function applySource() {
+        var isColumn = variable.source === 'column';
+        columnBtn.setAttribute('aria-pressed', String(isColumn));
+        fixedBtn.setAttribute('aria-pressed', String(!isColumn));
+        toggle(columnSelect, !isColumn);
+        toggle(fixedInput, isColumn);
+      }
+
+      columnBtn.addEventListener('click', function () {
+        variable.source = 'column';
+        variable.value = '';
+        fixedInput.value = '';
+        applySource();
+      });
+
+      fixedBtn.addEventListener('click', function () {
+        // Most templates mix one dynamic part with one constant, and
+        // forcing a column for the constant would mean adding a filler
+        // column to the sheet (plan §8.2).
+        variable.source = 'literal';
+        variable.column = '';
+        columnSelect.value = '';
+        applySource();
+      });
+
+      applySource();
+      return row;
+    }
+
+    function renderVariables() {
+      var count = detail ? detail.variableCount : draft.campaign.variableCount;
+      var host = el('variables');
+      host.textContent = '';
+
+      // Keep whatever the user already mapped when the count is unchanged
+      // (editing a rule), and pad or trim when the template changed.
+      while (draft.variables.length < count) {
+        draft.variables.push({ source: 'column', column: '', value: '' });
+      }
+      if (draft.variables.length > count) draft.variables.length = count;
+
+      if (!draft.campaign.id) {
+        ReplaiUI.setText(
+          'variables-hint',
+          'Pick a campaign first — its template decides how many variables are needed.'
+        );
+        toggle(el('variables-hint'), false);
+        return;
+      }
+
+      if (count === 0) {
+        ReplaiUI.setText(
+          'variables-hint',
+          'This template has no variables — nothing to map.'
+        );
+        toggle(el('variables-hint'), false);
+        return;
+      }
+
+      ReplaiUI.setText(
+        'variables-hint',
+        'Map each placeholder to a column, or to one fixed value.'
+      );
+      toggle(el('variables-hint'), false);
+
+      for (var i = 0; i < count; i++) {
+        host.appendChild(variableRow(i));
+      }
+    }
+
+    function applyMediaVisibility() {
+      var active = draft.media.type !== 'none';
+      toggle(el('media-source-row'), !active);
+      toggle(el('media-url-row'), !(active && draft.media.source === 'url'));
+      toggle(
+        el('media-column-row'),
+        !(active && draft.media.source === 'column')
+      );
+      el('media-src-url').setAttribute(
+        'aria-pressed',
+        String(draft.media.source === 'url')
+      );
+      el('media-src-column').setAttribute(
+        'aria-pressed',
+        String(draft.media.source === 'column')
+      );
+    }
+
+    function renderMedia() {
+      fillSelect(
+        el('rule-media-type'),
+        ctx.mediaTypes.map(function (type) {
+          return { value: type.id, label: type.label };
+        }),
+        null,
+        draft.media.type
+      );
+      el('rule-media-url').value = draft.media.url || '';
+
+      var hint = '';
+      if (detail && detail.media && detail.media.required) {
+        // A template with a media header and no media is rejected by Meta
+        // for every recipient, so this is a requirement, not a nicety.
+        hint =
+          'This template has a ' +
+          String(detail.media.format || 'media').toLowerCase() +
+          ' header, so a file is required.';
+      }
+      ReplaiUI.setText('media-required-hint', hint);
+      toggle(el('media-required-hint'), !hint);
+
+      applyMediaVisibility();
+    }
+
+    function renderCampaignInfo() {
+      var info = '';
+      if (detail) {
+        info =
+          'Template ' +
+          detail.templateName +
+          (detail.templateLanguage
+            ? ' (' + detail.templateLanguage + ')'
+            : '') +
+          ' · ' +
+          detail.variableCount +
+          ' variable(s)';
+      }
+      ReplaiUI.setText('campaign-info', info);
+      toggle(el('campaign-info'), !info);
+
+      var warning = (detail && detail.warning) || '';
+      ReplaiUI.setText('campaign-warning', warning);
+      toggle(el('campaign-warning'), !warning);
+    }
+
+    function loadCampaigns(then) {
+      google.script.run
+        .withSuccessHandler(function (result) {
+          if (!result.ok) {
+            banner(result.message);
+            campaigns = [];
+          } else {
+            campaigns = result.campaigns || [];
+            if (result.truncated) {
+              banner(
+                'Showing the first ' +
+                  campaigns.length +
+                  ' campaigns. Rename the one you need in Replai if it is missing.'
+              );
+            }
+          }
+          fillSelect(
+            el('rule-campaign'),
+            campaigns.map(function (campaign) {
+              return {
+                value: campaign.id,
+                label:
+                  campaign.name +
+                  (campaign.status === 'active' ? '' : ' (paused)'),
+              };
+            }),
+            'Select campaign…',
+            draft.campaign.id
+          );
+          if (then) then();
+        })
+        .withFailureHandler(function (err) {
+          banner(ReplaiUI.message(err));
+          if (then) then();
+        })
+        .listCampaigns();
+    }
+
+    function loadCampaignDetail(campaignId, then) {
+      if (!campaignId) {
+        detail = null;
+        if (then) then();
+        return;
+      }
+      google.script.run
+        .withSuccessHandler(function (result) {
+          if (!result.ok) {
+            detail = null;
+            banner(result.message);
+          } else {
+            detail = result.campaign;
+            draft.campaign = {
+              id: detail.id,
+              name: detail.name,
+              templateName: detail.templateName,
+              templateLanguage: detail.templateLanguage,
+              variableCount: detail.variableCount,
+              mediaRequired: !!(detail.media && detail.media.required),
+            };
+            // Preselect the media type the template actually needs, so
+            // the common case is one fewer decision and cannot be missed.
+            if (draft.campaign.mediaRequired && draft.media.type === 'none') {
+              draft.media.type = mediaTypeForFormat(detail.media.format);
+            }
+          }
+          if (then) then();
+        })
+        .withFailureHandler(function (err) {
+          detail = null;
+          banner(ReplaiUI.message(err));
+          if (then) then();
+        })
+        .getCampaignDetail(campaignId);
+    }
+
+    function mediaTypeForFormat(format) {
+      switch (String(format || '').toUpperCase()) {
+        case 'IMAGE':
+          return 'image';
+        case 'DOCUMENT':
+          return 'document';
+        case 'VIDEO':
+          return 'video';
+        default:
+          return 'none';
+      }
+    }
+
+    // ---- navigation --------------------------------------------------
+
+    function showStep(next) {
+      step = next;
+      toggle(el('wiz-step-1'), step !== 1);
+      toggle(el('wiz-step-2'), step !== 2);
+      el('step-1').setAttribute('aria-current', step === 1 ? 'step' : 'false');
+      el('step-2').setAttribute('aria-current', step === 2 ? 'step' : 'false');
+      window.scrollTo(0, 0);
+    }
+
+    /** Client mirror of the step-1 half of ReplaiRuleSchema.validate. */
+    function step1Problems() {
+      var problems = {};
+      if (!draft.name.trim()) problems.name = 'Give the rule a name.';
+      if (!draft.sheetName) problems.sheetName = 'Choose which sheet to watch.';
+      if (!draft.triggerType) {
+        problems.triggerType = 'Choose when this rule should run.';
+      }
+
+      var trigger = null;
+      for (var t = 0; t < ctx.triggerTypes.length; t++) {
+        if (ctx.triggerTypes[t].id === draft.triggerType) {
+          trigger = ctx.triggerTypes[t];
+        }
+      }
+      if (trigger && trigger.requiresCondition && !draft.conditions.length) {
+        problems.conditionsMissing =
+          'Add at least one condition, otherwise this rule would match every row.';
+      }
+
+      // Mirrors ReplaiSchedule.problem on the server. The day-of-month box
+      // is free text, so this is a real check and not just belt-and-braces.
+      if (trigger && trigger.usesSchedule) {
+        var plan = draft.schedule || {};
+        // A cleared time input reports '' for both parts. Left unchecked it
+        // would silently fall back to 09:00 on save.
+        if (plan.hour === '' || plan.minute === '') {
+          problems.schedule = 'Choose the time of day to check.';
+        }
+        if (plan.frequency === 'monthly') {
+          var dom = String(plan.dayOfMonth === 0 ? '0' : plan.dayOfMonth || '');
+          if (!/^\d+$/.test(dom.trim()) || +dom < 1 || +dom > 31) {
+            problems.schedule = 'Enter a day of the month between 1 and 31.';
+          }
+        }
+      }
+
+      var rows = document.querySelectorAll('.cond');
+      draft.conditions.forEach(function (condition, index) {
+        var meta = operatorMeta(condition.operator);
+        var text = '';
+        if (!condition.column) {
+          text = 'Choose a column.';
+        } else if (!meta) {
+          text = 'Choose a condition.';
+        } else if (
+          meta.valueKind !== 'none' &&
+          !String(condition.value).trim()
+        ) {
+          text =
+            meta.valueKind === 'days'
+              ? 'Enter a number of days.'
+              : 'Enter a value to compare against.';
+        } else if (
+          meta.valueKind === 'days' &&
+          !/^\d+$/.test(condition.value)
+        ) {
+          text = 'Days must be a whole number, 0 or more.';
+        }
+        if (text) {
+          problems['condition' + index] = text;
+          if (rows[index]) {
+            var node = rows[index].querySelector('.cond__error');
+            node.textContent = text;
+            node.classList.remove('hidden');
+          }
+        }
+      });
+
+      return problems;
+    }
+
+    function renderServerErrors(errors) {
+      var jumped = false;
+
+      Object.keys(errors).forEach(function (field) {
+        if (field === 'conditions') {
+          var rows = document.querySelectorAll('.cond');
+          Object.keys(errors.conditions).forEach(function (index) {
+            if (!rows[index]) return;
+            var node = rows[index].querySelector('.cond__error');
+            node.textContent = errors.conditions[index];
+            node.classList.remove('hidden');
+          });
+        } else if (field.indexOf('variable.') === 0) {
+          var varIndex = Number(field.split('.')[1]);
+          var varRows = document.querySelectorAll('.var');
+          if (varRows[varIndex]) {
+            var varNode = varRows[varIndex].querySelector('.var__error');
+            varNode.textContent = errors[field];
+            varNode.classList.remove('hidden');
+          }
+        } else {
+          setError(field, errors[field]);
+        }
+
+        var targetStep = ERROR_STEP[field.split('.')[0]] || 2;
+        if (!jumped && targetStep < step) {
+          showStep(targetStep);
+          jumped = true;
+        }
+      });
+
+      banner('Some details still need fixing.');
+    }
+
+    function save() {
+      clearErrors();
+
+      if (draft.campaign.mediaRequired && draft.media.type === 'none') {
+        setError(
+          'media',
+          'This template needs a file. Choose a media type, or pick a different campaign.'
+        );
+        banner('Some details still need fixing.');
+        return;
+      }
+
+      var button = el('btn-save-rule');
+      button.disabled = true;
+      button.textContent = 'Saving…';
+
+      google.script.run
+        .withSuccessHandler(function (result) {
+          button.disabled = false;
+          button.textContent = editing ? 'Save changes' : 'Create rule';
+          if (result.ok) {
+            ReplaiUI.load();
+            return;
+          }
+          renderServerErrors(result.errors || {});
+        })
+        .withFailureHandler(function (err) {
+          button.disabled = false;
+          button.textContent = editing ? 'Save changes' : 'Create rule';
+          banner('Could not save: ' + ReplaiUI.message(err));
+        })
+        .saveRule(draft);
+    }
+
+    // ---- entry point -------------------------------------------------
+
+    function open(ruleId) {
+      editing = !!ruleId;
+      ReplaiUI.show('view-wizard');
+      showStep(1);
+      clearErrors();
+
+      ReplaiUI.setText('wiz-title', editing ? 'Edit rule' : 'Create new rule');
+      el('btn-save-rule').textContent = editing
+        ? 'Save changes'
+        : 'Create rule';
+
+      var withContext = function () {
+        fillSelect(
+          el('rule-sheet'),
+          ctx.sheetNames.map(function (name) {
+            return { value: name, label: name };
+          }),
+          'Select sheet…',
+          draft.sheetName
+        );
+        fillSelect(
+          el('rule-trigger'),
+          ctx.triggerTypes.map(function (type) {
+            return { value: type.id, label: type.label };
+          }),
+          'Select trigger…',
+          draft.triggerType
+        );
+        el('rule-name').value = draft.name;
+        // A new rule inherits the document's existing reminder hour, so
+        // upgrading does not quietly retime anybody's reminders.
+        if (!editing && ctx.defaultSchedule) {
+          draft.schedule = {
+            frequency: ctx.defaultSchedule.frequency,
+            hour: ctx.defaultSchedule.hour,
+            minute: ctx.defaultSchedule.minute,
+            dayOfWeek: ctx.defaultSchedule.dayOfWeek,
+            dayOfMonth: ctx.defaultSchedule.dayOfMonth,
+          };
+        }
+        renderTriggerHint();
+        renderSchedule();
+        renderMedia();
+        loadColumns(function () {
+          renderConditions();
+          renderColumnPickers();
+        });
+      };
+
+      var withDraft = function () {
+        if (ctx) {
+          withContext();
+          return;
+        }
+        google.script.run
+          .withSuccessHandler(function (result) {
+            ctx = result;
+            withContext();
+          })
+          .withFailureHandler(function (err) {
+            banner('Could not read this spreadsheet: ' + ReplaiUI.message(err));
+          })
+          .getWizardContext();
+      };
+
+      if (editing) {
+        google.script.run
+          .withSuccessHandler(function (rule) {
+            draft = rule ? normaliseLoaded(rule) : blankDraft();
+            withDraft();
+          })
+          .withFailureHandler(function (err) {
+            draft = blankDraft();
+            banner('Could not load that rule: ' + ReplaiUI.message(err));
+            withDraft();
+          })
+          .getRule(ruleId);
+      } else {
+        draft = blankDraft();
+        withDraft();
+      }
+    }
+
+    /** A stored rule predates any field added later; fill the gaps. */
+    function normaliseLoaded(rule) {
+      var base = blankDraft();
+      base.id = rule.id || '';
+      base.name = rule.name || '';
+      base.enabled = rule.enabled !== false;
+      base.sheetName = rule.sheetName || '';
+      base.triggerType = rule.triggerType || '';
+      base.conditions = rule.conditions || [];
+      base.campaign.id = (rule.campaign && rule.campaign.id) || '';
+      base.campaign.name = (rule.campaign && rule.campaign.name) || '';
+      base.campaign.templateName =
+        (rule.campaign && rule.campaign.templateName) || '';
+      base.campaign.templateLanguage =
+        (rule.campaign && rule.campaign.templateLanguage) || '';
+      base.campaign.variableCount =
+        (rule.campaign && rule.campaign.variableCount) || 0;
+      base.campaign.mediaRequired = !!(
+        rule.campaign && rule.campaign.mediaRequired
+      );
+      base.phoneColumn = rule.phoneColumn || '';
+      base.nameColumn = rule.nameColumn || '';
+      base.countryCode = rule.countryCode || '';
+      base.variables = rule.variables || [];
+      base.media = rule.media || base.media;
+      // A rule saved before schedules existed has none. Falling back to
+      // the server's defaultSchedule keeps its original hour rather than
+      // silently rebasing it to 09:00 the first time it is edited.
+      base.schedule =
+        rule.schedule || (ctx && ctx.defaultSchedule) || base.schedule;
+      return base;
+    }
+
+    // ---- bindings ----------------------------------------------------
+
+    el('rule-name').addEventListener('input', function () {
+      draft.name = this.value;
+    });
+
+    el('rule-sheet').addEventListener('change', function () {
+      draft.sheetName = this.value;
+      // Column names belong to a sheet, so every mapping made against the
+      // previous one is now meaningless. Clearing beats leaving a
+      // selection that silently points at a column that is not there.
+      draft.conditions.forEach(function (condition) {
+        condition.column = '';
+      });
+      draft.phoneColumn = '';
+      draft.nameColumn = '';
+      draft.media.column = '';
+      draft.variables.forEach(function (variable) {
+        variable.column = '';
+      });
+      loadColumns(function () {
+        renderConditions();
+        renderColumnPickers();
+        renderVariables();
+      });
+    });
+
+    el('rule-frequency').addEventListener('change', function () {
+      draft.schedule.frequency = this.value;
+      renderSchedule();
+    });
+
+    el('rule-time').addEventListener('change', function () {
+      // Always 24-hour 'HH:MM', even where the control displays AM/PM.
+      // Empty when the field is cleared, which must not become NaN.
+      var bits = String(this.value || '').split(':');
+      draft.schedule.hour = bits.length === 2 ? parseInt(bits[0], 10) : '';
+      draft.schedule.minute = bits.length === 2 ? parseInt(bits[1], 10) : '';
+    });
+
+    el('rule-dow').addEventListener('change', function () {
+      draft.schedule.dayOfWeek = parseInt(this.value, 10);
+    });
+
+    el('rule-dom').addEventListener('input', function () {
+      // Kept as typed rather than coerced here: parseInt('') is NaN, and
+      // writing that into the draft would make an empty box indistinguish-
+      // able from a valid entry when step1Problems runs.
+      draft.schedule.dayOfMonth = this.value;
+    });
+
+    el('rule-trigger').addEventListener('change', function () {
+      draft.triggerType = this.value;
+      renderSchedule();
+      renderTriggerHint();
+      renderConditions();
+    });
+
+    el('btn-add-condition').addEventListener('click', function () {
+      draft.conditions.push({ column: '', operator: 'equals', value: '' });
+      renderConditions();
+    });
+
+    el('btn-next').addEventListener('click', function () {
+      clearErrors();
+      var problems = step1Problems();
+      var fields = Object.keys(problems);
+      if (fields.length) {
+        fields.forEach(function (field) {
+          if (field.indexOf('condition') !== 0)
+            setError(field, problems[field]);
+        });
+        banner('Finish step 1 first.');
+        return;
+      }
+      showStep(2);
+      loadCampaigns(function () {
+        loadCampaignDetail(draft.campaign.id, function () {
+          renderCampaignInfo();
+          renderVariables();
+          renderMedia();
+          renderColumnPickers();
+        });
+      });
+    });
+
+    el('btn-prev').addEventListener('click', function () {
+      clearErrors();
+      showStep(1);
+    });
+
+    el('rule-campaign').addEventListener('change', function () {
+      var previous = draft.campaign.id;
+      draft.campaign.id = this.value;
+      if (!this.value) {
+        detail = null;
+        draft.campaign.variableCount = 0;
+        renderCampaignInfo();
+        renderVariables();
+        return;
+      }
+      // A different template means a different variable list; keeping the
+      // old mappings would map values onto placeholders that moved.
+      if (previous && previous !== this.value) draft.variables = [];
+      loadCampaignDetail(this.value, function () {
+        renderCampaignInfo();
+        renderVariables();
+        renderMedia();
+      });
+    });
+
+    el('rule-phone').addEventListener('change', function () {
+      draft.phoneColumn = this.value;
+    });
+
+    el('rule-contact-name').addEventListener('change', function () {
+      draft.nameColumn = this.value;
+    });
+
+    el('rule-country').addEventListener('input', function () {
+      draft.countryCode = this.value;
+    });
+
+    el('rule-media-type').addEventListener('change', function () {
+      draft.media.type = this.value;
+      applyMediaVisibility();
+    });
+
+    el('media-src-url').addEventListener('click', function () {
+      draft.media.source = 'url';
+      draft.media.column = '';
+      applyMediaVisibility();
+    });
+
+    el('media-src-column').addEventListener('click', function () {
+      draft.media.source = 'column';
+      draft.media.url = '';
+      el('rule-media-url').value = '';
+      applyMediaVisibility();
+    });
+
+    el('rule-media-url').addEventListener('input', function () {
+      draft.media.url = this.value;
+    });
+
+    el('rule-media-column').addEventListener('change', function () {
+      draft.media.column = this.value;
+    });
+
+    el('btn-save-rule').addEventListener('click', save);
+
+    el('wiz-cancel').addEventListener('click', ReplaiUI.load);
+    el('btn-cancel-1').addEventListener('click', ReplaiUI.load);
+
+    return { open: open };
+  })();
+</script>

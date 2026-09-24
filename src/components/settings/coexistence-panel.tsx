@@ -50,6 +50,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { formatPhoneNumber } from '@/lib/phone/countries';
 
 interface HistoryPhase {
   phase: number;
@@ -1065,8 +1066,8 @@ export function ContactReviewDialog({
                       <span className="text-foreground block truncate text-sm font-medium">
                         {c.full_name || c.first_name || c.phone}
                       </span>
-                      <span className="text-muted-foreground block truncate text-xs">
-                        {c.phone}
+                      <span className="text-muted-foreground block truncate font-mono text-xs">
+                        {formatPhoneNumber(c.phone)}
                       </span>
                     </span>
                     {/* Lets an operator skim past numbers they already have

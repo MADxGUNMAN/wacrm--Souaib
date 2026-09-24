@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import type { Contact, Tag, ContactTag, CustomField } from '@/types';
@@ -48,8 +49,14 @@ import {
   Filter,
   Smartphone,
   X,
-  RotateCcw,
+  MessageSquare,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  ArrowLeftRight,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { Pagination } from '@/components/ui/pagination';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { ContactReviewDialog } from '@/components/settings/coexistence-panel';
@@ -60,6 +67,12 @@ import { useCan } from '@/hooks/use-can';
 import { GatedButton } from '@/components/ui/gated-button';
 import { useTranslations } from 'next-intl';
 import { useResizableColumns } from '@/hooks/use-resizable-columns';
+import {
+  CONTACT_SOURCES,
+  getContactSource,
+  type ContactSource,
+} from '@/lib/contacts/contact-source';
+import { PhoneDisplay } from '@/components/ui/phone-display';
 
 const PAGE_SIZE = 25;
 
@@ -69,21 +82,58 @@ interface ContactWithTags extends Contact {
 
 export default function ContactsPage() {
   const t = useTranslations('Contacts.page');
+  const tSource = useTranslations('Contacts.sources');
+  const router = useRouter();
   const supabase = createClient();
   const canEdit = useCan('send-messages');
   const canEditSettings = useCan('edit-settings');
 
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
+  const [openingChatContactId, setOpeningChatContactId] = useState<
+    string | null
+  >(null);
+
+  const openContactChat = async (contact: Contact) => {
+    setOpeningChatContactId(contact.id);
+    try {
+      const res = await fetch(`/api/contacts/${contact.id}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        conversationId?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.conversationId) {
+        throw new Error(data.error || 'Failed to open conversation');
+      }
+      router.push(`/inbox?c=${data.conversationId}`);
+    } catch (err) {
+      console.error('[contacts] failed to open chat:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to open chat');
+      setOpeningChatContactId(null);
+    }
+  };
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   // Tag filter — contacts shown must have ANY of these tags (OR).
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  /**
+   * Source filter — contacts shown must have ANY of these sources (OR),
+   * composed with the tag filter as AND.
+   *
+   * Resolved server-side in BOTH query branches (and in
+   * `fetchAllMatchingIds`), never by filtering the loaded page: the page is
+   * 25 rows of a possibly 9,000-row account, so a client-side filter would
+   * describe a set the pagination total and bulk delete disagree with.
+   */
+  const [selectedSources, setSelectedSources] = useState<ContactSource[]>([]);
 
   // Excel / Google Sheets style column resizing with persistent localStorage widths
-  const { getWidth, startResize, resetWidth, resetAllWidths, isResizing } =
-    useResizableColumns({
+  const { getWidth, startResize, resetWidth, isResizing } = useResizableColumns(
+    {
       storageKey: 'wacrm_contacts_table_widths_v1',
       defaultWidths: {
         name: 180,
@@ -91,11 +141,13 @@ export default function ContactsPage() {
         email: 210,
         company: 180,
         tags: 160,
+        source: 130,
         created_at: 130,
       },
       minWidth: 80,
       maxWidth: 600,
-    });
+    }
+  );
 
   // Modals
   const [formOpen, setFormOpen] = useState(false);
@@ -184,6 +236,112 @@ export default function ContactsPage() {
     Record<string, Record<string, string>>
   >({});
 
+  // Horizontal scroll tracking and control for wide contacts table
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const [tableHasOverflow, setTableHasOverflow] = useState(false);
+  const [scrollProgress, setScrollProgress] = useState(0);
+  const [thumbMetrics, setThumbMetrics] = useState({ width: 25, left: 0 });
+
+  const updateScrollMetrics = useCallback(() => {
+    const el = tableContainerRef.current;
+    if (!el) return;
+
+    const { scrollLeft, scrollWidth, clientWidth } = el;
+    const maxScroll = scrollWidth - clientWidth;
+    const hasOverflow = maxScroll > 4;
+
+    setTableHasOverflow(hasOverflow);
+    setCanScrollLeft(scrollLeft > 2);
+    setCanScrollRight(hasOverflow && scrollLeft < maxScroll - 2);
+
+    if (hasOverflow && maxScroll > 0) {
+      const progress = (scrollLeft / maxScroll) * 100;
+      setScrollProgress(progress);
+
+      const visibleRatio = clientWidth / scrollWidth;
+      const thumbWidth = Math.min(80, Math.max(20, visibleRatio * 100));
+      const thumbLeft = (scrollLeft / maxScroll) * (100 - thumbWidth);
+      setThumbMetrics({ width: thumbWidth, left: thumbLeft });
+    } else {
+      setScrollProgress(0);
+      setThumbMetrics({ width: 100, left: 0 });
+    }
+  }, []);
+
+  useEffect(() => {
+    const el = tableContainerRef.current;
+    if (!el) return;
+
+    updateScrollMetrics();
+
+    el.addEventListener('scroll', updateScrollMetrics, { passive: true });
+    const ro = new ResizeObserver(() => {
+      updateScrollMetrics();
+    });
+    ro.observe(el);
+    window.addEventListener('resize', updateScrollMetrics);
+
+    return () => {
+      el.removeEventListener('scroll', updateScrollMetrics);
+      ro.disconnect();
+      window.removeEventListener('resize', updateScrollMetrics);
+    };
+  }, [updateScrollMetrics, contacts, customFields]);
+
+  const scrollTable = (direction: 'left' | 'right', step = 280) => {
+    const el = tableContainerRef.current;
+    if (!el) return;
+    const delta = direction === 'left' ? -step : step;
+    el.scrollBy({ left: delta, behavior: 'smooth' });
+  };
+
+  const scrollTableTo = (target: 'start' | 'end' | number) => {
+    const el = tableContainerRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    let left = 0;
+    if (target === 'start') left = 0;
+    else if (target === 'end') left = maxScroll;
+    else left = Math.max(0, Math.min(target, maxScroll));
+    el.scrollTo({ left, behavior: 'smooth' });
+  };
+
+  const handleTrackPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const track = trackRef.current;
+    const container = tableContainerRef.current;
+    if (!track || !container) return;
+
+    const maxScroll = container.scrollWidth - container.clientWidth;
+    if (maxScroll <= 0) return;
+
+    const calcScrollFromX = (clientX: number) => {
+      const rect = track.getBoundingClientRect();
+      const offsetX = Math.max(0, Math.min(clientX - rect.left, rect.width));
+      const ratio = offsetX / rect.width;
+      return ratio * maxScroll;
+    };
+
+    container.scrollTo({
+      left: calcScrollFromX(e.clientX),
+      behavior: 'smooth',
+    });
+
+    const onPointerMove = (moveEvt: PointerEvent) => {
+      container.scrollLeft = calcScrollFromX(moveEvt.clientX);
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
+
   // Guards against out-of-order fetch responses: each fetchContacts run
   // claims a sequence number and only the latest is allowed to commit its
   // results. Without this, rapidly toggling tag filters could let a slower
@@ -242,20 +400,29 @@ export default function ContactsPage() {
         p_search: term || null,
         p_limit: PAGE_SIZE,
         p_offset: from,
+        // Composed inside the same query as the tag join, so `total_count`
+        // and this page describe the same set. Passing it separately and
+        // filtering afterwards would break the count.
+        p_sources: selectedSources.length > 0 ? selectedSources : null,
       });
       if (seq !== fetchSeq.current) return; // superseded by a newer fetch
 
       if (!error && Array.isArray(data)) {
-        const rows = data as any[];
+        const rows = data as Array<Record<string, unknown>>;
         contactRows = rows
           .map((r) => {
             if (r && typeof r === 'object') {
-              if (r.contact && typeof r.contact === 'object' && r.contact.id) {
+              if (
+                r.contact &&
+                typeof r.contact === 'object' &&
+                'id' in (r.contact as object)
+              ) {
                 return r.contact as Contact;
               }
               if (r.id) {
-                const { total_count, ...contactData } = r;
-                return contactData as Contact;
+                const contactData = { ...r };
+                delete contactData.total_count;
+                return contactData as unknown as Contact;
               }
             }
             return null;
@@ -294,6 +461,10 @@ export default function ContactsPage() {
             );
           }
 
+          if (selectedSources.length > 0) {
+            query = query.in('source', selectedSources);
+          }
+
           const { data: fallbackData, count: exactCount } = await query;
           contactRows = fallbackData ?? [];
           count = exactCount ?? 0;
@@ -311,6 +482,10 @@ export default function ContactsPage() {
         query = query.or(
           `name.ilike.${like},phone.ilike.${like},email.ilike.${like}`
         );
+      }
+
+      if (selectedSources.length > 0) {
+        query = query.in('source', selectedSources);
       }
 
       const { data, count: exactCount, error } = await query;
@@ -372,7 +547,7 @@ export default function ContactsPage() {
 
     setContacts(enriched);
     setLoading(false);
-  }, [supabase, page, search, selectedTagIds, tagsMap, t]);
+  }, [supabase, page, search, selectedTagIds, selectedSources, tagsMap, t]);
 
   // Load-once-on-mount-ish data fetches. Each setter inside runs
   // inside an async promise completion (Supabase await), not
@@ -391,16 +566,6 @@ export default function ContactsPage() {
   function openAddForm() {
     setEditContact(null);
     setEditContactTags([]);
-    setFormOpen(true);
-  }
-
-  async function openEditForm(contact: Contact) {
-    const { data } = await supabase
-      .from('contact_tags')
-      .select('*')
-      .eq('contact_id', contact.id);
-    setEditContact(contact);
-    setEditContactTags(data ?? []);
     setFormOpen(true);
   }
 
@@ -490,15 +655,26 @@ export default function ContactsPage() {
           p_search: term || null,
           p_limit: CHUNK,
           p_offset: from,
+          p_sources: selectedSources.length > 0 ? selectedSources : null,
         });
         if (error) throw error;
-        rows = (data ?? []) as { id: string }[];
+        // The RPC returns a composite `contact` column, not a flat row, so
+        // the id lives one level down. Reading `r.id` here would collect
+        // undefined and silently delete nothing.
+        rows = (
+          (data ?? []) as Array<{ contact?: { id?: string }; id?: string }>
+        )
+          .map((r) => ({ id: r.contact?.id ?? r.id ?? '' }))
+          .filter((r) => r.id !== '');
       } else {
         let query = supabase.from('contacts').select('id');
         if (term) {
           query = query.or(
             `name.ilike.%${term}%,phone.ilike.%${term}%,email.ilike.%${term}%`
           );
+        }
+        if (selectedSources.length > 0) {
+          query = query.in('source', selectedSources);
         }
         const { data, error } = await query.range(from, from + CHUNK - 1);
         if (error) throw error;
@@ -580,7 +756,9 @@ export default function ContactsPage() {
     a.name.localeCompare(b.name)
   );
   const hasActiveFilters =
-    search.trim().length > 0 || selectedTagIds.length > 0;
+    search.trim().length > 0 ||
+    selectedTagIds.length > 0 ||
+    selectedSources.length > 0;
 
   function toggleTagFilter(tagId: string) {
     setSelectedTagIds((prev) =>
@@ -588,6 +766,22 @@ export default function ContactsPage() {
         ? prev.filter((id) => id !== tagId)
         : [...prev, tagId]
     );
+    setPage(0);
+  }
+
+  function toggleSourceFilter(source: ContactSource) {
+    setSelectedSources((prev) =>
+      prev.includes(source)
+        ? prev.filter((s) => s !== source)
+        : [...prev, source]
+    );
+    // Same reason as the tag filter: the result set changes size, so page N
+    // may no longer exist.
+    setPage(0);
+  }
+
+  function clearSourceFilters() {
+    setSelectedSources([]);
     setPage(0);
   }
 
@@ -608,8 +802,11 @@ export default function ContactsPage() {
   const companyVisible = companyRow?.visible !== false;
   const companyLabel = companyRow?.field_name || t('tableColumns.company');
 
+  // Hand-counted, so it has to be bumped whenever a column is added or the
+  // loading/empty rows stop spanning the table. 7 = checkbox, name, phone,
+  // tags, source, created_at, actions.
   const totalColSpan =
-    6 +
+    7 +
     (emailVisible ? 1 : 0) +
     (companyVisible ? 1 : 0) +
     pureCustomFields.length;
@@ -690,83 +887,220 @@ export default function ContactsPage() {
 
       {/* Search + tag filter */}
       <div className="space-y-2">
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <div className="relative w-full max-w-sm">
-            <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
-            <Input
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                // Reset pagination when the query changes — the result
-                // set shrinks/grows, page N may no longer be valid.
-                setPage(0);
-              }}
-              placeholder={t('searchPlaceholder')}
-              className="bg-card border-border text-foreground placeholder:text-muted-foreground pl-8"
-            />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="relative w-full max-w-sm">
+              <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+              <Input
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  // Reset pagination when the query changes — the result
+                  // set shrinks/grows, page N may no longer be valid.
+                  setPage(0);
+                }}
+                placeholder={t('searchPlaceholder')}
+                className="bg-card border-border text-foreground placeholder:text-muted-foreground pl-8"
+              />
+            </div>
+
+            <Popover>
+              <PopoverTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    className="border-border text-muted-foreground hover:bg-muted shrink-0"
+                  />
+                }
+              >
+                <Filter className="size-4" />
+                {t('filterByTags')}
+                {selectedTagIds.length > 0 && (
+                  <span className="bg-primary text-primary-foreground ml-1 inline-flex items-center justify-center rounded-full px-1.5 text-[10px] font-semibold">
+                    {selectedTagIds.length}
+                  </span>
+                )}
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-64 p-0">
+                <div className="border-border flex items-center justify-between border-b px-3 py-2">
+                  <span className="text-popover-foreground text-sm font-medium">
+                    {t('filterByTags')}
+                  </span>
+                  {selectedTagIds.length > 0 && (
+                    <button
+                      onClick={clearTagFilters}
+                      className="text-muted-foreground hover:text-foreground text-xs"
+                    >
+                      {t('clearAll')}
+                    </button>
+                  )}
+                </div>
+                {allTags.length === 0 ? (
+                  <p className="text-muted-foreground px-3 py-4 text-center text-sm">
+                    {t('noTagsYet')}
+                  </p>
+                ) : (
+                  <div className="max-h-64 overflow-y-auto py-1">
+                    {allTags.map((tag) => (
+                      <label
+                        key={tag.id}
+                        className="hover:bg-muted/50 flex cursor-pointer items-center gap-2.5 px-3 py-1.5"
+                      >
+                        <Checkbox
+                          checked={selectedTagIds.includes(tag.id)}
+                          onCheckedChange={() => toggleTagFilter(tag.id)}
+                          aria-label={`Filter by ${tag.name}`}
+                        />
+                        <span
+                          className="size-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: tag.color }}
+                        />
+                        <span className="text-popover-foreground truncate text-sm">
+                          {tag.name}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </PopoverContent>
+            </Popover>
+
+            {/* Source filter. Sits beside the tag filter because the two
+                compose (tag AND source), and both are resolved server-side. */}
+            <Popover>
+              <PopoverTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    className="border-border text-muted-foreground hover:bg-muted shrink-0"
+                  />
+                }
+              >
+                <Filter className="size-4" />
+                {t('filterBySource')}
+                {selectedSources.length > 0 && (
+                  <span className="bg-primary text-primary-foreground ml-1 inline-flex items-center justify-center rounded-full px-1.5 text-[10px] font-semibold">
+                    {selectedSources.length}
+                  </span>
+                )}
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-72 p-0">
+                <div className="border-border flex items-center justify-between border-b px-3 py-2">
+                  <span className="text-popover-foreground text-sm font-medium">
+                    {t('filterBySource')}
+                  </span>
+                  {selectedSources.length > 0 && (
+                    <button
+                      onClick={clearSourceFilters}
+                      className="text-muted-foreground hover:text-foreground text-xs"
+                    >
+                      {t('clearAll')}
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-72 overflow-y-auto py-1">
+                  {CONTACT_SOURCES.map((source) => {
+                    const display = getContactSource(source);
+                    return (
+                      <label
+                        key={source}
+                        className="hover:bg-muted/50 flex cursor-pointer items-start gap-2.5 px-3 py-1.5"
+                      >
+                        <Checkbox
+                          checked={selectedSources.includes(source)}
+                          onCheckedChange={() => toggleSourceFilter(source)}
+                          aria-label={`Filter by ${tSource(display.label)}`}
+                          className="mt-0.5"
+                        />
+                        <span className="min-w-0">
+                          <span className="text-popover-foreground block text-sm">
+                            {tSource(display.label)}
+                          </span>
+                          {/* "API" and "Campaign" are indistinguishable
+                              without this, and the difference decides where
+                              you go looking. */}
+                          <span className="text-muted-foreground block text-xs">
+                            {tSource(display.hint)}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
 
-          <Popover>
-            <PopoverTrigger
-              render={
-                <Button
-                  variant="outline"
-                  className="border-border text-muted-foreground hover:bg-muted shrink-0"
-                />
-              }
-            >
-              <Filter className="size-4" />
-              {t('filterByTags')}
-              {selectedTagIds.length > 0 && (
-                <span className="bg-primary text-primary-foreground ml-1 inline-flex items-center justify-center rounded-full px-1.5 text-[10px] font-semibold">
-                  {selectedTagIds.length}
-                </span>
-              )}
-            </PopoverTrigger>
-            <PopoverContent align="start" className="w-64 p-0">
-              <div className="border-border flex items-center justify-between border-b px-3 py-2">
-                <span className="text-popover-foreground text-sm font-medium">
-                  {t('filterByTags')}
-                </span>
-                {selectedTagIds.length > 0 && (
-                  <button
-                    onClick={clearTagFilters}
-                    className="text-muted-foreground hover:text-foreground text-xs"
-                  >
-                    {t('clearAll')}
-                  </button>
-                )}
-              </div>
-              {allTags.length === 0 ? (
-                <p className="text-muted-foreground px-3 py-4 text-center text-sm">
-                  {t('noTagsYet')}
-                </p>
-              ) : (
-                <div className="max-h-64 overflow-y-auto py-1">
-                  {allTags.map((tag) => (
-                    <label
-                      key={tag.id}
-                      className="hover:bg-muted/50 flex cursor-pointer items-center gap-2.5 px-3 py-1.5"
-                    >
-                      <Checkbox
-                        checked={selectedTagIds.includes(tag.id)}
-                        onCheckedChange={() => toggleTagFilter(tag.id)}
-                        aria-label={`Filter by ${tag.name}`}
-                      />
-                      <span
-                        className="size-2.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: tag.color }}
-                      />
-                      <span className="text-popover-foreground truncate text-sm">
-                        {tag.name}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </PopoverContent>
-          </Popover>
+          {/* Top Quick Column Navigator when table has horizontal scroll */}
+          {tableHasOverflow && (
+            <div className="border-border/80 bg-card/80 animate-in fade-in flex items-center gap-1.5 self-start rounded-lg border px-2.5 py-1 shadow-2xs backdrop-blur-xs duration-200 sm:self-auto">
+              <ArrowLeftRight className="text-primary size-3.5" />
+              <span className="text-muted-foreground hidden text-xs font-medium select-none md:inline">
+                Columns:
+              </span>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-muted-foreground hover:text-foreground h-6 w-6"
+                disabled={!canScrollLeft}
+                onClick={() => scrollTable('left')}
+                title="Scroll columns left"
+                aria-label="Scroll columns left"
+              >
+                <ChevronLeft className="size-3.5" />
+              </Button>
+              <button
+                type="button"
+                className="text-foreground hover:text-primary min-w-[32px] cursor-pointer text-center text-xs font-semibold tabular-nums transition-colors select-none"
+                title="Click to toggle between start and end"
+                onClick={() => scrollTableTo(canScrollRight ? 'end' : 'start')}
+              >
+                {Math.round(scrollProgress)}%
+              </button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-muted-foreground hover:text-foreground h-6 w-6"
+                disabled={!canScrollRight}
+                onClick={() => scrollTable('right')}
+                title="Scroll columns right"
+                aria-label="Scroll columns right"
+              >
+                <ChevronRight className="size-3.5" />
+              </Button>
+            </div>
+          )}
         </div>
+
+        {/* Active source-filter chips */}
+        {selectedSources.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {selectedSources.map((source) => {
+              const display = getContactSource(source);
+              return (
+                <span
+                  key={source}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${display.classes}`}
+                >
+                  {tSource(display.label)}
+                  <button
+                    onClick={() => toggleSourceFilter(source)}
+                    aria-label={`Remove ${tSource(display.label)} filter`}
+                    className="hover:opacity-70"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              );
+            })}
+            <button
+              onClick={clearSourceFilters}
+              className="text-muted-foreground hover:text-foreground px-1 text-xs"
+            >
+              {t('clearAll')}
+            </button>
+          </div>
+        )}
 
         {/* Active tag-filter chips */}
         {selectedTagIds.length > 0 && (
@@ -868,484 +1202,662 @@ export default function ContactsPage() {
       ) : null}
 
       {/* Table */}
-      <div className="border-border bg-card/30 overflow-x-auto rounded-lg border shadow-xs">
-        <Table className="min-w-full table-fixed">
-          <TableHeader>
-            <TableRow className="border-border hover:bg-transparent">
-              <TableHead
-                className="w-10 px-3 select-none"
-                style={{ width: '44px', minWidth: '44px', maxWidth: '44px' }}
-              >
-                <Checkbox
-                  checked={allOnPageSelected}
-                  indeterminate={!allOnPageSelected && someOnPageSelected}
-                  onCheckedChange={toggleSelectAll}
-                  disabled={contacts.length === 0}
-                  aria-label="Select all contacts on this page"
-                />
-              </TableHead>
-
-              {/* Name Column */}
-              <TableHead
-                className="group text-muted-foreground relative px-3 font-semibold select-none"
-                style={{
-                  width: `${getWidth('name', 180)}px`,
-                  minWidth: `${getWidth('name', 180)}px`,
-                  maxWidth: `${getWidth('name', 180)}px`,
-                }}
-              >
-                <div className="flex items-center justify-between overflow-hidden pr-2">
-                  <span className="truncate">{t('tableColumns.name')}</span>
-                </div>
-                <div
-                  onMouseDown={(e) => startResize('name', e)}
-                  onDoubleClick={() => resetWidth('name')}
-                  className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
-                    isResizing === 'name'
-                      ? 'opacity-100'
-                      : 'opacity-0 group-hover:opacity-100'
-                  }`}
-                  title="Drag to resize (double-click to reset)"
+      <div className="relative">
+        <div
+          ref={tableContainerRef}
+          className="border-border bg-card/30 overflow-x-auto rounded-lg border shadow-xs"
+        >
+          <Table className="min-w-full table-fixed">
+            <TableHeader>
+              <TableRow className="border-border hover:bg-transparent">
+                <TableHead
+                  className="w-10 px-3 select-none"
+                  style={{ width: '44px', minWidth: '44px', maxWidth: '44px' }}
                 >
-                  <div
-                    className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'name' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
+                  <Checkbox
+                    checked={allOnPageSelected}
+                    indeterminate={!allOnPageSelected && someOnPageSelected}
+                    onCheckedChange={toggleSelectAll}
+                    disabled={contacts.length === 0}
+                    aria-label="Select all contacts on this page"
                   />
-                </div>
-              </TableHead>
+                </TableHead>
 
-              {/* Phone Column */}
-              <TableHead
-                className="group text-muted-foreground relative px-3 font-semibold select-none"
-                style={{
-                  width: `${getWidth('phone', 150)}px`,
-                  minWidth: `${getWidth('phone', 150)}px`,
-                  maxWidth: `${getWidth('phone', 150)}px`,
-                }}
-              >
-                <div className="flex items-center justify-between overflow-hidden pr-2">
-                  <span className="truncate">{t('tableColumns.phone')}</span>
-                </div>
-                <div
-                  onMouseDown={(e) => startResize('phone', e)}
-                  onDoubleClick={() => resetWidth('phone')}
-                  className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
-                    isResizing === 'phone'
-                      ? 'opacity-100'
-                      : 'opacity-0 group-hover:opacity-100'
-                  }`}
-                  title="Drag to resize (double-click to reset)"
-                >
-                  <div
-                    className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'phone' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
-                  />
-                </div>
-              </TableHead>
-
-              {/* Email Column */}
-              {emailVisible && (
+                {/* Name Column */}
                 <TableHead
                   className="group text-muted-foreground relative px-3 font-semibold select-none"
                   style={{
-                    width: `${getWidth('email', 210)}px`,
-                    minWidth: `${getWidth('email', 210)}px`,
-                    maxWidth: `${getWidth('email', 210)}px`,
+                    width: `${getWidth('name', 180)}px`,
+                    minWidth: `${getWidth('name', 180)}px`,
+                    maxWidth: `${getWidth('name', 180)}px`,
                   }}
                 >
                   <div className="flex items-center justify-between overflow-hidden pr-2">
-                    <span className="truncate">{emailLabel}</span>
+                    <span className="truncate">{t('tableColumns.name')}</span>
                   </div>
                   <div
-                    onMouseDown={(e) => startResize('email', e)}
-                    onDoubleClick={() => resetWidth('email')}
+                    onMouseDown={(e) => startResize('name', e)}
+                    onDoubleClick={() => resetWidth('name')}
                     className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
-                      isResizing === 'email'
+                      isResizing === 'name'
                         ? 'opacity-100'
                         : 'opacity-0 group-hover:opacity-100'
                     }`}
                     title="Drag to resize (double-click to reset)"
                   >
                     <div
-                      className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'email' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
+                      className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'name' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
                     />
                   </div>
                 </TableHead>
-              )}
 
-              {/* Company Column */}
-              {companyVisible && (
+                {/* Phone Column */}
                 <TableHead
                   className="group text-muted-foreground relative px-3 font-semibold select-none"
                   style={{
-                    width: `${getWidth('company', 180)}px`,
-                    minWidth: `${getWidth('company', 180)}px`,
-                    maxWidth: `${getWidth('company', 180)}px`,
+                    width: `${getWidth('phone', 160)}px`,
+                    minWidth: `${getWidth('phone', 160)}px`,
+                    maxWidth: `${getWidth('phone', 160)}px`,
                   }}
                 >
                   <div className="flex items-center justify-between overflow-hidden pr-2">
-                    <span className="truncate">{companyLabel}</span>
+                    <span className="truncate">{t('tableColumns.phone')}</span>
                   </div>
                   <div
-                    onMouseDown={(e) => startResize('company', e)}
-                    onDoubleClick={() => resetWidth('company')}
+                    onMouseDown={(e) => startResize('phone', e)}
+                    onDoubleClick={() => resetWidth('phone')}
                     className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
-                      isResizing === 'company'
+                      isResizing === 'phone'
                         ? 'opacity-100'
                         : 'opacity-0 group-hover:opacity-100'
                     }`}
                     title="Drag to resize (double-click to reset)"
                   >
                     <div
-                      className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'company' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
+                      className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'phone' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
                     />
                   </div>
                 </TableHead>
-              )}
 
-              {/* Dynamic Custom Fields */}
-              {pureCustomFields.map((cf) => {
-                const key = `custom_${cf.id}`;
-                return (
+                {/* Email Column */}
+                {emailVisible && (
                   <TableHead
-                    key={cf.id}
                     className="group text-muted-foreground relative px-3 font-semibold select-none"
                     style={{
-                      width: `${getWidth(key, 150)}px`,
-                      minWidth: `${getWidth(key, 150)}px`,
-                      maxWidth: `${getWidth(key, 150)}px`,
+                      width: `${getWidth('email', 210)}px`,
+                      minWidth: `${getWidth('email', 210)}px`,
+                      maxWidth: `${getWidth('email', 210)}px`,
                     }}
                   >
                     <div className="flex items-center justify-between overflow-hidden pr-2">
-                      <span className="truncate">{cf.field_name}</span>
+                      <span className="truncate">{emailLabel}</span>
                     </div>
                     <div
-                      onMouseDown={(e) => startResize(key, e)}
-                      onDoubleClick={() => resetWidth(key)}
+                      onMouseDown={(e) => startResize('email', e)}
+                      onDoubleClick={() => resetWidth('email')}
                       className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
-                        isResizing === key
+                        isResizing === 'email'
                           ? 'opacity-100'
                           : 'opacity-0 group-hover:opacity-100'
                       }`}
                       title="Drag to resize (double-click to reset)"
                     >
                       <div
-                        className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === key ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
+                        className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'email' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
                       />
                     </div>
                   </TableHead>
-                );
-              })}
+                )}
 
-              {/* Tags Column */}
-              <TableHead
-                className="group text-muted-foreground relative px-3 font-semibold select-none"
-                style={{
-                  width: `${getWidth('tags', 160)}px`,
-                  minWidth: `${getWidth('tags', 160)}px`,
-                  maxWidth: `${getWidth('tags', 160)}px`,
-                }}
-              >
-                <div className="flex items-center justify-between overflow-hidden pr-2">
-                  <span className="truncate">{t('tableColumns.tags')}</span>
-                </div>
-                <div
-                  onMouseDown={(e) => startResize('tags', e)}
-                  onDoubleClick={() => resetWidth('tags')}
-                  className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
-                    isResizing === 'tags'
-                      ? 'opacity-100'
-                      : 'opacity-0 group-hover:opacity-100'
-                  }`}
-                  title="Drag to resize (double-click to reset)"
-                >
-                  <div
-                    className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'tags' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
-                  />
-                </div>
-              </TableHead>
+                {/* Company Column */}
+                {companyVisible && (
+                  <TableHead
+                    className="group text-muted-foreground relative px-3 font-semibold select-none"
+                    style={{
+                      width: `${getWidth('company', 180)}px`,
+                      minWidth: `${getWidth('company', 180)}px`,
+                      maxWidth: `${getWidth('company', 180)}px`,
+                    }}
+                  >
+                    <div className="flex items-center justify-between overflow-hidden pr-2">
+                      <span className="truncate">{companyLabel}</span>
+                    </div>
+                    <div
+                      onMouseDown={(e) => startResize('company', e)}
+                      onDoubleClick={() => resetWidth('company')}
+                      className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
+                        isResizing === 'company'
+                          ? 'opacity-100'
+                          : 'opacity-0 group-hover:opacity-100'
+                      }`}
+                      title="Drag to resize (double-click to reset)"
+                    >
+                      <div
+                        className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'company' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
+                      />
+                    </div>
+                  </TableHead>
+                )}
 
-              {/* Created At Column */}
-              <TableHead
-                className="group text-muted-foreground relative px-3 font-semibold select-none"
-                style={{
-                  width: `${getWidth('created_at', 130)}px`,
-                  minWidth: `${getWidth('created_at', 130)}px`,
-                  maxWidth: `${getWidth('created_at', 130)}px`,
-                }}
-              >
-                <div className="flex items-center justify-between overflow-hidden pr-2">
-                  <span className="truncate">
-                    {t('tableColumns.createdAt')}
-                  </span>
-                </div>
-                <div
-                  onMouseDown={(e) => startResize('created_at', e)}
-                  onDoubleClick={() => resetWidth('created_at')}
-                  className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
-                    isResizing === 'created_at'
-                      ? 'opacity-100'
-                      : 'opacity-0 group-hover:opacity-100'
-                  }`}
-                  title="Drag to resize (double-click to reset)"
-                >
-                  <div
-                    className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'created_at' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
-                  />
-                </div>
-              </TableHead>
-
-              <TableHead
-                className="w-12 px-2 text-right"
-                style={{ width: '48px', minWidth: '48px', maxWidth: '48px' }}
-              />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {loading ? (
-              <TableRow className="border-border">
-                <TableCell colSpan={totalColSpan} className="py-12 text-center">
-                  <div className="flex flex-col items-center gap-2">
-                    <Loader2 className="text-primary size-6 animate-spin" />
-                    <p className="text-muted-foreground text-sm">
-                      {t('loading')}
-                    </p>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : contacts.length === 0 ? (
-              <TableRow className="border-border">
-                <TableCell colSpan={totalColSpan} className="py-12 text-center">
-                  <div className="flex flex-col items-center gap-2">
-                    <Users className="text-muted-foreground size-8" />
-                    <p className="text-muted-foreground text-sm">
-                      {hasActiveFilters
-                        ? t('noContactsMatch')
-                        : t('noContactsYet')}
-                    </p>
-                    {!hasActiveFilters && (
-                      <GatedButton
-                        canAct={canEdit}
-                        gateReason="add or import contacts"
-                        variant="outline"
-                        size="sm"
-                        onClick={openAddForm}
-                        className="border-border text-muted-foreground hover:bg-muted mt-2"
+                {/* Dynamic Custom Fields */}
+                {pureCustomFields.map((cf) => {
+                  const key = `custom_${cf.id}`;
+                  return (
+                    <TableHead
+                      key={cf.id}
+                      className="group text-muted-foreground relative px-3 font-semibold select-none"
+                      style={{
+                        width: `${getWidth(key, 150)}px`,
+                        minWidth: `${getWidth(key, 150)}px`,
+                        maxWidth: `${getWidth(key, 150)}px`,
+                      }}
+                    >
+                      <div className="flex items-center justify-between overflow-hidden pr-2">
+                        <span className="truncate">{cf.field_name}</span>
+                      </div>
+                      <div
+                        onMouseDown={(e) => startResize(key, e)}
+                        onDoubleClick={() => resetWidth(key)}
+                        className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
+                          isResizing === key
+                            ? 'opacity-100'
+                            : 'opacity-0 group-hover:opacity-100'
+                        }`}
+                        title="Drag to resize (double-click to reset)"
                       >
-                        <Plus className="size-3.5" />
-                        {t('addFirstContact')}
-                      </GatedButton>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : (
-              contacts.map((contact) => (
-                <TableRow
-                  key={contact.id}
-                  className="border-border hover:bg-muted/50 cursor-pointer transition-colors"
-                  onClick={() => openDetail(contact.id)}
+                        <div
+                          className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === key ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
+                        />
+                      </div>
+                    </TableHead>
+                  );
+                })}
+
+                {/* Tags Column */}
+                <TableHead
+                  className="group text-muted-foreground relative px-3 font-semibold select-none"
+                  style={{
+                    width: `${getWidth('tags', 160)}px`,
+                    minWidth: `${getWidth('tags', 160)}px`,
+                    maxWidth: `${getWidth('tags', 160)}px`,
+                  }}
                 >
-                  <TableCell
-                    onClick={(e) => e.stopPropagation()}
-                    className="px-3"
-                    style={{
-                      width: '44px',
-                      minWidth: '44px',
-                      maxWidth: '44px',
-                    }}
+                  <div className="flex items-center justify-between overflow-hidden pr-2">
+                    <span className="truncate">{t('tableColumns.tags')}</span>
+                  </div>
+                  <div
+                    onMouseDown={(e) => startResize('tags', e)}
+                    onDoubleClick={() => resetWidth('tags')}
+                    className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
+                      isResizing === 'tags'
+                        ? 'opacity-100'
+                        : 'opacity-0 group-hover:opacity-100'
+                    }`}
+                    title="Drag to resize (double-click to reset)"
                   >
-                    <Checkbox
-                      checked={selected.has(contact.id)}
-                      onCheckedChange={() => toggleSelect(contact.id)}
-                      aria-label={`Select ${contact.name || contact.phone}`}
+                    <div
+                      className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'tags' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
                     />
-                  </TableCell>
-                  <TableCell
-                    className="text-foreground truncate px-3 font-medium"
-                    style={{
-                      width: `${getWidth('name', 180)}px`,
-                      minWidth: `${getWidth('name', 180)}px`,
-                      maxWidth: `${getWidth('name', 180)}px`,
-                    }}
+                  </div>
+                </TableHead>
+
+                {/* Source Column — how the contact entered the CRM */}
+                <TableHead
+                  className="group text-muted-foreground relative px-3 font-semibold select-none"
+                  style={{
+                    width: `${getWidth('source', 130)}px`,
+                    minWidth: `${getWidth('source', 130)}px`,
+                    maxWidth: `${getWidth('source', 130)}px`,
+                  }}
+                >
+                  <div className="flex items-center justify-between overflow-hidden pr-2">
+                    <span className="truncate">{t('tableColumns.source')}</span>
+                  </div>
+                  <div
+                    onMouseDown={(e) => startResize('source', e)}
+                    onDoubleClick={() => resetWidth('source')}
+                    className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
+                      isResizing === 'source'
+                        ? 'opacity-100'
+                        : 'opacity-0 group-hover:opacity-100'
+                    }`}
+                    title="Drag to resize (double-click to reset)"
                   >
-                    <span className="block truncate">
-                      {contact.name || (
-                        <span className="text-muted-foreground italic">
-                          {t('unnamed')}
-                        </span>
+                    <div
+                      className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'source' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
+                    />
+                  </div>
+                </TableHead>
+
+                {/* Created At Column */}
+                <TableHead
+                  className="group text-muted-foreground relative px-3 font-semibold select-none"
+                  style={{
+                    width: `${getWidth('created_at', 130)}px`,
+                    minWidth: `${getWidth('created_at', 130)}px`,
+                    maxWidth: `${getWidth('created_at', 130)}px`,
+                  }}
+                >
+                  <div className="flex items-center justify-between overflow-hidden pr-2">
+                    <span className="truncate">
+                      {t('tableColumns.createdAt')}
+                    </span>
+                  </div>
+                  <div
+                    onMouseDown={(e) => startResize('created_at', e)}
+                    onDoubleClick={() => resetWidth('created_at')}
+                    className={`group/resizer absolute top-0 right-0 bottom-0 z-20 flex w-2.5 cursor-col-resize items-center justify-center transition-opacity select-none ${
+                      isResizing === 'created_at'
+                        ? 'opacity-100'
+                        : 'opacity-0 group-hover:opacity-100'
+                    }`}
+                    title="Drag to resize (double-click to reset)"
+                  >
+                    <div
+                      className={`h-4 w-[2px] rounded-full transition-colors ${isResizing === 'created_at' ? 'bg-primary h-full' : 'bg-border/90 group-hover/resizer:bg-primary'}`}
+                    />
+                  </div>
+                </TableHead>
+
+                <TableHead
+                  className={cn(
+                    'bg-card z-20 w-20 px-2 text-right transition-shadow select-none sm:sticky sm:right-0',
+                    canScrollRight &&
+                      'border-border/60 border-l shadow-[-6px_0_10px_-3px_rgba(0,0,0,0.08)]'
+                  )}
+                  style={{ width: '84px', minWidth: '84px', maxWidth: '84px' }}
+                />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow className="border-border">
+                  <TableCell
+                    colSpan={totalColSpan}
+                    className="py-12 text-center"
+                  >
+                    <div className="flex flex-col items-center gap-2">
+                      <Loader2 className="text-primary size-6 animate-spin" />
+                      <p className="text-muted-foreground text-sm">
+                        {t('loading')}
+                      </p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : contacts.length === 0 ? (
+                <TableRow className="border-border">
+                  <TableCell
+                    colSpan={totalColSpan}
+                    className="py-12 text-center"
+                  >
+                    <div className="flex flex-col items-center gap-2">
+                      <Users className="text-muted-foreground size-8" />
+                      <p className="text-muted-foreground text-sm">
+                        {hasActiveFilters
+                          ? t('noContactsMatch')
+                          : t('noContactsYet')}
+                      </p>
+                      {!hasActiveFilters && (
+                        <GatedButton
+                          canAct={canEdit}
+                          gateReason="add or import contacts"
+                          variant="outline"
+                          size="sm"
+                          onClick={openAddForm}
+                          className="border-border text-muted-foreground hover:bg-muted mt-2"
+                        >
+                          <Plus className="size-3.5" />
+                          {t('addFirstContact')}
+                        </GatedButton>
                       )}
-                    </span>
+                    </div>
                   </TableCell>
-                  <TableCell
-                    className="text-muted-foreground truncate px-3 font-mono text-xs"
-                    style={{
-                      width: `${getWidth('phone', 150)}px`,
-                      minWidth: `${getWidth('phone', 150)}px`,
-                      maxWidth: `${getWidth('phone', 150)}px`,
-                    }}
+                </TableRow>
+              ) : (
+                contacts.map((contact) => (
+                  <TableRow
+                    key={contact.id}
+                    className="group border-border hover:bg-muted/50 cursor-pointer transition-colors"
+                    onClick={() => openDetail(contact.id)}
                   >
-                    <span className="text-foreground block truncate font-medium">
-                      {contact.phone}
-                    </span>
-                  </TableCell>
-                  {emailVisible && (
                     <TableCell
-                      className="text-muted-foreground truncate px-3 text-sm"
+                      onClick={(e) => e.stopPropagation()}
+                      className="px-3"
                       style={{
-                        width: `${getWidth('email', 210)}px`,
-                        minWidth: `${getWidth('email', 210)}px`,
-                        maxWidth: `${getWidth('email', 210)}px`,
+                        width: '44px',
+                        minWidth: '44px',
+                        maxWidth: '44px',
+                      }}
+                    >
+                      <Checkbox
+                        checked={selected.has(contact.id)}
+                        onCheckedChange={() => toggleSelect(contact.id)}
+                        aria-label={`Select ${contact.name || contact.phone}`}
+                      />
+                    </TableCell>
+                    <TableCell
+                      className="text-foreground truncate px-3 font-medium"
+                      style={{
+                        width: `${getWidth('name', 180)}px`,
+                        minWidth: `${getWidth('name', 180)}px`,
+                        maxWidth: `${getWidth('name', 180)}px`,
                       }}
                     >
                       <span className="block truncate">
-                        {contact.email || (
-                          <span className="text-muted-foreground/50">-</span>
+                        {contact.name || (
+                          <span className="text-muted-foreground italic">
+                            {t('unnamed')}
+                          </span>
                         )}
                       </span>
                     </TableCell>
-                  )}
-                  {companyVisible && (
                     <TableCell
-                      className="text-muted-foreground truncate px-3 text-sm"
+                      className="text-muted-foreground truncate px-3 font-mono text-xs"
                       style={{
-                        width: `${getWidth('company', 180)}px`,
-                        minWidth: `${getWidth('company', 180)}px`,
-                        maxWidth: `${getWidth('company', 180)}px`,
+                        width: `${getWidth('phone', 160)}px`,
+                        minWidth: `${getWidth('phone', 160)}px`,
+                        maxWidth: `${getWidth('phone', 160)}px`,
                       }}
                     >
-                      <span className="block truncate">
-                        {contact.company || (
-                          <span className="text-muted-foreground/50">-</span>
-                        )}
-                      </span>
+                      <PhoneDisplay phone={contact.phone} copyable />
                     </TableCell>
-                  )}
-                  {pureCustomFields.map((cf) => {
-                    const key = `custom_${cf.id}`;
-                    const val = customValuesByContact[contact.id]?.[cf.id];
-                    return (
+                    {emailVisible && (
                       <TableCell
-                        key={cf.id}
-                        className="text-muted-foreground truncate px-3 text-xs"
+                        className="text-muted-foreground truncate px-3 text-sm"
                         style={{
-                          width: `${getWidth(key, 150)}px`,
-                          minWidth: `${getWidth(key, 150)}px`,
-                          maxWidth: `${getWidth(key, 150)}px`,
+                          width: `${getWidth('email', 210)}px`,
+                          minWidth: `${getWidth('email', 210)}px`,
+                          maxWidth: `${getWidth('email', 210)}px`,
                         }}
                       >
                         <span className="block truncate">
-                          {val ? (
-                            <span className="text-foreground font-mono">
-                              {val}
-                            </span>
-                          ) : (
+                          {contact.email || (
                             <span className="text-muted-foreground/50">-</span>
                           )}
                         </span>
                       </TableCell>
-                    );
-                  })}
-                  <TableCell
-                    className="truncate px-3"
-                    style={{
-                      width: `${getWidth('tags', 160)}px`,
-                      minWidth: `${getWidth('tags', 160)}px`,
-                      maxWidth: `${getWidth('tags', 160)}px`,
-                    }}
-                  >
-                    <div className="flex flex-wrap gap-1 overflow-hidden">
-                      {contact.tags && contact.tags.length > 0 ? (
-                        contact.tags.slice(0, 2).map((tag) => (
-                          <span
-                            key={tag.id}
-                            className="inline-flex max-w-[100px] items-center truncate rounded-full px-2 py-0.5 text-[10px] font-medium"
-                            style={{
-                              backgroundColor: tag.color + '20',
-                              color: tag.color,
-                            }}
-                          >
-                            {tag.name}
+                    )}
+                    {companyVisible && (
+                      <TableCell
+                        className="text-muted-foreground truncate px-3 text-sm"
+                        style={{
+                          width: `${getWidth('company', 180)}px`,
+                          minWidth: `${getWidth('company', 180)}px`,
+                          maxWidth: `${getWidth('company', 180)}px`,
+                        }}
+                      >
+                        <span className="block truncate">
+                          {contact.company || (
+                            <span className="text-muted-foreground/50">-</span>
+                          )}
+                        </span>
+                      </TableCell>
+                    )}
+                    {pureCustomFields.map((cf) => {
+                      const key = `custom_${cf.id}`;
+                      const val = customValuesByContact[contact.id]?.[cf.id];
+                      return (
+                        <TableCell
+                          key={cf.id}
+                          className="text-muted-foreground truncate px-3 text-xs"
+                          style={{
+                            width: `${getWidth(key, 150)}px`,
+                            minWidth: `${getWidth(key, 150)}px`,
+                            maxWidth: `${getWidth(key, 150)}px`,
+                          }}
+                        >
+                          <span className="block truncate">
+                            {val ? (
+                              <span className="text-foreground font-mono">
+                                {val}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground/50">
+                                -
+                              </span>
+                            )}
                           </span>
-                        ))
-                      ) : (
-                        <span className="text-muted-foreground/50 text-xs">
-                          -
-                        </span>
-                      )}
-                      {contact.tags && contact.tags.length > 2 && (
-                        <span className="text-muted-foreground text-[10px]">
-                          +{contact.tags.length - 2}
-                        </span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell
-                    className="text-muted-foreground truncate px-3 text-xs"
-                    style={{
-                      width: `${getWidth('created_at', 130)}px`,
-                      minWidth: `${getWidth('created_at', 130)}px`,
-                      maxWidth: `${getWidth('created_at', 130)}px`,
-                    }}
-                  >
-                    {new Date(contact.created_at).toLocaleDateString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                      year: 'numeric',
+                        </TableCell>
+                      );
                     })}
-                  </TableCell>
-                  <TableCell
-                    className="px-2 text-right"
-                    style={{
-                      width: '48px',
-                      minWidth: '48px',
-                      maxWidth: '48px',
-                    }}
-                  >
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className="text-muted-foreground hover:text-foreground"
-                            onClick={(e) => e.stopPropagation()}
-                          />
+                    <TableCell
+                      className="truncate px-3"
+                      style={{
+                        width: `${getWidth('tags', 160)}px`,
+                        minWidth: `${getWidth('tags', 160)}px`,
+                        maxWidth: `${getWidth('tags', 160)}px`,
+                      }}
+                    >
+                      <div className="flex flex-wrap gap-1 overflow-hidden">
+                        {contact.tags && contact.tags.length > 0 ? (
+                          contact.tags.slice(0, 2).map((tag) => (
+                            <span
+                              key={tag.id}
+                              className="inline-flex max-w-[100px] items-center truncate rounded-full px-2 py-0.5 text-[10px] font-medium"
+                              style={{
+                                backgroundColor: tag.color + '20',
+                                color: tag.color,
+                              }}
+                            >
+                              {tag.name}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-muted-foreground/50 text-xs">
+                            -
+                          </span>
+                        )}
+                        {contact.tags && contact.tags.length > 2 && (
+                          <span className="text-muted-foreground text-[10px]">
+                            +{contact.tags.length - 2}
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell
+                      className="truncate px-3"
+                      style={{
+                        width: `${getWidth('source', 130)}px`,
+                        minWidth: `${getWidth('source', 130)}px`,
+                        maxWidth: `${getWidth('source', 130)}px`,
+                      }}
+                    >
+                      {(() => {
+                        const display = getContactSource(contact.source);
+                        return (
+                          <span
+                            className={`inline-flex max-w-full items-center truncate rounded-full border px-2 py-0.5 text-[10px] font-medium ${display.classes}`}
+                            title={tSource(display.hint)}
+                          >
+                            {tSource(display.label)}
+                          </span>
+                        );
+                      })()}
+                    </TableCell>
+                    <TableCell
+                      className="text-muted-foreground truncate px-3 text-xs"
+                      style={{
+                        width: `${getWidth('created_at', 130)}px`,
+                        minWidth: `${getWidth('created_at', 130)}px`,
+                        maxWidth: `${getWidth('created_at', 130)}px`,
+                      }}
+                    >
+                      {new Date(contact.created_at).toLocaleDateString(
+                        'en-US',
+                        {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
                         }
-                      >
-                        <MoreHorizontal className="size-4" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent
-                        align="end"
-                        className="bg-popover border-border"
-                      >
-                        <DropdownMenuItem
+                      )}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        'bg-card group-hover:bg-muted/50 z-10 px-2 text-right transition-colors sm:sticky sm:right-0',
+                        canScrollRight &&
+                          'border-border/60 border-l shadow-[-6px_0_10px_-3px_rgba(0,0,0,0.08)]'
+                      )}
+                      style={{
+                        width: '84px',
+                        minWidth: '84px',
+                        maxWidth: '84px',
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          className="text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                          title={t('openChatAction')}
+                          aria-label={t('openChatAction')}
+                          disabled={openingChatContactId === contact.id}
                           onClick={(e) => {
                             e.stopPropagation();
-                            openEditForm(contact);
-                          }}
-                          className="text-popover-foreground focus:bg-muted focus:text-foreground"
-                        >
-                          <Pencil className="size-4" />
-                          {t('editAction')}
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator className="bg-border" />
-                        <DropdownMenuItem
-                          variant="destructive"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            confirmDelete(contact);
+                            openContactChat(contact);
                           }}
                         >
-                          <Trash2 className="size-4" />
-                          {t('deleteAction')}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+                          {openingChatContactId === contact.id ? (
+                            <Loader2 className="text-primary size-4 animate-spin" />
+                          ) : (
+                            <MessageSquare className="size-4" />
+                          )}
+                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="text-muted-foreground hover:text-foreground"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            }
+                          >
+                            <MoreHorizontal className="size-4" />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="end"
+                            className="bg-popover border-border"
+                          >
+                            <DropdownMenuItem
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openDetail(contact.id);
+                              }}
+                              className="text-popover-foreground focus:bg-muted focus:text-foreground"
+                            >
+                              <Pencil className="size-4" />
+                              {t('editAction')}
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator className="bg-border" />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                confirmDelete(contact);
+                              }}
+                            >
+                              <Trash2 className="size-4" />
+                              {t('deleteAction')}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        {/* Floating / Sticky Synced Column Navigator Dock */}
+        {tableHasOverflow && (
+          <div className="animate-in fade-in slide-in-from-bottom-2 pointer-events-none sticky bottom-4 z-30 mx-auto mt-3 w-fit max-w-full px-2 transition-all duration-300">
+            <div className="border-border/80 bg-card/95 hover:border-primary/40 pointer-events-auto flex items-center gap-1.5 rounded-full border px-3 py-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-md transition-all duration-200 hover:shadow-2xl sm:gap-2 dark:ring-white/10">
+              <div className="text-muted-foreground mr-0.5 flex items-center gap-1 sm:mr-1">
+                <ArrowLeftRight className="text-primary size-3.5" />
+                <span className="text-foreground hidden text-[11px] font-semibold select-none sm:inline">
+                  Columns
+                </span>
+              </div>
+
+              {/* Jump to first column */}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-muted-foreground hover:text-foreground h-6 w-6"
+                disabled={!canScrollLeft}
+                onClick={() => scrollTableTo('start')}
+                title="Jump to first column"
+                aria-label="Jump to first column"
+              >
+                <ChevronsLeft className="size-3.5" />
+              </Button>
+
+              {/* Step left */}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-muted-foreground hover:text-foreground h-6 w-6"
+                disabled={!canScrollLeft}
+                onClick={() => scrollTable('left')}
+                title="Scroll left"
+                aria-label="Scroll left"
+              >
+                <ChevronLeft className="size-3.5" />
+              </Button>
+
+              {/* Interactive Mini-Map / Track */}
+              <div
+                ref={trackRef}
+                onPointerDown={handleTrackPointerDown}
+                className="group/track bg-muted/90 hover:bg-muted relative h-2.5 w-28 cursor-pointer overflow-hidden rounded-full transition-colors select-none sm:w-36"
+                title="Drag or click to navigate table columns"
+              >
+                <div
+                  className="bg-primary/75 group-hover/track:bg-primary absolute top-0 bottom-0 rounded-full shadow-xs transition-[background-color,width,left] duration-75"
+                  style={{
+                    width: `${thumbMetrics.width}%`,
+                    left: `${thumbMetrics.left}%`,
+                  }}
+                />
+              </div>
+
+              {/* Step right */}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-muted-foreground hover:text-foreground h-6 w-6"
+                disabled={!canScrollRight}
+                onClick={() => scrollTable('right')}
+                title="Scroll right"
+                aria-label="Scroll right"
+              >
+                <ChevronRight className="size-3.5" />
+              </Button>
+
+              {/* Jump to last column */}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-muted-foreground hover:text-foreground h-6 w-6"
+                disabled={!canScrollRight}
+                onClick={() => scrollTableTo('end')}
+                title="Jump to last column"
+                aria-label="Jump to last column"
+              >
+                <ChevronsRight className="size-3.5" />
+              </Button>
+
+              {/* Percentage */}
+              <div className="border-border/70 text-muted-foreground min-w-[32px] border-l pl-2 text-right text-[11px] font-medium tabular-nums select-none">
+                {Math.round(scrollProgress)}%
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Pagination */}

@@ -68,7 +68,19 @@ export async function getAccountsList(
     );
   }
 
-  // Apply filters
+  // ---- Status filter ----
+  //
+  // `active` / `inactive` here mean ACTIVITY (is the workspace being
+  // used), and must stay equivalent to `deriveAccountActivity` in
+  // ./account-status.ts — which is what both the list badge and the
+  // deep-dive header render. This runs in PostgREST and so cannot import
+  // that function; `account-status.test.ts` documents the shared rule.
+  //
+  //   active   = NOT banned AND (whatsapp connected OR messages_30d > 0)
+  //   inactive = NOT banned AND messages_30d = 0 AND NOT connected
+  //
+  // Both branches exclude banned accounts, which is why `banned` is a
+  // separate option rather than a third activity value.
   if (filters?.status === 'banned') {
     query = query.eq('is_banned', true);
   } else if (filters?.status === 'active') {
@@ -76,6 +88,10 @@ export async function getAccountsList(
       .eq('is_banned', false)
       .or('whatsapp_status.eq.connected,messages_30d.gt.0');
   } else if (filters?.status === 'inactive') {
+    // `whatsapp_status.is.null` is required alongside `neq.connected`:
+    // in SQL, NULL <> 'connected' is NULL (not true), so a workspace
+    // that never configured WhatsApp would otherwise be filtered out of
+    // the Inactive list entirely.
     query = query
       .eq('is_banned', false)
       .eq('messages_30d', 0)

@@ -263,7 +263,7 @@ export function Sidebar({
         {/* Main navigation */}
         <nav
           className={cn(
-            'flex-1 overflow-y-auto py-3',
+            'scrollbar-sidebar flex-1 overflow-y-auto py-3',
             collapsed ? 'px-2' : 'px-3'
           )}
         >

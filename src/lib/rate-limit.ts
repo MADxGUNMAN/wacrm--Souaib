@@ -59,7 +59,7 @@ function sweepExpired(now: number) {
 
 export function checkRateLimit(
   key: string,
-  { limit, windowMs }: RateLimitOptions,
+  { limit, windowMs }: RateLimitOptions
 ): RateLimitResult {
   const now = Date.now();
 
@@ -73,7 +73,12 @@ export function checkRateLimit(
 
   if (!entry || entry.resetAt <= now) {
     buckets.set(key, { count: 1, resetAt: now + windowMs });
-    return { success: true, remaining: limit - 1, reset: now + windowMs, limit };
+    return {
+      success: true,
+      remaining: limit - 1,
+      reset: now + windowMs,
+      limit,
+    };
   }
 
   if (entry.count >= limit) {
@@ -94,7 +99,10 @@ export function checkRateLimit(
  * draft-ietf-httpapi-ratelimit-headers). Callers just `return` this.
  */
 export function rateLimitResponse(result: RateLimitResult): NextResponse {
-  const retryAfterSec = Math.max(1, Math.ceil((result.reset - Date.now()) / 1000));
+  const retryAfterSec = Math.max(
+    1,
+    Math.ceil((result.reset - Date.now()) / 1000)
+  );
   return NextResponse.json(
     {
       error: 'Rate limit exceeded',
@@ -108,7 +116,7 @@ export function rateLimitResponse(result: RateLimitResult): NextResponse {
         'X-RateLimit-Remaining': String(result.remaining),
         'X-RateLimit-Reset': String(Math.ceil(result.reset / 1000)),
       },
-    },
+    }
   );
 }
 
@@ -179,6 +187,14 @@ export const RATE_LIMITS = {
    *  capping a stampede; excess inbounds simply don't get an auto-reply
    *  (they still land in the inbox for a human). */
   aiAutoReplyAccount: { limit: 30, windowMs: 60_000 },
+  /** Broadcast test send, per user. Deliberately tighter than `send`:
+   *  every call is a real, billable WhatsApp message to a number the
+   *  operator typed by hand, and the legitimate pattern is "send one,
+   *  look at my phone, adjust, send another." 10/min absorbs that plus a
+   *  fat-fingered double-click, while stopping the test box being used
+   *  as an unmetered single-send channel that bypasses the broadcast
+   *  budget entirely. */
+  testSend: { limit: 10, windowMs: 60_000 },
 } as const;
 
 /** Test-only helper. Clears the in-memory state so unit tests don't

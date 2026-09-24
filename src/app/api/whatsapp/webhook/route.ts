@@ -5,6 +5,7 @@ import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import { normalizeContentType } from '@/lib/whatsapp/content-types';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
+import { resolveContactNameUpdate } from '@/lib/contacts/display-name';
 import {
   betterContactName,
   isPlaceholderName,
@@ -2017,6 +2018,25 @@ async function handleStatusUpdate(status: {
     if (status.status === 'delivered') update.delivered_at = tsIso;
     if (status.status === 'read') update.read_at = tsIso;
 
+    // Carry Meta's reason onto the recipient row.
+    //
+    // Without this a broadcast recipient could reach 'failed' with a
+    // `sent_at`, a wamid and an EMPTY error column — a red badge with
+    // nothing behind it. The reason was arriving here and being dropped:
+    // `statusPatch` above is handed to fn_apply_message_status, which
+    // writes onto `messages`, and a broadcast send never creates a
+    // `messages` row (the fan-out calls Meta directly and tracks progress
+    // only on this table). So the RPC matched zero rows and the detail
+    // died with the request.
+    //
+    // This webhook is the ONLY carrier of the cause for a message Meta
+    // accepted and then failed later, and it arrives once.
+    if (failure) {
+      update.error_code = statusPatch.error_code ?? null;
+      update.error_message = statusPatch.error_message ?? null;
+      update.error_details = statusPatch.error_details ?? null;
+    }
+
     const { error: recUpdateErr } = await supabaseAdmin()
       .from('broadcast_recipients')
       .update(update)
@@ -2806,13 +2826,49 @@ async function findOrCreateContact(
   );
 
   if (existingContact) {
-    // Update name if it changed
-    if (name && name !== existingContact.name) {
-      await supabaseAdmin()
+    // ── Names: track WhatsApp, but never trample an edit ──────
+    //
+    // This used to be `if (name !== existing.name) update({ name })`, which
+    // meant every inbound message overwrote the CRM's name with the sender's
+    // WhatsApp profile name. Renaming a contact to "Souaib Ansari" therefore
+    // held only until their next reply, when it reverted to "Souaib".
+    //
+    // `resolveContactNameUpdate` splits the two apart: the profile name is
+    // always recorded in `wa_profile_name` (display only, shown as the
+    // "~Souaib" suffix), while `name` advances only when nobody has set it or
+    // when it still matches the profile name we last recorded. See
+    // display-name.ts for why that removes the need for a custom-name flag.
+    const nameUpdate = resolveContactNameUpdate({
+      existingName: existingContact.name,
+      existingProfileName: existingContact.wa_profile_name as
+        | string
+        | null
+        | undefined,
+      incomingProfileName: name,
+    });
+
+    if (nameUpdate) {
+      const { error: nameErr } = await supabaseAdmin()
         .from('contacts')
-        .update({ name, updated_at: new Date().toISOString() })
+        .update({ ...nameUpdate, updated_at: new Date().toISOString() })
         .eq('id', existingContact.id);
+
+      if (nameErr) {
+        // Non-fatal by contract: the message itself still has to be stored.
+        // A stale display name is a cosmetic problem; dropping the message
+        // because of one would not be.
+        console.error(
+          '[webhook] could not update contact name:',
+          nameErr.message
+        );
+      } else {
+        // Keep the in-memory row consistent with what was just written, so
+        // anything downstream in this delivery (automation payloads, the
+        // conversation preview) sees the new values rather than the old.
+        Object.assign(existingContact, nameUpdate);
+      }
     }
+
     return { contact: existingContact, wasCreated: false };
   }
 
@@ -2827,6 +2883,18 @@ async function findOrCreateContact(
       user_id: configOwnerUserId,
       phone,
       name: name || phone,
+      // Recorded from the first message onward, so a later rename can be
+      // told apart from a name we auto-filled here. Without it on create,
+      // the very first edit would look identical to an auto-fill and stay
+      // overwritable. Null rather than '' when Meta sent no profile name
+      // (echoes and history backfills carry none).
+      wa_profile_name: name?.trim() ? name.trim() : null,
+      // Every caller of this helper is a WhatsApp event: an inbound customer
+      // message, an echo of one the operator sent from the phone's WhatsApp
+      // app, or a Coexistence chat-history backfill. All three are activity
+      // the CRM observed rather than initiated, so one value covers them.
+      // (The address BOOK import is separate and records 'phone_sync'.)
+      source: 'whatsapp',
     })
     .select()
     .single();

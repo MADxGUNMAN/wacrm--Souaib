@@ -68,7 +68,7 @@ import { RequireRole } from '@/components/auth/require-role';
 import { useAuth } from '@/hooks/use-auth';
 import { usePresence } from '@/hooks/use-presence';
 import type { AccountRole } from '@/lib/auth/roles';
-import { presenceLabel, summarize } from '@/lib/presence';
+import { formatLastSeen, presenceLabel, summarize } from '@/lib/presence';
 import {
   PRESENCE_DOT_CLASS,
   PresenceDot,
@@ -462,6 +462,19 @@ export function MembersTab() {
                           {member.email}
                         </p>
                       )}
+                      {/* Last seen, visible rather than tooltip-only, and
+                          only for offline members: for someone online or
+                          away the dot already says everything, and a member
+                          who has never signed in has no presence row — so
+                          without the timestamp guard this would claim a
+                          visit that never happened. */}
+                      {presence === 'offline' && presenceRow?.last_seen_at ? (
+                        <p className="text-muted-foreground/80 text-[11px]">
+                          {t('lastSeen', {
+                            time: formatLastSeen(presenceRow.last_seen_at, now),
+                          })}
+                        </p>
+                      ) : null}
                       {member.permissions && (
                         <div className="mt-1.5 flex flex-wrap gap-1">
                           {Object.entries(member.permissions)

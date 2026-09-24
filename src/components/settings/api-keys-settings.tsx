@@ -16,11 +16,12 @@
 // ============================================================
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { toast } from 'sonner';
-import { Copy, KeyRound, Loader2, Plus, Trash2 } from 'lucide-react';
+import { BookOpen, Copy, KeyRound, Loader2, Plus, Trash2 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -138,19 +139,38 @@ export function ApiKeysSettings() {
     <section className="animate-in fade-in-50 space-y-6 duration-200">
       <SettingsPanelHead
         title={t('title')}
-        description={
-          t.rich('description', {
-            apiCode: (chunks: React.ReactNode) => <code className="text-xs">{chunks}</code>,
-            headerCode: (chunks: React.ReactNode) => <code className="text-xs">{chunks}</code>
-          })
-        }
+        description={t.rich('description', {
+          apiCode: (chunks: React.ReactNode) => (
+            <code className="text-xs">{chunks}</code>
+          ),
+          headerCode: (chunks: React.ReactNode) => (
+            <code className="text-xs">{chunks}</code>
+          ),
+        })}
         action={
-          <RequireRole min="owner">
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" />
-              {t('newApiKey')}
-            </Button>
-          </RequireRole>
+          <div className="flex items-center gap-2">
+            {/* Outside RequireRole on purpose: the docs are the same for
+                everyone, and a member who cannot mint a key is often
+                exactly the person who has been handed one to integrate
+                with. Opens in a new tab so a half-filled key dialog on
+                this page is never discarded. */}
+            <Link
+              href="/api-reference"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={buttonVariants({ variant: 'outline' })}
+            >
+              <BookOpen className="size-4" />
+              {t('apiDocs')}
+            </Link>
+
+            <RequireRole min="owner">
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus className="size-4" />
+                {t('newApiKey')}
+              </Button>
+            </RequireRole>
+          </div>
         }
       />
 
@@ -368,7 +388,9 @@ function CreateKeyDialog({
             </DialogHeader>
 
             <div className="space-y-1.5">
-              <Label className="text-muted-foreground">{t('apiKeyLabel')}</Label>
+              <Label className="text-muted-foreground">
+                {t('apiKeyLabel')}
+              </Label>
               <div className="flex gap-2">
                 <Input
                   readOnly
@@ -420,7 +442,9 @@ function CreateKeyDialog({
               </div>
 
               <div className="space-y-2">
-                <Label className="text-muted-foreground">{t('scopesLabel')}</Label>
+                <Label className="text-muted-foreground">
+                  {t('scopesLabel')}
+                </Label>
                 <div className="border-border space-y-2 rounded-md border p-3">
                   {API_SCOPES.map((scope) => (
                     <label

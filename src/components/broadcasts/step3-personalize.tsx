@@ -22,7 +22,7 @@ import {
   EMPTY_MPM,
   EMPTY_ORDER_DETAILS,
   buildSendPlan,
-  localInputToMs,
+  sendValuesFromExtras,
   missingSendValues,
   type BroadcastSendExtras,
   type MpmValues,
@@ -39,6 +39,10 @@ import {
   OrderDetailsFields,
   OrderStatusFields,
 } from '@/components/templates/send-time-fields';
+import {
+  TestSendBox,
+  type TestVariableField,
+} from '@/components/broadcasts/test-send-box';
 
 type VariableType = 'static' | 'field' | 'custom_field';
 
@@ -249,6 +253,15 @@ export function Step3Personalize({
    */
   const missingExtras = useMemo(() => {
     return missingSendValues(plan, {
+      // The offer/card/commerce values come from the SAME mapper the send
+      // path uses, so a field added there is validated here for free
+      // rather than silently skipped until a send fails.
+      ...sendValuesFromExtras({
+        extras: sendExtras,
+        // Header media has its own URL validation below
+        // (`headerMediaError`); stubbed out just after this spread.
+        isMediaHeader: false,
+      }),
       // Stand-ins for the values this step does not own: body variables
       // are per-contact (checked by `unmappedKeys`) and the header media
       // URL has its own validation with a URL check (`headerMediaError`).
@@ -260,19 +273,103 @@ export function Step3Personalize({
       namedBody: Object.fromEntries(plan.bodyParamNames.map((n) => [n, 'x'])),
       headerText: 'x',
       headerMediaUrl: 'x',
-      buttonParams: sendExtras.buttonParams,
-      offerExpiresAtMs: localInputToMs(sendExtras.offerExpiryLocal),
-      cards: sendExtras.cards,
-      headerLocation: sendExtras.headerLocation,
-      catalogThumbnailProductId: sendExtras.catalogThumbnailProductId,
-      mpm: sendExtras.mpm,
-      orderDetails: sendExtras.orderDetails,
-      orderReferenceId: sendExtras.orderStatus?.orderReferenceId,
-      orderStatus: (sendExtras.orderStatus?.orderStatus || '') as
-        OrderStatusOption | '',
-      orderStatusDescription: sendExtras.orderStatus?.orderStatusDescription,
     });
   }, [plan, sendExtras]);
+
+  /**
+   * The test send's values, assembled from the SAME mapper the real
+   * broadcast uses — so a passing test actually proves the campaign will
+   * render, rather than proving that a second, similar payload renders.
+   *
+   * `isMediaHeader` is real here (unlike in the completeness check
+   * above), because the test message must carry the operator's chosen
+   * media, not the template's approved sample.
+   */
+  const testSharedValues = useMemo(
+    () =>
+      sendValuesFromExtras({
+        extras: sendExtras,
+        headerMediaUrl,
+        isMediaHeader: mediaHeaderType !== null,
+      }),
+    [sendExtras, headerMediaUrl, mediaHeaderType]
+  );
+
+  /**
+   * The placeholders the test box asks the operator to fill, in template
+   * order, each seeded from the campaign mapping where that mapping is a
+   * literal value.
+   *
+   * ─── Why the test collects its own values ─────────────────────────
+   *
+   * A test goes to a bare phone number, which has no contact row, so a
+   * placeholder mapped to a contact field has nothing to resolve from.
+   * The first version sent empty strings for those and could never work:
+   * Meta rejects an empty text parameter outright, so the test failed for
+   * precisely the templates people most want to test.
+   *
+   * A static mapping carries over so nothing is retyped. A contact-backed
+   * mapping starts blank with a hint naming the field the real value will
+   * come from, making it clear this is a stand-in for the test rather
+   * than an edit to the campaign.
+   */
+  const testVariableFields = useMemo<TestVariableField[]>(() => {
+    // An authentication template has no body placeholders: Meta owns the
+    // wording and the single parameter is the one-time code.
+    if (plan.isAuthentication) {
+      return [
+        {
+          key: '1',
+          label: 'One-time code',
+          initialValue: sendExtras.authCode ?? '',
+          hint: 'Sent as the verification code for this test.',
+        },
+      ];
+    }
+
+    return placeholders.map((placeholder) => {
+      const key = placeholder.replace(/^\{\{|\}\}$/g, '');
+      const mapping = variables[key];
+
+      if (mapping?.type === 'static' && mapping.value.trim()) {
+        return {
+          key,
+          label: placeholder,
+          initialValue: mapping.value,
+          hint: 'Same fixed value your campaign sends.',
+        };
+      }
+      if (mapping?.type === 'field' && mapping.value) {
+        return {
+          key,
+          label: placeholder,
+          initialValue: '',
+          hint: `Real sends use the contact's ${mapping.value}.`,
+        };
+      }
+      if (mapping?.type === 'custom_field' && mapping.value) {
+        const custom = customFields.find((f) => f.id === mapping.value);
+        return {
+          key,
+          label: placeholder,
+          initialValue: '',
+          hint: `Real sends use the contact's ${custom?.field_name ?? 'custom field'}.`,
+        };
+      }
+      return {
+        key,
+        label: placeholder,
+        initialValue: '',
+        hint: 'Not mapped for the campaign yet.',
+      };
+    });
+  }, [
+    plan.isAuthentication,
+    sendExtras.authCode,
+    placeholders,
+    variables,
+    customFields,
+  ]);
 
   function updateVariable(key: string, patch: Partial<VariableMapping>) {
     const current = variables[key] ?? {
@@ -729,6 +826,29 @@ export function Step3Personalize({
           {`Still needed before this can send: ${missingExtras.join(', ')}.`}
         </div>
       )}
+
+      {/*
+        Prove it on a real handset before committing the audience. Placed
+        here, next to the values being tested, so a bad result can be
+        fixed without navigating back.
+      */}
+      <TestSendBox
+        template={template}
+        sharedValues={testSharedValues}
+        variableFields={testVariableFields}
+        isNamed={template.parameter_format === 'NAMED'}
+        // Deliberately NOT gated on `unmappedKeys`: the box collects its
+        // own placeholder values, so an unfinished campaign mapping is no
+        // reason to block a test. Only values the box cannot ask for — a
+        // header image, carousel card media, an offer deadline — hold it
+        // back, because those come from the fields above.
+        disabled={headerMediaError !== null || missingExtras.length > 0}
+        disabledReason={
+          headerMediaError !== null
+            ? 'Add a valid header media URL above before sending a test.'
+            : 'Fill the required send-time fields above before sending a test.'
+        }
+      />
 
       <div className="border-border flex items-center justify-between border-t pt-4">
         <Button

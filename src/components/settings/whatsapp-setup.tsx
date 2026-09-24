@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import Link from 'next/link';
 import { toast } from 'sonner';
 import {
   CheckCircle2,
+  Clock,
   ExternalLink,
   Loader2,
   AlertTriangle,
@@ -22,8 +24,15 @@ import { useMetaSDK } from '@/components/providers/meta-sdk-provider';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import {
+  billingHubUrl,
+  derivePaymentState,
+  deriveRegistrationState,
   deriveVerificationState,
+  groupHealthIssues,
+  paymentActivityUrl,
   resolveHealthIssueLink,
+  PAYMENT_SETUP_STEPS,
+  type HealthIssue,
   type HealthSummary,
 } from '@/lib/whatsapp/health';
 import type {
@@ -33,6 +42,12 @@ import type {
   UsageTotals,
 } from '@/lib/whatsapp/limits';
 import { usagePercent, type InitiatedUsage } from '@/lib/whatsapp/usage';
+import { COEXISTENCE_FEATURE_TYPE } from '@/lib/whatsapp/connection-mode';
+import {
+  describeEmbeddedSignupError,
+  formatEmbeddedSignupError,
+  type EmbeddedSignupErrorInfo,
+} from '@/lib/whatsapp/embedded-signup-errors';
 import {
   formatDisplayPhoneNumber,
   PHONE_UNKNOWN_LABEL,
@@ -58,6 +73,8 @@ interface MetaAccountInfo {
     quality_rating: string | null;
     status: string | null;
     name_status: string | null;
+    code_verification_status: string | null;
+    platform_type: string | null;
   };
   waba: {
     id: string;
@@ -87,9 +104,77 @@ const ES_CONFIG_ID = process.env.NEXT_PUBLIC_META_ES_CONFIG_ID ?? '';
 const WA_ICON_PATH =
   'M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.888-.788-1.489-1.761-1.662-2.06-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413z';
 
+/**
+ * One of Meta's reasons, wherever it is shown.
+ *
+ * Shared because the same reason now appears under whichever step owns
+ * its subject, and a reason that looked different depending on which
+ * panel it landed in would read as two unrelated problems.
+ */
+function HealthIssueRow({
+  issue,
+  wabaId,
+  showSolution = true,
+  showLink = true,
+  label,
+}: {
+  issue: HealthIssue;
+  wabaId?: string | null;
+  /**
+   * Meta's suggested remedy. Turned off where the surrounding step
+   * already spells the remedy out — Meta's solution sentence for a
+   * missing payment method is "add a new payment method to the account",
+   * which is the numbered guide and the button beneath it said twice
+   * more.
+   */
+  showSolution?: boolean;
+  /** Likewise for the link, where the step has its own action button. */
+  showLink?: boolean;
+  /**
+   * Optional attribution prefix, e.g. "Meta reports". Used where our own
+   * summary is shown above Meta's text, so it is unambiguous which
+   * sentence came from whom.
+   */
+  label?: string;
+}) {
+  const link = resolveHealthIssueLink(issue.description, wabaId);
+  return (
+    <li>
+      <p className="text-foreground font-medium">
+        {label ? (
+          <span className="text-muted-foreground font-normal">{label}: </span>
+        ) : null}
+        {issue.description}
+      </p>
+      {showSolution && issue.solution ? (
+        <p className="mt-1">{issue.solution}</p>
+      ) : null}
+      {/* Meta returns no URL with any of these, so this is our mapping
+          from the wording to the page that resolves it. */}
+      {showLink ? (
+        <a
+          href={link.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary mt-1.5 inline-flex items-center gap-1.5 text-xs font-semibold hover:underline"
+        >
+          {link.label}
+          <ExternalLink className="size-3" />
+        </a>
+      ) : null}
+    </li>
+  );
+}
+
 export function WhatsAppSetup() {
   const supabase = createClient();
-  const { user, accountId, loading: authLoading, profileLoading } = useAuth();
+  const {
+    user,
+    accountId,
+    isOwner,
+    loading: authLoading,
+    profileLoading,
+  } = useAuth();
   const { fbLoaded } = useMetaSDK();
 
   const [loading, setLoading] = useState(true);
@@ -175,6 +260,13 @@ export function WhatsAppSetup() {
     synced_at: string | null;
   } | null>(null);
   const [refreshingProfile, setRefreshingProfile] = useState(false);
+  const [completingRegistration, setCompletingRegistration] = useState(false);
+  /**
+   * A freshly generated two-step PIN, shown until the page is reloaded.
+   * Deliberately not persisted in component state beyond that — it is
+   * readable from the server row, and this is only the one-time reveal.
+   */
+  const [generatedPin, setGeneratedPin] = useState<string | null>(null);
 
   const loadBusinessProfile = useCallback(async () => {
     try {
@@ -239,7 +331,13 @@ export function WhatsAppSetup() {
   // Meta reports in-flow failures through the same message channel rather
   // than through the FB.login callback, so hold the last one to explain a
   // code-less response instead of blaming the user for cancelling.
-  const flowErrorRef = useRef<string | null>(null);
+  //
+  // Stored as the resolved descriptor rather than a bare string, because the
+  // `retryable` flag changes what the toast should say. A permanent rejection
+  // ("this country isn't supported yet") must not read like a transient one,
+  // or the operator retries forever — which is exactly what happened while
+  // every failure collapsed into "Connection cancelled or incomplete".
+  const flowErrorRef = useRef<EmbeddedSignupErrorInfo | null>(null);
 
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
@@ -274,12 +372,34 @@ export function WhatsAppSetup() {
           };
           flowErrorRef.current = null;
         } else if (data.event === 'ERROR' || data.data?.error_message) {
-          flowErrorRef.current =
-            data.data?.error_message ?? 'Meta reported an error during setup';
-          console.error('Embedded signup error:', data.data);
+          // Resolve Meta's code into something actionable. The raw payload is
+          // also logged in full: Meta's numeric code and fbtrace_id are the
+          // only things support can take back to Meta, and they used to be
+          // discarded along with everything else.
+          const info = describeEmbeddedSignupError({
+            payload: data.data,
+            currentStep: data.data?.current_step,
+          });
+          flowErrorRef.current = info;
+          console.error('[embedded-signup] Meta reported an error', {
+            resolvedCode: info.code,
+            family: info.family,
+            retryable: info.retryable,
+            currentStep: data.data?.current_step ?? '(none)',
+            raw: data.data,
+          });
         } else if (data.event === 'CANCEL') {
+          // A genuine cancel is not an error, so it carries no fix text — but
+          // naming the step it was closed on is still the difference between
+          // "I gave up" and "it broke and I closed it".
           flowErrorRef.current = data.data?.current_step
-            ? `Setup was closed at the "${data.data.current_step}" step`
+            ? {
+                code: null,
+                family: 'unknown',
+                message: `Setup was closed at the "${data.data.current_step}" step.`,
+                fix: '',
+                retryable: true,
+              }
             : null;
         }
       } catch {
@@ -339,12 +459,33 @@ export function WhatsAppSetup() {
     // The postMessage listener above reads `data.type`, `data.event` and
     // `data.data.*`, none of which changed between these versions, so it
     // keeps working unmodified.
+    //
+    // ── Which options get the Coexistence variation ───────────
+    //
+    // ONLY 'existing'. That is the option whose wording describes
+    // Coexistence — "a phone number that's currently active on WhatsApp
+    // Business app".
+    //
+    // This used to include 'migrate' as well, which was wrong. Migrating an
+    // existing API number off another provider (Twilio, Wati, Interakt, …)
+    // is the opposite situation: that number is ALREADY on the Cloud API and
+    // is not on the WhatsApp Business app at all. Sending the Business-App
+    // variation put those operators into Meta's Coexistence screens, which
+    // then had nothing eligible to offer them — the flow either dead-ended
+    // or silently fell through to the standard path, and the toast blamed
+    // them for cancelling.
+    //
+    // It also disagreed with the value sent to our own backend, which only
+    // ever counted 'existing'. Two signals derived from one decision must
+    // not be able to diverge, so both now read `wantsCoexistence`.
+    const wantsCoexistence = option === 'existing';
+
     const extras: Record<string, unknown> = {
       version: 'v4',
       setup: {},
     };
-    if (option === 'existing' || option === 'migrate') {
-      extras.featureType = 'whatsapp_business_app_onboarding';
+    if (wantsCoexistence) {
+      extras.featureType = COEXISTENCE_FEATURE_TYPE;
     }
 
     // Embedded Signup requires response_type 'code' plus
@@ -368,31 +509,13 @@ export function WhatsAppSetup() {
               finish_event: embeddedDataRef.current.finish_event,
               // What the operator picked in the connect modal, as a
               // cross-check for when Meta's finish_event goes missing (a
-              // popup closed early, a blocked message channel).
-              //
-              // ONLY 'existing' counts. That is the option whose wording
-              // actually describes Coexistence — "a phone number that's
-              // currently active on WhatsApp Business app". 'migrate'
-              // means moving an existing API number off another provider
-              // (Twilio, Wati, …), which is NOT coexistence: that number
-              // is already on the Cloud API and is not on the Business
-              // App at all. Claiming it was would set connection_mode
-              // wrong, and the CRM would then wait for phone echoes that
-              // can never arrive.
-              //
-              // Note the `extras.featureType` line above still sends the
-              // Business-App variation for 'migrate' too. That looks
-              // wrong for the same reason, but it is pre-existing
-              // behaviour on a flow there is no way to test here, so it
-              // is left alone and flagged rather than changed blind.
-              // Meta's own finish_event stays authoritative either way:
-              // if a migrate really does complete Business-App
-              // onboarding, the event says so and the mode is still set
-              // correctly.
-              requested_feature_type:
-                option === 'existing'
-                  ? 'whatsapp_business_app_onboarding'
-                  : undefined,
+              // popup closed early, a blocked message channel). Derived
+              // from the same `wantsCoexistence` as `extras.featureType`
+              // above so the two can never disagree. Meta's own
+              // finish_event stays authoritative either way.
+              requested_feature_type: wantsCoexistence
+                ? COEXISTENCE_FEATURE_TYPE
+                : undefined,
             }),
           })
             .then(async (res) => {
@@ -466,12 +589,22 @@ export function WhatsAppSetup() {
               setIsConnecting(false);
             });
         } else {
-          // No authResponse means no code. If Meta pushed a reason through
-          // the message channel, show that instead of a generic "cancelled".
+          // No authResponse means no code — and that is the same shape
+          // whether Meta rejected the account outright or the operator
+          // clicked the X. The message channel is the only place the real
+          // reason ever appears, so it decides the wording here.
           console.log('Embedded signup returned no authResponse:', response);
-          toast.error(
-            flowErrorRef.current || 'Connection cancelled or incomplete'
-          );
+
+          const info = flowErrorRef.current;
+          if (info) {
+            toast.error(formatEmbeddedSignupError(info), {
+              // A permanent rejection needs to stay on screen long enough to
+              // read the remediation; a plain cancel does not.
+              duration: info.retryable ? 6000 : 12000,
+            });
+          } else {
+            toast.error('Connection cancelled or incomplete');
+          }
           setIsConnecting(false);
         }
       },
@@ -514,9 +647,97 @@ export function WhatsAppSetup() {
   // Only claim there is something to fix when Meta says sending is
   // blocked. `unknown` renders as neutral guidance, never as an alarm —
   // an unreadable health field is our problem, not the customer's.
-  const sendingBlocked = readiness === 'blocked';
   const sendingLimited = readiness === 'limited';
-  const sendingReady = readiness === 'available';
+
+  // Every reason Meta gives, routed to the step that owns the subject.
+  // The payment step used to render the whole list, which told a customer
+  // their payment method was at fault when the real cause was business
+  // verification — a problem that has its own step immediately below,
+  // where the same warning was already being shown.
+  //
+  // `AVAILABLE_WITHOUT_REVIEW` counts as accepted for the display name:
+  // the name is live in chats, it simply never went through a review,
+  // which is the only thing Meta's health note is actually missing.
+  //
+  // Not memoised: this sits below an early return, so a hook here would
+  // be called conditionally, and it is a handful of short strings.
+  const issues = groupHealthIssues(health);
+
+  // Payment is tracked separately from sending because the two genuinely
+  // differ: an account can be capped over business verification while its
+  // billing is perfectly fine.
+  const paymentState = derivePaymentState({
+    readiness,
+    paymentIssues: issues.payment,
+  });
+  const billingWabaId = metaInfo?.waba?.id || config?.waba_id || null;
+
+  // Read from Meta's three real status fields rather than from its health
+  // remedy, so a number Meta is merely still reviewing is not reported as
+  // an unfinished job on the operator's desk.
+  const registration = deriveRegistrationState({
+    status: metaInfo?.phone?.status,
+    code_verification_status: metaInfo?.phone?.code_verification_status,
+    name_status: metaInfo?.phone?.name_status,
+    platform_type: metaInfo?.phone?.platform_type,
+  });
+
+  /**
+   * Finish registering a number that was connected but never activated.
+   *
+   * Refreshes account info afterwards so the panel disappears on its own
+   * rather than leaving the operator wondering whether it worked.
+   */
+  const completeRegistration = async () => {
+    setCompletingRegistration(true);
+    try {
+      const res = await fetch('/api/whatsapp/config/complete-registration', {
+        method: 'POST',
+      });
+      const payload = (await res.json()) as {
+        success?: boolean;
+        error?: string;
+        pin?: string | null;
+        note?: string;
+        warning?: string;
+      };
+
+      if (!res.ok || !payload.success) {
+        toast.error(payload.error ?? 'Could not complete registration.');
+        return;
+      }
+
+      // Held in state rather than a toast: a toast disappears, and this
+      // PIN cannot be retrieved from Meta afterwards.
+      if (payload.pin) setGeneratedPin(payload.pin);
+      toast.success(
+        payload.warning ?? payload.note ?? 'Registration complete.'
+      );
+      await fetchMetaInfo();
+    } catch {
+      toast.error('Could not reach the server to complete registration.');
+    } finally {
+      setCompletingRegistration(false);
+    }
+  };
+
+  /**
+   * The one-line summary above the payment step, or null to show none.
+   *
+   * Null when Meta has given us its own error for this account: that
+   * sentence is rendered verbatim just below, and a generic paraphrase
+   * sitting above it added nothing but a second voice.
+   */
+  const paymentSummary =
+    paymentState === 'action_required'
+      ? issues.payment.length > 0
+        ? null
+        : 'A payment method in Facebook Business Manager is required to send template messages and run broadcasts.'
+      : paymentState === 'no_issue'
+        ? sendingLimited
+          ? 'Meta reports no payment problem on this account, so your broadcasts will go out. Your volume is capped for a separate reason below.'
+          : 'Meta reports no payment problem on this account. Template messages and broadcasts can be billed normally.'
+        : 'A payment method in Facebook Business Manager is required to send template messages and run broadcasts.';
 
   // Limits panel. Rendered only when Meta returned at least one figure,
   // so an account on an API version that exposes none of these sees no
@@ -623,7 +844,13 @@ export function WhatsAppSetup() {
                 <span className="hidden sm:inline">Refresh</span>
               </button>
             </div>
-            <div className="border-border bg-border grid grid-cols-2 gap-px overflow-hidden rounded-xl border sm:grid-cols-3 lg:grid-cols-6">
+            {/* Six data points, but not six equal-width columns. The phone
+                number is the only value whose full exact text is part of
+                its meaning, so it gets a wider track on desktop. The
+                other five are short, fixed vocabulary and fit naturally
+                in 1fr. This keeps both "WHATSAPP NUMBER" and an E.164
+                number on one line without ellipses or awkward wrapping. */}
+            <div className="border-border bg-border grid grid-cols-2 gap-px overflow-hidden rounded-xl border sm:grid-cols-3 lg:grid-cols-[minmax(0,1fr)_minmax(175px,1.35fr)_repeat(4,minmax(0,1fr))]">
               {/* Business */}
               <div className="bg-card min-w-0 space-y-1.5 p-3.5 sm:p-4">
                 <span className="text-muted-foreground block truncate text-[11px] font-medium tracking-wider uppercase">
@@ -642,8 +869,15 @@ export function WhatsAppSetup() {
               </div>
 
               {/* WhatsApp Number */}
+              {/* Not truncated, unlike its siblings. A cut phone number
+                  ("+1555-424-25...") is not a shorter version of the real
+                  one, it looks like a DIFFERENT number — the one thing on
+                  this whole card an operator will screenshot and give to a
+                  customer. Both the label and the value wrap instead,
+                  which grows this one row slightly rather than lying by
+                  omission. */}
               <div className="bg-card min-w-0 space-y-1.5 p-3.5 sm:p-4">
-                <span className="text-muted-foreground block truncate text-[11px] font-medium tracking-wider uppercase">
+                <span className="text-muted-foreground block text-[11px] leading-tight font-medium tracking-wider uppercase">
                   WhatsApp Number
                 </span>
                 {/* Live value first, then the copy cached on our own row
@@ -654,7 +888,7 @@ export function WhatsAppSetup() {
                     "+870875646113078" — and read as a real number. That
                     was reported as a bug twice. An asset id must never
                     stand in for a phone number. */}
-                <div className="text-primary truncate text-sm font-medium">
+                <div className="text-primary text-sm font-medium break-all">
                   {metaInfoLoading
                     ? '...'
                     : (metaInfo?.phone?.display_phone_number ??
@@ -763,25 +997,26 @@ export function WhatsAppSetup() {
                 })()}
               </div>
 
-              {/* Message Usage (View Insights) */}
+              {/* Message Usage (View Insights)
+
+                  Points at our own insights dashboard rather than
+                  business.facebook.com. Meta publishes all of this over
+                  the API, and sending the operator to a different product
+                  — with its own account switcher — to read numbers about
+                  templates they manage here was the wrong default. The
+                  link out to Meta still exists, on that page. */}
               <div className="bg-card min-w-0 space-y-1.5 p-3.5 sm:p-4">
                 <span className="text-muted-foreground block truncate text-[11px] font-medium tracking-wider uppercase">
                   Message Usage
                 </span>
                 <div className="text-sm">
-                  <a
-                    href={
-                      metaInfo?.waba?.id || config?.waba_id
-                        ? `https://business.facebook.com/latest/whatsapp_manager/insights?business_id=${metaInfo?.waba?.id || config?.waba_id}&asset_id=${metaInfo?.waba?.id || config?.waba_id}`
-                        : 'https://business.facebook.com/latest/whatsapp_manager/insights'
-                    }
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <Link
+                    href="/settings/whatsapp-insights"
                     className="text-primary inline-flex items-center gap-1 font-semibold hover:underline"
                   >
                     <span>View Insights</span>
-                    <ExternalLink className="size-3.5 shrink-0" />
-                  </a>
+                    <Gauge className="size-3.5 shrink-0" />
+                  </Link>
                 </div>
               </div>
             </div>
@@ -930,6 +1165,12 @@ export function WhatsAppSetup() {
                     Not reported
                   </p>
                 )}
+
+                {/* Meta's health note about the name is deliberately NOT
+                    shown here. `nameReview` above already states Meta's
+                    verdict and what to do about it, from a more
+                    authoritative field — the note only ever restated it
+                    more vaguely, or flatly contradicted it. */}
               </div>
 
               {/* Throughput — speed, as distinct from daily volume. */}
@@ -1201,6 +1442,117 @@ export function WhatsAppSetup() {
                   : 'Get instant access to the WhatsApp Business API using your Facebook account.'}
               </p>
 
+              {/* Number registration belongs to the connection, not billing.
+                  Led by OUR reading of Meta's real status fields rather
+                  than by Meta's health remedy, because that remedy tells
+                  an operator to "finish the OTP authentication process"
+                  even when code_verification_status is already VERIFIED —
+                  which is the normal state for a virtual number Meta is
+                  still reviewing, and sent people to redo a finished step
+                  to fix something only Meta can clear.
+
+                  Meta's own error text is still shown verbatim beneath, so
+                  nothing is hidden; only the inapplicable remedy is. */}
+              {isConnected &&
+              !metaInfoLoading &&
+              issues.registration.length > 0 &&
+              registration.state !== 'ready' ? (
+                <div
+                  className={cn(
+                    'rounded-lg border p-3.5',
+                    registration.state === 'in_review'
+                      ? 'border-blue-500/30 bg-blue-500/5'
+                      : 'border-amber-500/30 bg-amber-500/5'
+                  )}
+                >
+                  <div className="mb-1.5 flex items-center gap-2">
+                    {registration.state === 'in_review' ? (
+                      <Clock className="size-4 shrink-0 text-blue-500" />
+                    ) : (
+                      <AlertTriangle className="size-4 shrink-0 text-amber-500" />
+                    )}
+                    <span
+                      className={cn(
+                        'text-sm font-medium',
+                        registration.state === 'in_review'
+                          ? 'text-blue-600 dark:text-blue-400'
+                          : 'text-amber-600 dark:text-amber-400'
+                      )}
+                    >
+                      {registration.title}
+                    </span>
+                  </div>
+                  <p className="text-muted-foreground text-sm">
+                    {registration.detail}
+                  </p>
+                  <ul className="text-muted-foreground mt-2.5 space-y-2 border-t border-dashed pt-2.5 text-xs">
+                    {issues.registration.map((issue, index) => (
+                      <HealthIssueRow
+                        key={issue.code ?? `reg${index}`}
+                        issue={issue}
+                        wabaId={config?.waba_id}
+                        showSolution={registration.trustMetaSolution}
+                        showLink={registration.trustMetaSolution}
+                        label="Meta reports"
+                      />
+                    ))}
+                  </ul>
+
+                  {/* The recovery path for numbers connected before the
+                      signup route started registering them itself. Only
+                      offered when we can see the number is verified but
+                      unregistered — never when Meta is simply reviewing,
+                      and never when the OTP is genuinely outstanding,
+                      because the call would fail. */}
+                  {registration.canSelfRepair ? (
+                    <div className="mt-3 space-y-2">
+                      {isOwner ? (
+                        <Button
+                          size="sm"
+                          onClick={() => void completeRegistration()}
+                          disabled={completingRegistration}
+                        >
+                          {completingRegistration ? (
+                            <>
+                              <Loader2 className="mr-2 size-3.5 animate-spin" />
+                              Completing…
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle2 className="mr-2 size-3.5" />
+                              Complete registration
+                            </>
+                          )}
+                        </Button>
+                      ) : (
+                        <p className="text-muted-foreground text-xs">
+                          Ask the workspace owner to complete this — it sets a
+                          security PIN for the whole business, so only the owner
+                          can.
+                        </p>
+                      )}
+
+                      {/* Shown once, and only when freshly generated. Meta
+                          has no API to read a PIN back, so if the operator
+                          does not save it here it is gone. */}
+                      {generatedPin ? (
+                        <div className="border-border bg-card rounded-md border p-3">
+                          <p className="text-foreground text-xs font-semibold">
+                            Save your two-step verification PIN: {generatedPin}
+                          </p>
+                          <p className="text-muted-foreground mt-1 text-[11px]">
+                            Meta required a PIN to activate this number, so we
+                            generated one. Meta cannot show it again — store it
+                            somewhere safe. You will need it if you ever change
+                            two-step verification in WhatsApp Manager.
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               {isConnected ? (
                 <div className="flex items-center gap-3 pt-1">
                   <Button
@@ -1242,8 +1594,12 @@ export function WhatsAppSetup() {
                   <Button
                     onClick={() => setShowConnectModal(true)}
                     disabled={isConnecting || !fbLoaded}
-                    className="bg-[#00A884] text-white shadow-sm hover:bg-[#008f6f]"
+                    className="group animate-wa-ring relative overflow-hidden rounded-xl bg-gradient-to-r from-[#00A884] via-[#00b58e] to-[#008f6f] px-5 py-2.5 font-semibold text-white shadow-[0_4px_14px_rgba(0,168,132,0.35)] transition-all duration-300 hover:scale-[1.02] hover:shadow-[0_8px_25px_rgba(0,168,132,0.55)] active:scale-[0.98]"
                   >
+                    <span
+                      className="animate-wa-shimmer pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/30 to-transparent"
+                      aria-hidden="true"
+                    />
                     {isConnecting ? (
                       <>
                         <Loader2 className="mr-2 size-4 animate-spin" />
@@ -1252,13 +1608,12 @@ export function WhatsAppSetup() {
                     ) : (
                       <>
                         <svg
-                          className="mr-2 size-4"
+                          className="mr-2 size-4 fill-current transition-transform duration-300 group-hover:scale-110 group-hover:rotate-6"
                           viewBox="0 0 24 24"
-                          fill="currentColor"
                         >
                           <path d={WA_ICON_PATH} />
                         </svg>
-                        Connect WhatsApp
+                        Connect WhatsApp Business
                       </>
                     )}
                   </Button>
@@ -1280,22 +1635,20 @@ export function WhatsAppSetup() {
               className={`flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
                 !isConnected
                   ? 'bg-muted text-muted-foreground'
-                  : sendingReady
+                  : paymentState === 'no_issue'
                     ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400'
-                    : sendingLimited
-                      ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400'
-                      : sendingBlocked
-                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
-                        : 'bg-muted text-muted-foreground'
+                    : paymentState === 'action_required'
+                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400'
+                      : 'bg-muted text-muted-foreground'
               }`}
             >
               {!isConnected ? (
                 '2'
-              ) : sendingReady || sendingLimited ? (
-                // Limited still means messages go out, so it earns a tick
-                // rather than a warning triangle.
+              ) : paymentState === 'no_issue' ? (
+                // Meta raised no billing complaint, so there is nothing to
+                // do here even when volume is capped for another reason.
                 <CheckCircle2 className="size-4" />
-              ) : sendingBlocked ? (
+              ) : paymentState === 'action_required' ? (
                 <AlertTriangle className="size-4" />
               ) : (
                 '2'
@@ -1314,108 +1667,115 @@ export function WhatsAppSetup() {
                     Checking with Meta
                   </span>
                 ) : null}
-                {isConnected && !metaInfoLoading && sendingReady ? (
+                {/* The badge reports BILLING only, since that is what this
+                    step is about. A sending-readiness badge was shown
+                    beside it and had to go: two badges on one heading read
+                    as one compound verdict, so a green "No payment issues"
+                    next to "Can send · limited" looked like billing was
+                    itself the thing being limited. The cap is stated in the
+                    sentence below and owned by the Messaging limits
+                    section. */}
+                {isConnected &&
+                !metaInfoLoading &&
+                paymentState === 'no_issue' ? (
                   <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400">
-                    Ready to send
+                    No payment issues
                   </span>
                 ) : null}
-                {isConnected && !metaInfoLoading && sendingBlocked ? (
+                {isConnected &&
+                !metaInfoLoading &&
+                paymentState === 'action_required' ? (
                   <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/50 dark:text-amber-400">
                     Action Required
                   </span>
                 ) : null}
-                {isConnected && !metaInfoLoading && sendingLimited ? (
-                  <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-900/50 dark:text-blue-400">
-                    Can send · limited
-                  </span>
-                ) : null}
               </div>
 
-              <p className="text-muted-foreground text-sm">
-                {sendingReady
-                  ? 'Meta reports your account can send messages. Nothing to do here.'
-                  : sendingLimited
-                    ? 'Meta reports you can send messages, but with a restriction. Your broadcasts will still go out.'
-                    : 'A payment method in Facebook Business Manager is required to send template messages and run broadcasts.'}
-              </p>
+              {/* Exactly one statement of the problem, and Meta's own words
+                  win. When Meta has told us what is wrong, our generic
+                  sentence is suppressed — running both put a paraphrase
+                  directly above the real thing, which is how this step came
+                  to say "you need a payment method" three times in three
+                  different registers. */}
+              {paymentSummary ? (
+                <p className="text-muted-foreground text-sm">
+                  {paymentSummary}
+                </p>
+              ) : null}
+
+              {/* ---- Payment not set up: Meta's steps, then the button ----
+                  The steps are spelled out because the failure is silent
+                  from inside the CRM: Meta blocks the send, and the person
+                  reading this has no way to know that a card which is not
+                  the DEFAULT counts for nothing. */}
+              {isConnected &&
+              !metaInfoLoading &&
+              paymentState === 'action_required' ? (
+                <>
+                  {issues.payment.length > 0 ? (
+                    <ul className="text-muted-foreground space-y-3 text-sm">
+                      {issues.payment.map((issue, index) => (
+                        <HealthIssueRow
+                          key={issue.code ?? `p${index}`}
+                          issue={issue}
+                          wabaId={config?.waba_id}
+                          // The numbered guide and the button below carry
+                          // the remedy, so Meta's version of it and its
+                          // link are both suppressed here.
+                          showSolution={false}
+                          showLink={false}
+                        />
+                      ))}
+                    </ul>
+                  ) : null}
+
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+                    <div className="mb-2.5 flex items-center gap-2">
+                      <AlertTriangle className="size-4 shrink-0 text-amber-500" />
+                      <span className="text-sm font-medium text-amber-600 dark:text-amber-400">
+                        Follow these steps to complete your payment setup:
+                      </span>
+                    </div>
+                    <ol className="space-y-2">
+                      {PAYMENT_SETUP_STEPS.map((step, index) => (
+                        <li key={step} className="flex gap-2.5">
+                          <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-[11px] font-semibold text-amber-700 dark:text-amber-400">
+                            {index + 1}
+                          </span>
+                          <span className="text-muted-foreground min-w-0 flex-1 text-sm leading-relaxed">
+                            {step}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                </>
+              ) : null}
 
               {isConnected && !metaInfoLoading ? (
                 <>
-                  {/* Meta's own wording for each problem, plus its suggested
-                      fix. Rendering their text rather than our guess means
-                      this stays correct as Meta changes requirements. */}
-                  {sendingBlocked && health && health.blockers.length > 0 ? (
-                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
-                      <div className="mb-3 flex items-center gap-2">
-                        <AlertTriangle className="size-4 text-amber-500" />
-                        <span className="text-sm font-medium text-amber-600 dark:text-amber-400">
-                          Meta is blocking sending for this reason:
-                        </span>
-                      </div>
-                      <ul className="space-y-4 text-sm">
-                        {health.blockers.map((blocker, index) => {
-                          const link = resolveHealthIssueLink(
-                            blocker.description,
-                            config?.waba_id
-                          );
-                          return (
-                            <li key={blocker.code ?? index}>
-                              <p className="text-foreground">
-                                {blocker.description}
-                              </p>
-                              {blocker.solution ? (
-                                <p className="text-muted-foreground mt-1">
-                                  {blocker.solution}
-                                </p>
-                              ) : null}
-                              <a
-                                href={link.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary mt-2 inline-flex items-center gap-1.5 text-xs font-semibold hover:underline"
-                              >
-                                {link.label}
-                                <ExternalLink className="size-3" />
-                              </a>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ) : null}
-
-                  {sendingLimited && health && health.limitations.length > 0 ? (
+                  {/* Anything Meta reported that belongs to no step. Kept
+                      visible so an unrecognised message is never lost, but
+                      under neutral wording — the old "Meta is blocking
+                      sending for this reason" panel repeated the payment
+                      errors already listed above it, which made one problem
+                      look like two. */}
+                  {issues.other.length > 0 ? (
                     <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-4">
                       <div className="mb-2 flex items-center gap-2">
                         <AlertTriangle className="size-4 text-blue-500" />
                         <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
-                          Why your sending is limited:
+                          Also reported by Meta:
                         </span>
                       </div>
                       <ul className="text-muted-foreground space-y-3 text-sm">
-                        {health.limitations.map((note) => {
-                          const link = resolveHealthIssueLink(
-                            note,
-                            config?.waba_id
-                          );
-                          return (
-                            <li key={note}>
-                              <p>{note}</p>
-                              {/* Meta gives no URL with these notes, so this
-                                  is our mapping from the wording to the page
-                                  that resolves it. */}
-                              <a
-                                href={link.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-primary mt-1.5 inline-flex items-center gap-1.5 text-xs font-semibold hover:underline"
-                              >
-                                {link.label}
-                                <ExternalLink className="size-3" />
-                              </a>
-                            </li>
-                          );
-                        })}
+                        {issues.other.map((issue, index) => (
+                          <HealthIssueRow
+                            key={issue.code ?? `o${index}`}
+                            issue={issue}
+                            wabaId={config?.waba_id}
+                          />
+                        ))}
                       </ul>
                     </div>
                   ) : null}
@@ -1425,60 +1785,103 @@ export function WhatsAppSetup() {
                       token without the permission. Guidance, not an alarm:
                       we genuinely do not know, so we must not imply the
                       customer has forgotten something. */}
-                  {readiness === 'unknown' ? (
+                  {paymentState === 'unknown' ? (
                     <div className="border-border bg-muted/40 rounded-lg border p-4">
-                      <p className="text-muted-foreground mb-2 text-sm">
+                      <p className="text-muted-foreground mb-2.5 text-sm">
                         We could not read your billing status from Meta, so
                         check it directly if broadcasts are not sending:
                       </p>
                       <ol className="text-muted-foreground list-inside list-decimal space-y-2 text-sm">
-                        <li>
-                          Add a card in Facebook Business Manager, then set it
-                          as default from the three-dot menu.
-                        </li>
-                        <li>
-                          Complete your business billing info. In India, add
-                          your GST number.
-                        </li>
+                        {PAYMENT_SETUP_STEPS.map((step) => (
+                          <li key={step}>{step}</li>
+                        ))}
                       </ol>
                     </div>
                   ) : null}
 
-                  {!sendingReady ? (
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      {/* Payment settings are only the right destination
-                          when Meta is actually blocking us, or when we
-                          could not read the status. Sending someone there
-                          to fix an unapproved display name is a wild
-                          goose chase. */}
-                      {!sendingLimited ? (
+                  {/* Buttons follow the PAYMENT state, not the sending
+                      state. An account whose sending is limited over
+                      business verification has nothing wrong with its
+                      billing, and offering "Add payment method" there sent
+                      people to fix something that was never broken. */}
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {paymentState === 'action_required' ? (
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          window.open(
+                            billingHubUrl(billingWabaId),
+                            '_blank',
+                            'noopener,noreferrer'
+                          )
+                        }
+                      >
+                        <CreditCard className="mr-2 size-3.5" />
+                        Add payment method
+                        <ExternalLink className="ml-2 size-3" />
+                      </Button>
+                    ) : null}
+
+                    {paymentState === 'no_issue' ? (
+                      <>
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => {
-                            const wabaId =
-                              metaInfo?.waba?.id || config?.waba_id;
-                            const url = wabaId
-                              ? `https://business.facebook.com/settings/payment-methods?waba_id=${encodeURIComponent(wabaId)}`
-                              : 'https://business.facebook.com/settings/payment-methods';
-                            window.open(url, '_blank', 'noopener,noreferrer');
-                          }}
+                          onClick={() =>
+                            window.open(
+                              billingHubUrl(billingWabaId),
+                              '_blank',
+                              'noopener,noreferrer'
+                            )
+                          }
                         >
-                          <CreditCard className="mr-2 size-3.5" />
-                          Open payment settings
+                          Update payment method
                           <ExternalLink className="ml-2 size-3" />
                         </Button>
-                      ) : null}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            window.open(
+                              paymentActivityUrl(billingWabaId),
+                              '_blank',
+                              'noopener,noreferrer'
+                            )
+                          }
+                        >
+                          Payment activity
+                          <ExternalLink className="ml-2 size-3" />
+                        </Button>
+                      </>
+                    ) : null}
+
+                    {paymentState === 'unknown' ? (
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        onClick={() => void fetchMetaInfo()}
+                        onClick={() =>
+                          window.open(
+                            billingHubUrl(billingWabaId),
+                            '_blank',
+                            'noopener,noreferrer'
+                          )
+                        }
                       >
-                        <RotateCcw className="mr-2 size-3.5" />
-                        Re-check
+                        <CreditCard className="mr-2 size-3.5" />
+                        Open billing settings
+                        <ExternalLink className="ml-2 size-3" />
                       </Button>
-                    </div>
-                  ) : null}
+                    ) : null}
+
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void fetchMetaInfo()}
+                    >
+                      <RotateCcw className="mr-2 size-3.5" />
+                      Re-check
+                    </Button>
+                  </div>
                 </>
               ) : null}
             </div>
@@ -1548,6 +1951,33 @@ export function WhatsAppSetup() {
                     ? 'Meta is reviewing your business verification. Nothing to do until they respond — this usually takes a few days.'
                     : 'Verify your Facebook business to display your brand name instead of your phone number and increase your messaging limits.'}
               </p>
+
+              {/* Meta's own verification errors, shown on the step that
+                  owns them. These used to land in the payment step, which
+                  both blamed the wrong thing and left this step reading
+                  "Optional" while Meta was actively capping the account
+                  over it. */}
+              {isConnected &&
+              !metaInfoLoading &&
+              issues.business_verification.length > 0 ? (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3.5">
+                  <div className="mb-2 flex items-center gap-2">
+                    <AlertTriangle className="size-4 shrink-0 text-amber-500" />
+                    <span className="text-sm font-medium text-amber-600 dark:text-amber-400">
+                      This is currently limiting your sending:
+                    </span>
+                  </div>
+                  <ul className="text-muted-foreground space-y-3 text-sm">
+                    {issues.business_verification.map((issue, index) => (
+                      <HealthIssueRow
+                        key={issue.code ?? `v${index}`}
+                        issue={issue}
+                        wabaId={config?.waba_id}
+                      />
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
 
               {/* Requirements are only useful to someone who still has to
                   do this. Showing them to a verified business is noise. */}

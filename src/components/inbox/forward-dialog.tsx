@@ -29,6 +29,7 @@ import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import type { Message, Conversation, Contact } from '@/types';
 import { cn } from '@/lib/utils';
+import { formatPhoneNumber } from '@/lib/phone/countries';
 
 interface ConversationItem {
   id: string;
@@ -231,8 +232,8 @@ export function ForwardDialog({
                         <p className="font-medium text-foreground truncate">
                           {conv.contact?.name || 'Unknown'}
                         </p>
-                        <p className="text-[11px] text-muted-foreground truncate">
-                          {conv.contact?.phone}
+                        <p className="text-[11px] text-muted-foreground truncate font-mono">
+                          {formatPhoneNumber(conv.contact?.phone)}
                         </p>
                       </div>
                     </div>

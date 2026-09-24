@@ -41,11 +41,11 @@
 
 export interface MetaSendErrorExplanation {
   /** Meta's numeric code. */
-  code: number
+  code: number;
   /** Plain-English cause and fix, written for a CRM operator. */
-  message: string
+  message: string;
   /** True when simply trying again could plausibly work. */
-  retryable: boolean
+  retryable: boolean;
 }
 
 const EXPLANATIONS: Record<number, { message: string; retryable: boolean }> = {
@@ -57,6 +57,17 @@ const EXPLANATIONS: Record<number, { message: string; retryable: boolean }> = {
       'account, or the currency or timezone has not been set. Open Meta ' +
       'Business Manager, add a payment method to this WhatsApp Business ' +
       'account, and confirm its currency and timezone are set.',
+    retryable: false,
+  },
+  131037: {
+    message:
+      "This number cannot send until Meta approves its display name. Meta's " +
+      'own message names the cause but not the fix: submit a display name in ' +
+      'WhatsApp Manager → WhatsApp Accounts → your account → Phone numbers → ' +
+      'the number → Display name, then wait for review (usually a day or two). ' +
+      'If this is a WhatsApp-provided test number (+1 555…), approval is ' +
+      'required before it can send at all — connect your own business number ' +
+      'instead if you need to message real customers.',
     retryable: false,
   },
   134011: {
@@ -120,10 +131,21 @@ const EXPLANATIONS: Record<number, { message: string; retryable: boolean }> = {
     retryable: false,
   },
   131049: {
+    // Meta's own text — "In order to maintain a healthy ecosystem
+    // engagement, the message failed to be delivered" — is the single
+    // most opaque sentence in this whole table, and it is one of the most
+    // common failures on marketing broadcasts. What it actually describes
+    // is Meta's per-USER marketing frequency cap: WhatsApp limits how
+    // many marketing messages one person receives in a period, counting
+    // every business that messages them, not just yours. Hitting it says
+    // nothing bad about your template or your account.
     message:
-      'Meta held this message back to protect engagement quality on the ' +
-      'platform. Wait at least 24 hours before sending this template to this ' +
-      'customer again.',
+      'This person has received too many marketing messages recently, so ' +
+      'WhatsApp did not deliver this one. The limit counts marketing messages ' +
+      'from every business, not just yours, so nothing is wrong with your ' +
+      'template or your account. Wait a day or two before including them ' +
+      'again — or reach them with a utility template, which this limit does ' +
+      'not apply to.',
     retryable: false,
   },
   130403: {
@@ -218,7 +240,7 @@ const EXPLANATIONS: Record<number, { message: string; retryable: boolean }> = {
       'WhatsApp in Settings.',
     retryable: false,
   },
-}
+};
 
 /**
  * Pull a Meta error code out of a raw message and explain it.
@@ -232,26 +254,26 @@ const EXPLANATIONS: Record<number, { message: string; retryable: boolean }> = {
  * is worse than passing through text the operator can search for.
  */
 export function explainMetaSendError(
-  raw: string | null | undefined,
+  raw: string | null | undefined
 ): MetaSendErrorExplanation | null {
-  if (!raw) return null
+  if (!raw) return null;
 
   // Longest-first so a 6-digit code is never shadowed by a 1-2 digit one
   // that happens to appear elsewhere in the string (a timestamp, a count).
   const candidates = Object.keys(EXPLANATIONS)
     .map(Number)
-    .sort((a, b) => String(b).length - String(a).length)
+    .sort((a, b) => String(b).length - String(a).length);
 
   for (const code of candidates) {
     // Standalone number: not part of a longer digit run.
-    const pattern = new RegExp(`(?<!\\d)${code}(?!\\d)`)
+    const pattern = new RegExp(`(?<!\\d)${code}(?!\\d)`);
     if (pattern.test(raw)) {
-      const entry = EXPLANATIONS[code]
-      return { code, message: entry.message, retryable: entry.retryable }
+      const entry = EXPLANATIONS[code];
+      return { code, message: entry.message, retryable: entry.retryable };
     }
   }
 
-  return null
+  return null;
 }
 
 /**
@@ -264,11 +286,11 @@ export function explainMetaSendError(
  */
 export function describeSendFailure(args: {
   /** HTTP status of the failed response. */
-  status: number
+  status: number;
   /** The `error` field from the JSON body, if one survived. */
-  error?: string | null
+  error?: string | null;
 }): string {
-  const { status, error } = args
+  const { status, error } = args;
 
   // META'S WORDING COMES FIRST, ALWAYS.
   //
@@ -282,24 +304,26 @@ export function describeSendFailure(args: {
   // Meta's sentence is therefore shown verbatim, and our guidance is
   // APPENDED as a separate hint. The operator sees the source of truth,
   // plus the next step, and can tell which is which.
-  const metaText = error?.replace(/^Meta API error:\s*/i, '').trim()
+  const metaText = error?.replace(/^Meta API error:\s*/i, '').trim();
 
   if (metaText) {
-    const explained = explainMetaSendError(metaText)
+    const explained = explainMetaSendError(metaText);
     // Only append when the hint adds something beyond restating Meta.
-    return explained ? `${metaText}\n\nWhat to do: ${explained.message}` : metaText
+    return explained
+      ? `${metaText}\n\nWhat to do: ${explained.message}`
+      : metaText;
   }
 
   // No body survived. Explain the status honestly instead of printing it.
   switch (status) {
     case 401:
-      return 'Your session has expired. Sign in again and retry.'
+      return 'Your session has expired. Sign in again and retry.';
     case 403:
-      return 'This workspace is not allowed to send right now. Check your subscription and permissions.'
+      return 'This workspace is not allowed to send right now. Check your subscription and permissions.';
     case 404:
-      return 'The conversation or contact could not be found. Refresh the page and try again.'
+      return 'The conversation or contact could not be found. Refresh the page and try again.';
     case 429:
-      return 'Too many messages too quickly. Wait a moment, then try again.'
+      return 'Too many messages too quickly. Wait a moment, then try again.';
     case 502:
     case 503:
     case 504:
@@ -308,8 +332,8 @@ export function describeSendFailure(args: {
         'rejecting the message or the server restarting — not a problem with ' +
         'the message itself. Try again in a moment; if it persists, check ' +
         'Settings for a payment method and phone number registration.'
-      )
+      );
     default:
-      return `The send failed (HTTP ${status}). Check the browser console for details.`
+      return `The send failed (HTTP ${status}). Check the browser console for details.`;
   }
 }

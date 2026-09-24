@@ -41,15 +41,15 @@ key's next request. Revoked keys stay in the list as an audit trail.
 A key can do only what its scopes allow — independent of who created
 it. Grant the minimum.
 
-| Scope                | Allows                                   |
-| -------------------- | ---------------------------------------- |
-| `messages:send`      | Send WhatsApp messages                   |
-| `messages:read`      | Read messages and delivery status        |
-| `contacts:read`      | List and read contacts                   |
-| `contacts:write`     | Create and update contacts               |
-| `conversations:read` | List and read conversations              |
-| `broadcasts:send`    | Launch broadcast campaigns               |
-| `webhooks:manage`    | Register and manage outbound webhooks    |
+| Scope                | Allows                                |
+| -------------------- | ------------------------------------- |
+| `messages:send`      | Send WhatsApp messages                |
+| `messages:read`      | Read messages and delivery status     |
+| `contacts:read`      | List and read contacts                |
+| `contacts:write`     | Create and update contacts            |
+| `conversations:read` | List and read conversations           |
+| `broadcasts:send`    | Launch broadcast campaigns            |
+| `webhooks:manage`    | Register and manage outbound webhooks |
 
 A key with **no scopes** still authenticates and can call
 `GET /api/v1/me` — useful for verifying a key works.
@@ -69,14 +69,14 @@ Every response uses one of two shapes:
 Branch on `error.code` (stable); `error.message` is for humans and
 may be reworded.
 
-| Status | `code`         | Meaning                                          |
-| ------ | -------------- | ------------------------------------------------ |
+| Status | `code`         | Meaning                                               |
+| ------ | -------------- | ----------------------------------------------------- |
 | 401    | `unauthorized` | Missing / malformed / unknown / revoked / expired key |
-| 403    | `forbidden`    | Valid key, but missing the required scope        |
-| 429    | `rate_limited` | Per-key rate limit exceeded                      |
-| 400    | `bad_request`  | Malformed input                                  |
-| 404    | `not_found`    | No such resource                                 |
-| 500    | `internal`     | Server error                                     |
+| 403    | `forbidden`    | Valid key, but missing the required scope             |
+| 429    | `rate_limited` | Per-key rate limit exceeded                           |
+| 400    | `bad_request`  | Malformed input                                       |
+| 404    | `not_found`    | No such resource                                      |
+| 500    | `internal`     | Server error                                          |
 
 ## Rate limits
 
@@ -140,11 +140,77 @@ curl -X POST https://your-crm.example.com/api/v1/messages \
   "template": {
     "name": "order_update",
     "language": "en_US",
-    "params": ["A123"]        // positional body vars, or a structured object
+    "params": ["A123"], // positional body vars, or a structured object
   },
-  "reply_to_message_id": "<uuid>"   // optional; must be in the same conversation
+  "reply_to_message_id": "<uuid>", // optional; must be in the same conversation
 }
 ```
+
+#### `template.params` — the two forms
+
+`params` accepts either an **array** or an **object**, and the choice is
+not cosmetic:
+
+- **An array** fills the body variables `{{1}}, {{2}}, …` in order. That
+  is _all_ it can do. A template with a media header, a header variable,
+  or a URL button with `{{1}}` **cannot** be sent with the array form.
+- **An object** supplies every send-time value the template needs.
+
+Everything goes **inside `template.params`**. Top-level keys the endpoint
+does not recognise are ignored silently, so a misplaced value produces a
+"this template needs …" error rather than a warning about the key itself.
+
+| Key in `template.params` | Type                                     | For                                                                        |
+| ------------------------ | ---------------------------------------- | -------------------------------------------------------------------------- |
+| `body`                   | `string[]`                               | Body `{{1}}, {{2}}, …` in order                                            |
+| `namedBody`              | `{ [name]: string }`                     | Body variables of a NAMED-format template, keyed by name instead of number |
+| `headerText`             | `string`                                 | A TEXT header that contains `{{1}}`                                        |
+| `headerMediaUrl`         | `string`                                 | An IMAGE / VIDEO / DOCUMENT header — a public `https://` link              |
+| `headerMediaId`          | `string`                                 | Same header, but by Meta media id from a prior upload                      |
+| `headerLocation`         | `{ latitude, longitude, name, address }` | A LOCATION header (all four required)                                      |
+| `buttonParams`           | `{ [index]: string }`                    | URL buttons with `{{1}}`, and COPY_CODE buttons. Keyed by button index     |
+| `offerExpiresAtMs`       | `number`                                 | Limited-time offer templates. UNIX timestamp in **milliseconds**           |
+| `cards`                  | `CardValues[]`                           | Carousel templates, in card order                                          |
+
+`namedBody` and `body` are mutually exclusive — the two formats cannot
+coexist in one template, and a positional array sent for a named template
+would deliver the right values under the wrong labels.
+
+##### Example: a template with a DOCUMENT header
+
+An invoice PDF that changes per order. Note where `headerMediaUrl` sits —
+inside `template.params`, **not** at the top level of the body:
+
+```bash
+curl -X POST https://your-crm.example.com/api/v1/messages \
+  -H "Authorization: Bearer wacrm_live_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "to": "+14155550123",
+    "type": "template",
+    "template": {
+      "name": "order_invoice_pdf",
+      "language": "en_US",
+      "params": {
+        "headerMediaUrl": "https://example.com/invoices/ORD-5074.pdf",
+        "body": ["Ravi", "ORD-5074"]
+      }
+    }
+  }'
+```
+
+Omit `body` if the template has no body variables. Set `language` to the
+template's **approved** language code: a template approved as `en` will
+not send as `en_US`, and Meta's rejection does not name the mismatch.
+
+If a media header is the _same file_ on every send, you can set a default
+on the template instead and omit `headerMediaUrl` entirely. For anything
+per-recipient — an invoice, a ticket, a statement — pass it on every call.
+
+To discover what a given template needs without trial and error, call
+[`GET /api/v1/campaigns/{id}`](#get-apiv1campaignsid): it returns a
+`template` block describing the body variable count, whether a media
+header is required, and which buttons take values.
 
 Response (201):
 
@@ -174,10 +240,15 @@ or phone) and `?tag=<tagId>`.
 {
   "data": [
     {
-      "id": "…", "phone": "+14155550123", "name": "Jane Doe",
-      "email": null, "company": "Acme", "avatar_url": null,
+      "id": "…",
+      "phone": "+14155550123",
+      "name": "Jane Doe",
+      "email": null,
+      "company": "Acme",
+      "avatar_url": null,
       "tags": [{ "id": "…", "name": "vip", "color": "#3b82f6" }],
-      "created_at": "…", "updated_at": "…"
+      "created_at": "…",
+      "updated_at": "…"
     }
   ],
   "meta": { "next_cursor": "…" }
@@ -242,8 +313,10 @@ curl -X POST https://your-crm.example.com/api/v1/broadcasts \
 ```
 
 Recipients are capped at **1000 per request** — split larger sends.
-Invalid phone numbers are dropped and counted as `rejected`. Response
-(202):
+Invalid phone numbers are dropped and counted as `rejected`; recipients
+who opted out of marketing are dropped and counted as `suppressed`
+(they get no recipient row, so they appear here and not in the
+persisted broadcast counts). Response (202):
 
 ```json
 {
@@ -252,7 +325,8 @@ Invalid phone numbers are dropped and counted as `rejected`. Response
     "status": "sending",
     "total_recipients": 2,
     "accepted": 2,
-    "rejected": 0
+    "rejected": 0,
+    "suppressed": 0
   }
 }
 ```
@@ -262,6 +336,167 @@ Invalid phone numbers are dropped and counted as `rejected`. Response
 Broadcast status + counts. Scope: `broadcasts:send`. `status` moves
 `sending` → `sent`; `delivered_count` / `read_count` keep climbing as
 Meta delivery webhooks arrive. `404` for another account's broadcast.
+
+### API Campaigns
+
+A **campaign** is a saved, reusable definition — a name bound to an
+approved template — that an external system (a script, the Google
+Sheets add-on) can trigger repeatedly, unlike `POST /api/v1/broadcasts`
+which needs a fixed recipient list up front every time. Create a
+campaign from the dashboard (**Broadcasts → + Campaign → API
+Campaign**); these endpoints trigger and inspect it.
+
+Every send through a campaign becomes an ordinary broadcast under the
+hood — it shows up in `GET /api/v1/broadcasts/{id}`, in the Inbox, and
+in delivery webhooks exactly like a dashboard send.
+
+**Small sends go out immediately; large ones are queued.** Up to 25
+recipients in one call are delivered inline and the response reports
+`status: "sending"`. Above that the call returns `status: "scheduled"`
+and the existing five-minute sweep delivers it, which avoids a large
+audience exceeding the route's 60-second budget mid-fan-out and stranding
+recipients. Either way the response returns before delivery completes, so
+poll `GET /api/v1/broadcasts/{id}` for the outcome.
+
+#### `GET /api/v1/campaigns`
+
+List this account's campaigns. Scope: `broadcasts:send`. Paginated.
+
+```json
+{
+  "data": [
+    {
+      "id": "…",
+      "name": "Order confirmations",
+      "template_name": "order_confirmation",
+      "template_language": "en_US",
+      "status": "active",
+      "created_at": "…"
+    }
+  ],
+  "meta": { "next_cursor": null }
+}
+```
+
+#### `GET /api/v1/campaigns/{id}`
+
+One campaign, plus what its template needs to send — how many body
+variables, whether it has a media header or a carousel, which buttons
+carry variables. Scope: `broadcasts:send`. Use this to build a form
+without re-deriving WhatsApp's template rules yourself.
+
+```jsonc
+{
+  "data": {
+    "id": "…",
+    "name": "Order confirmations",
+    "template_name": "order_confirmation",
+    "template_language": "en_US",
+    "status": "active",
+    "created_at": "…",
+    "template": {
+      "category": "Utility",
+      "body_variable_count": 4,
+      "body_variable_names": [], // non-empty only for a NAMED template
+      "parameter_format": "POSITIONAL",
+      "header": null, // or { "format": "IMAGE", "requires_media": true, "default_url": "…" }
+      "needs_header_location": false,
+      "url_buttons": [
+        {
+          "index": 0,
+          "text": "View Order",
+          "url": "https://example.com/orders/{{1}}",
+        },
+      ],
+      "copy_code_buttons": [],
+      "offer": null,
+      "is_order_status": false,
+      "is_authentication": false,
+      "commerce": null,
+      "cards": [],
+      "needs_no_input": false,
+    },
+    "template_warning": null, // set if the template was deleted / unsynced locally
+  },
+}
+```
+
+`404` for another account's campaign.
+
+#### `POST /api/v1/campaigns/{id}/send`
+
+Trigger one send through the campaign. Scope: `broadcasts:send`.
+
+```bash
+curl -X POST https://your-crm.example.com/api/v1/campaigns/<id>/send \
+  -H "Authorization: Bearer wacrm_live_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "idempotency_key": "sheet1-row42-2026-09-14",
+        "recipients": [
+          { "to": "+14155550123", "name": "Jane",
+            "params": ["393392", "200", "2 Days"],
+            "media_url": "https://example.com/invoice.pdf",
+            "button_params": { "0": "ORD-123" } }
+        ],
+        "param_labels": ["Delevery id", "Price", "Delevery Date"],
+        "source": { "kind": "google_sheets", "spreadsheet_id": "…", "sheet": "Sheet1", "rule_id": "…" }
+      }'
+```
+
+`recipients[].params` are positional body variables, same as the
+broadcasts endpoint. Two extras a campaign send accepts that the plain
+broadcast endpoint does not: `media_url` (fills the template's media
+header for this recipient — `https://` only) and `button_params` (an
+object keyed by button index, for a URL button with a `{{1}}` suffix).
+
+`param_labels` is optional and names each positional value in
+`params`, index for index. Send it and the campaign's run report shows
+`Delevery id: 393392`; omit it and the same value appears under a
+generic `Value 1`. Because it describes your mapping rather than one
+recipient, it sits at the top level of the body, not inside a recipient.
+Use the source column heading if you have one — the Google Sheets add-on
+sends the spreadsheet header names here.
+
+`source` is optional. It is stored on the run, so the report can identify
+each run by its sheet and row rather than only by a timestamp.
+
+**`idempotency_key` is required.** Compute a deterministic key per
+logical send (e.g. hash the spreadsheet id, sheet, row, and rule) and
+reuse the exact same key on any retry. The server enforces uniqueness
+per campaign: replaying a key returns `200` with the **original**
+result and sends nothing new —
+
+```json
+{ "data": { "duplicate": true, "broadcast_id": "…" } }
+```
+
+— which is what makes it safe to retry a request that timed out
+without risking a second real message.
+
+Response on a genuinely new send (`202`):
+
+```json
+{
+  "data": {
+    "broadcast_id": "…",
+    "status": "sending",
+    "total_recipients": 1,
+    "accepted": 1,
+    "rejected": 0,
+    "suppressed": 0
+  }
+}
+```
+
+`status` is `"sending"` when the call was delivered inline (≤ 25
+recipients) and `"scheduled"` when it was handed to the five-minute
+sweep. Branch on it if the difference matters to you; both end up in
+`GET /api/v1/broadcasts/{id}`.
+
+Domain error codes beyond the shared table: `campaign_paused` (403 —
+resume the campaign in the dashboard first), `subscription_inactive`
+(403 — the workspace's trial or subscription has lapsed).
 
 ## Pagination
 
@@ -347,7 +582,7 @@ delivery uuid you can dedupe on, and `data` varies by `event`:
   "event": "message.received",
   "occurred_at": "2026-07-01T12:00:00.000Z",
   "account_id": "…",
-  "data": { /* per-event, see below */ }
+  "data": {/* per-event, see below */}
 }
 ```
 
@@ -381,8 +616,10 @@ a few minutes old (replay protection).
 
 ```js
 const [, t, v1] = header.match(/t=(\d+),v1=([0-9a-f]+)/);
-const expected = crypto.createHmac('sha256', secret)
-  .update(`${t}.${rawBody}`).digest('hex');
+const expected = crypto
+  .createHmac('sha256', secret)
+  .update(`${t}.${rawBody}`)
+  .digest('hex');
 const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(v1));
 ```
 
@@ -408,7 +645,8 @@ internal targets are refused at delivery time.
 ## Roadmap
 
 The public API now covers messaging, contacts, conversations,
-broadcasts, and outbound webhooks — the full scope of
-[#245](https://github.com/ArnasDon/wacrm/issues/245). Future ideas
-(deals/pipelines, templates, flows, a delivery queue for webhooks) are
-not yet scheduled.
+broadcasts, API campaigns, and outbound webhooks — the full scope of
+[#245](https://github.com/ArnasDon/wacrm/issues/245), plus the reusable
+campaign layer behind the Google Sheets add-on
+(`docs/google-sheets-addon-plan.md`). Future ideas (deals/pipelines,
+templates, flows, a delivery queue for webhooks) are not yet scheduled.

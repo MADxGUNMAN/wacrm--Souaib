@@ -22,6 +22,7 @@ import type {
   DocsCategory,
   DocsCategoryWithResources,
   DocsResource,
+  IntegrationPage,
 } from '@/types/super-admin';
 
 /**
@@ -316,7 +317,9 @@ export async function getDocsPageSettings(): Promise<DocsPageSettings | null> {
  * Categories with no visible resources are dropped: an empty card is
  * worse than no card.
  */
-export async function getDocsCategories(): Promise<DocsCategoryWithResources[]> {
+export async function getDocsCategories(): Promise<
+  DocsCategoryWithResources[]
+> {
   const admin = supabaseAdmin();
 
   const [categoriesRes, resourcesRes] = await Promise.all([
@@ -353,4 +356,26 @@ export async function getDocsCategories(): Promise<DocsCategoryWithResources[]> 
       resources: byCategory.get(category.id) ?? [],
     }))
     .filter((category) => category.resources.length > 0);
+}
+
+/**
+ * Fetch a published integration page by slug (e.g. 'google-sheets').
+ */
+export async function getIntegrationPage(
+  slug: string
+): Promise<IntegrationPage | null> {
+  const admin = supabaseAdmin();
+  const { data, error } = await admin
+    .from('integration_pages')
+    .select('*')
+    .eq('slug', slug)
+    .eq('is_published', true)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`[cms] getIntegrationPage('${slug}') error:`, error);
+    return null;
+  }
+
+  return data as IntegrationPage | null;
 }

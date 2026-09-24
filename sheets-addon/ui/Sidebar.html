@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Required in an HtmlService sandbox: without it every link tries
+         to open inside the iframe and is blocked. -->
+    <base target="_top" />
+    <?!= include('ui/Shared.css'); ?> <?!= include('ui/Sidebar.css'); ?> <?!=
+    include('ui/Wizard.css'); ?>
+  </head>
+
+  <body>
+    <div class="shell">
+      <!-- No header row here on purpose — Sheets draws the product name and
+           the close button in its own bar above this iframe, and we cannot
+           add to that row. See showSidebar() in src/Code.js. -->
+
+      <!-- One region, swapped by state. aria-live so a screen reader is
+           told when the panel changes after an async server call. -->
+      <main class="shell__body" id="body" aria-live="polite" aria-busy="true">
+        <!-- Shown alongside both the empty state and the list, hidden in
+             the wizard where vertical space is scarce. -->
+        <section class="account hidden" id="account-block">
+          <div class="account__row">
+            <!-- The brand mark rides on this card rather than owning a row
+                 of its own. alt is empty because Sheets' own title bar
+                 already names the product to a screen reader. -->
+            <img
+              class="account__logo"
+              src="<?= ReplaiConfig.LOGO_URL ?>"
+              alt=""
+              width="18"
+              height="18"
+            />
+            <span class="account__label">Workspace</span>
+            <!-- Reload lives here so it costs no extra row. Icon rather than
+                 link text so it reads as a control beside Disconnect. -->
+            <button
+              type="button"
+              class="icon-btn icon-btn--sm hidden"
+              id="btn-reload"
+              title="Reload"
+              aria-label="Reload the sidebar"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                <path d="M21 3v6h-6" />
+              </svg>
+            </button>
+            <!-- Icon, with a two-step confirm behind it. Losing the word
+                 "Disconnect" also loses the warning the word carried, and
+                 this clears the stored API key — which the CRM shows only
+                 once, so a stray click can cost a new key. -->
+            <button
+              type="button"
+              class="icon-btn icon-btn--sm icon-btn--danger"
+              id="btn-disconnect"
+              title="Disconnect this workspace"
+              aria-label="Disconnect this workspace"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </button>
+          </div>
+          <span class="account__value" id="account-name"></span>
+          <span class="account__label">
+            Runs as <span id="account-email"></span>
+          </span>
+          <!-- Only ever filled by the disconnect confirm step. role=status so
+               the prompt is announced rather than appearing silently. -->
+          <p
+            class="account__warn tiny hidden"
+            id="disconnect-confirm"
+            role="status"
+          ></p>
+        </section>
+
+        <!-- loading -->
+        <section class="stack" id="view-loading">
+          <div class="skeleton" style="width: 70%"></div>
+          <div class="skeleton" style="width: 90%"></div>
+          <div class="skeleton" style="width: 55%"></div>
+        </section>
+
+        <!-- needs_key / key_invalid -->
+        <section class="stack hidden" id="view-connect">
+          <div
+            class="notice notice--error hidden"
+            id="connect-error"
+            role="alert"
+          ></div>
+
+          <div class="panel">
+            <h2 class="panel__title" id="connect-title">
+              Connect your Replai account
+            </h2>
+            <p class="panel__text" id="connect-text">
+              Paste an API key once and this sheet can send WhatsApp messages
+              through your approved templates.
+            </p>
+            <ol class="steps">
+              <li>
+                Open
+                <a id="link-api-keys" href="#" target="_blank" rel="noopener"
+                  >Replai → Settings → API</a
+                >.
+              </li>
+              <li>
+                Create a key with the
+                <strong>Launch broadcast campaigns</strong> permission.
+              </li>
+              <li>Copy it and paste it here — it is shown only once.</li>
+            </ol>
+          </div>
+
+          <button
+            type="button"
+            class="btn btn--primary btn--block"
+            id="btn-connect"
+          >
+            Enter API key
+          </button>
+        </section>
+
+        <!-- offline -->
+        <section class="stack hidden" id="view-offline">
+          <div
+            class="notice notice--warning"
+            role="status"
+            id="offline-message"
+          ></div>
+          <button
+            type="button"
+            class="btn btn--quiet btn--block"
+            id="btn-retry"
+          >
+            Try again
+          </button>
+        </section>
+
+        <!-- empty (connected, no rules) -->
+        <section class="stack hidden" id="view-empty">
+          <div class="empty">
+            <div class="empty__icon" aria-hidden="true">
+              <svg
+                width="26"
+                height="26"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M13 2 3 14h8l-1 8 10-12h-8l1-8z" />
+              </svg>
+            </div>
+            <h2 class="empty__title">No automation rules yet</h2>
+            <p class="empty__text">
+              A rule watches this spreadsheet and sends a WhatsApp message when
+              a row matches.
+            </p>
+            <button type="button" class="btn btn--primary" id="btn-new-rule">
+              <span aria-hidden="true">+</span> Create your first rule
+            </button>
+          </div>
+
+          <div class="notice hidden" id="soon-notice" role="status"></div>
+
+          <p class="tiny muted" style="text-align: center">
+            Need the right sheet layout?
+            <button type="button" class="link-btn" id="btn-template">
+              Create template
+            </button>
+          </p>
+        </section>
+
+        <!-- list (connected, >=1 rule) -->
+        <section class="stack hidden" id="view-list">
+          <div class="list__head">
+            <h2 class="list__title">
+              Automation rules<span
+                class="list__count"
+                id="rule-count"
+                aria-hidden="true"
+              ></span>
+            </h2>
+            <button
+              type="button"
+              class="btn btn--primary btn--sm"
+              id="btn-new-rule-2"
+            >
+              <span aria-hidden="true">+</span> New rule
+            </button>
+          </div>
+
+          <!-- Text is set from the server state, so this stays empty:
+               "engine not built yet" and "no trigger installed for you"
+               are different problems with different fixes. -->
+          <div
+            class="notice notice--warning hidden"
+            id="engine-notice"
+            role="status"
+          ></div>
+
+          <!-- The document-wide "Daily reminders run around HH:00" control
+               used to sit here. Each rule now sets its own frequency, time
+               and day in the wizard, so there is nothing global to pick. -->
+
+          <!-- The account-wide "Watching for sheet edits, form submissions.
+               Last fired …" strip used to sit here. It was removed because
+               it answered the question at the wrong level: one line for the
+               whole spreadsheet could not say WHICH rule had fired, so with
+               more than one rule it was ambiguous, and with one rule it
+               duplicated what that rule's own card already said.
+
+               Each rule now carries its own status line — see
+               ruleStatus() in ui/Sidebar.js. -->
+
+          <!-- Shown until a trigger has actually been observed firing.
+               Google's trigger list cannot tell a working trigger from a
+               disabled or orphaned one, so recreating them is the only
+               available fix and it has to be reachable. -->
+          <button
+            type="button"
+            class="btn btn--quiet btn--block"
+            id="btn-reinstall"
+          >
+            Reinstall triggers
+          </button>
+
+          <div id="rule-cards"></div>
+        </section>
+
+        <!-- wizard: create / edit a rule -->
+        <section class="hidden" id="view-wizard">
+          <div class="wiz__head">
+            <h2 class="list__title" id="wiz-title">Create new rule</h2>
+            <button type="button" class="link-btn" id="wiz-cancel">
+              Cancel
+            </button>
+          </div>
+
+          <ol class="stepper">
+            <li class="stepper__item" id="step-1" aria-current="step">
+              <span class="stepper__num">1</span> Setup
+            </li>
+            <li class="stepper__item" id="step-2">
+              <span class="stepper__num">2</span> Configuration
+            </li>
+          </ol>
+
+          <div
+            class="notice notice--error hidden"
+            id="wiz-error"
+            role="alert"
+          ></div>
+
+          <!-- step 1: setup -->
+          <div id="wiz-step-1">
+            <div class="group">
+              <div class="group__title">Basic setup</div>
+
+              <div class="row">
+                <label class="row__label" for="rule-name">Rule name</label>
+                <input
+                  class="text"
+                  id="rule-name"
+                  type="text"
+                  placeholder="Enter rule name"
+                  maxlength="80"
+                />
+                <p class="row__error hidden" id="err-name"></p>
+              </div>
+
+              <div class="row">
+                <label class="row__label" for="rule-sheet">Target sheet</label>
+                <select class="select" id="rule-sheet"></select>
+                <p class="row__error hidden" id="err-sheetName"></p>
+                <p class="row__hint hidden" id="sheet-info"></p>
+              </div>
+
+              <div class="row">
+                <label class="row__label" for="rule-trigger"
+                  >Trigger type</label
+                >
+                <select class="select" id="rule-trigger"></select>
+                <p class="row__hint" id="trigger-hint"></p>
+                <p class="row__error hidden" id="err-triggerType"></p>
+              </div>
+            </div>
+
+            <!-- Reminder scheduling. Hidden for the row-driven triggers,
+                 which fire on an event and have no time of their own. -->
+            <div class="group hidden" id="schedule-group">
+              <div class="group__title">Time configuration</div>
+
+              <div class="row">
+                <label class="row__label" for="rule-frequency"
+                  >Check frequency</label
+                >
+                <select class="select" id="rule-frequency"></select>
+                <p class="row__hint" id="frequency-hint"></p>
+              </div>
+
+              <div class="row">
+                <label class="row__label" for="rule-time">Check time</label>
+                <!-- A native time input: it renders the browser's own clock
+                     picker and shows 12- or 24-hour format per the user's
+                     locale, while its value is always 24-hour "HH:MM".
+
+                     step="3600" pins it to whole hours. Google refuses any
+                     add-on time trigger more frequent than hourly ("The
+                     recurrence interval for an Add-on trigger must be at
+                     least one hour"), so a minutes box would let an
+                     operator set 18:55 and then watch it fire at 19:20. -->
+                <input class="text" id="rule-time" type="time" step="3600" />
+                <p class="row__hint" id="time-hint"></p>
+              </div>
+
+              <div class="row hidden" id="dow-row">
+                <label class="row__label" for="rule-dow">Day of week</label>
+                <select class="select" id="rule-dow"></select>
+              </div>
+
+              <div class="row hidden" id="dom-row">
+                <label class="row__label" for="rule-dom">Day of month</label>
+                <input
+                  class="text"
+                  id="rule-dom"
+                  type="number"
+                  min="1"
+                  max="31"
+                  step="1"
+                  placeholder="1"
+                />
+                <p class="row__hint">
+                  Months shorter than this date use their last day, so a rule
+                  set to 31 still runs in February.
+                </p>
+              </div>
+
+              <p class="row__error hidden" id="err-schedule"></p>
+            </div>
+
+            <div class="group">
+              <div class="group__title">Trigger configuration</div>
+              <div id="conditions"></div>
+              <p class="row__error hidden" id="err-conditionsMissing"></p>
+              <button
+                type="button"
+                class="btn btn--quiet btn--block"
+                id="btn-add-condition"
+                style="margin-top: 8px"
+              >
+                + Add condition
+              </button>
+            </div>
+
+            <div class="wiz__footer">
+              <button type="button" class="btn btn--quiet" id="btn-cancel-1">
+                Cancel
+              </button>
+              <button type="button" class="btn btn--primary" id="btn-next">
+                Next step →
+              </button>
+            </div>
+          </div>
+
+          <!-- step 2: configuration -->
+          <div id="wiz-step-2" class="hidden">
+            <div class="group">
+              <div class="group__title">Campaign settings</div>
+              <div class="row">
+                <label class="row__label" for="rule-campaign">Campaign</label>
+                <select class="select" id="rule-campaign"></select>
+                <p class="row__hint hidden" id="campaign-info"></p>
+                <p class="row__error hidden" id="err-campaign"></p>
+              </div>
+              <div
+                class="notice notice--warning hidden"
+                id="campaign-warning"
+                role="status"
+              ></div>
+            </div>
+
+            <div class="group">
+              <div class="group__title">WhatsApp settings</div>
+
+              <div class="row">
+                <label class="row__label" for="rule-phone"
+                  >WhatsApp number column</label
+                >
+                <select class="select" id="rule-phone"></select>
+                <p class="row__error hidden" id="err-phoneColumn"></p>
+              </div>
+
+              <div class="row">
+                <label class="row__label" for="rule-contact-name"
+                  >Contact name column (optional)</label
+                >
+                <select class="select" id="rule-contact-name"></select>
+              </div>
+
+              <div class="row">
+                <label class="row__label" for="rule-country"
+                  >Country code (optional)</label
+                >
+                <input
+                  class="text"
+                  id="rule-country"
+                  type="text"
+                  inputmode="tel"
+                  placeholder="+91"
+                  maxlength="5"
+                />
+                <p class="row__hint">
+                  Added to numbers in the sheet that do not already start with a
+                  country code.
+                </p>
+                <p class="row__error hidden" id="err-countryCode"></p>
+              </div>
+            </div>
+
+            <div class="group">
+              <div class="group__title">Template variables</div>
+              <p class="row__hint" id="variables-hint">
+                Pick a campaign first — its template decides how many variables
+                are needed.
+              </p>
+              <div id="variables"></div>
+              <p class="row__error hidden" id="err-variables"></p>
+            </div>
+
+            <div class="group">
+              <div class="group__title">Media (optional)</div>
+              <div class="row">
+                <label class="row__label" for="rule-media-type"
+                  >Media type</label
+                >
+                <select class="select" id="rule-media-type"></select>
+                <p class="row__hint hidden" id="media-required-hint"></p>
+              </div>
+
+              <div class="row hidden" id="media-source-row">
+                <span class="row__label">File comes from</span>
+                <div class="seg" role="group" aria-label="Media source">
+                  <button
+                    type="button"
+                    class="seg__btn"
+                    id="media-src-url"
+                    aria-pressed="true"
+                  >
+                    One fixed URL
+                  </button>
+                  <button
+                    type="button"
+                    class="seg__btn"
+                    id="media-src-column"
+                    aria-pressed="false"
+                  >
+                    A column
+                  </button>
+                </div>
+              </div>
+
+              <div class="row hidden" id="media-url-row">
+                <label class="row__label" for="rule-media-url">File URL</label>
+                <input
+                  class="text"
+                  id="rule-media-url"
+                  type="url"
+                  placeholder="https://…"
+                />
+              </div>
+
+              <div class="row hidden" id="media-column-row">
+                <label class="row__label" for="rule-media-column"
+                  >Column holding the file URL</label
+                >
+                <select class="select" id="rule-media-column"></select>
+              </div>
+
+              <p class="row__error hidden" id="err-media"></p>
+            </div>
+
+            <div class="wiz__footer">
+              <button type="button" class="btn btn--quiet" id="btn-prev">
+                ← Previous
+              </button>
+              <button type="button" class="btn btn--primary" id="btn-save-rule">
+                Create rule
+              </button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="shell__footer">
+        <span id="footer-key"></span>
+        <!-- The version is here on purpose: Apps Script gives no way to
+             see which build a spreadsheet is running, and that is the
+             first thing worth knowing when a rule does not fire. -->
+        <span id="footer-version" class="tiny"></span>
+      </footer>
+    </div>
+
+    <?!= include('ui/Sidebar.js'); ?> <?!= include('ui/Wizard.js'); ?>
+
+    <script>
+      // Started here, after both scripts are parsed, so a first render
+      // that lands on the rules list can already reach ReplaiWizard.
+      ReplaiUI.load();
+    </script>
+  </body>
+</html>

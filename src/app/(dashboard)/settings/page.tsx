@@ -20,6 +20,7 @@ import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel'
 import { DealsSettings } from '@/components/settings/deals-settings';
 import { MembersTab } from '@/components/settings/members-tab';
 import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
+import { AppIntegrations } from '@/components/settings/app-integrations';
 import { UsageAlertsPanel } from '@/components/settings/usage-alerts-panel';
 import { OptInOutPanel } from '@/components/settings/opt-in-out-panel';
 import {
@@ -157,6 +158,7 @@ function SettingsPageInner() {
     deals: <DealsSettings />,
     members: <MembersTab />,
     api: <ApiKeysSettings />,
+    integrations: <AppIntegrations />,
     alerts: <UsageAlertsPanel />,
     'opt-out': <OptInOutPanel />,
   };

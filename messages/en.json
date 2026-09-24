@@ -89,7 +89,7 @@
     "whatsappBanner": {
       "title": "Connect WhatsApp Business API",
       "description": "Your WhatsApp account is not connected yet. Connect your WhatsApp Business API to activate real-time inbox conversations, customer broadcasts, and automated workflows.",
-      "connectButton": "Connect WhatsApp",
+      "connectButton": "Connect WhatsApp Business",
       "contactOwner": "Please ask your workspace owner to connect WhatsApp."
     },
     "quickActions": {
@@ -168,7 +168,8 @@
   },
   "Inbox": {
     "page": {
-      "whatsappNotConnected": "WhatsApp® is not connected. Go to Settings to connect your account."
+      "whatsappNotConnected": "WhatsApp® is not connected.",
+      "connectWhatsAppBusiness": "Connect WhatsApp Business"
     },
     "conversationList": {
       "searchPlaceholder": "Search conversations...",
@@ -257,6 +258,8 @@
       "document": "Document",
       "locationShared": "Location shared",
       "template": "Template",
+      "viaApiCampaign": "API campaign",
+      "viaBroadcast": "Broadcast",
       "buttonReply": "Button reply",
       "interactiveReply": "[Interactive reply]",
       "unsupported": "[Unsupported message type]",
@@ -336,6 +339,7 @@
       "addContactBtn": "Add Contact",
       "searchPlaceholder": "Search by name, phone, or email...",
       "filterByTags": "Filter by tags",
+      "filterBySource": "Filter by source",
       "clearAll": "Clear all",
       "noTagsYet": "No tags yet.",
       "selectedCount": "{count} selected",
@@ -347,6 +351,7 @@
         "email": "Email",
         "company": "Company",
         "tags": "Tags",
+        "source": "Source",
         "createdAt": "Created"
       },
       "loading": "Loading contacts...",
@@ -354,6 +359,7 @@
       "noContactsYet": "No contacts yet.",
       "addFirstContact": "Add your first contact",
       "unnamed": "Unnamed",
+      "openChatAction": "Open Chat",
       "editAction": "Edit",
       "deleteAction": "Delete",
       "showingPagination": "Showing {start}-{end} of {total}",
@@ -370,6 +376,22 @@
       "toastDeleted": "Contact deleted",
       "toastBulkFailedDelete": "Failed to delete contacts",
       "toastBulkDeleted": "{count} contacts deleted"
+    },
+    "sources": {
+      "manual": "Added manually",
+      "manualHint": "Someone typed this contact in, or saved it from a shared contact card.",
+      "whatsapp": "WhatsApp",
+      "whatsappHint": "They messaged your WhatsApp number, so the contact was created automatically.",
+      "import": "Imported",
+      "importHint": "Came from a CSV file imported on this page.",
+      "campaign": "Campaign",
+      "campaignHint": "A broadcast or API campaign sent to this number before it was in your CRM — including sends from the Google Sheets add-on.",
+      "api": "API",
+      "apiHint": "Created through the public API by your own system or integration.",
+      "phoneSync": "Phone contacts",
+      "phoneSyncHint": "Imported from the address book on your connected WhatsApp phone.",
+      "unknown": "Not recorded",
+      "unknownHint": "Added before the CRM started recording how contacts arrive."
     },
     "form": {
       "addTitle": "Add Contact",
@@ -450,6 +472,7 @@
         "noTagsAvailable": "No tags available. Create tags in Settings."
       },
       "sendTemplateBtn": "Send template",
+      "openChatBtn": "Open Chat",
       "saveChangesBtn": "Save Changes",
       "saveCustomFieldsBtn": "Save Custom Fields",
       "toastPhoneRequired": "Phone number is required",
@@ -661,11 +684,28 @@
       "title": "Broadcasts",
       "subtitle": "Send bulk messages to your contacts using approved templates.",
       "newBroadcast": "New Broadcast",
+      "newCampaign": "Campaign",
+      "broadcastCampaign": "Broadcast Campaign",
+      "broadcastCampaignHint": "Send bulk messages from our platform",
+      "apiCampaign": "API Campaign",
+      "apiCampaignHint": "Send messages from your own system",
+      "apiCampaignActive": "Active",
+      "apiCampaignPaused": "Paused",
       "noBroadcastsYet": "No broadcasts yet",
       "createFirst": "Create your first broadcast to reach your contacts at scale.",
+      "noneOfThisType": "Nothing of this type yet.",
+      "runsCount": "{count} runs",
+      "filter": {
+        "all": "All campaigns",
+        "broadcasts": "Broadcasts only",
+        "apiCampaigns": "API campaigns only"
+      },
       "table": {
         "name": "Name",
         "template": "Template",
+        "type": "Type",
+        "typeBroadcast": "Broadcast",
+        "typeApi": "API",
         "recipients": "Recipients",
         "delivery": "Delivery",
         "read": "Read",
@@ -726,6 +766,46 @@
       },
       "toastFailedDelete": "Failed to delete: {error}",
       "toastDeleted": "Broadcast deleted"
+    },
+    "apiCampaign": {
+      "notFound": "API campaign not found",
+      "loadFailed": "Failed to load the campaign",
+      "renameCampaign": "Rename campaign",
+      "renamed": "Renamed",
+      "renameFailed": "Failed to rename",
+      "updateFailed": "Failed to update",
+      "deleteFailed": "Failed to delete",
+      "campaignActive": "Campaign active",
+      "statusActive": "Active",
+      "statusPaused": "Paused",
+      "toastPaused": "Campaign paused — sends through it will be refused",
+      "toastResumed": "Campaign resumed — new sends will go through",
+      "toastDeleted": "Campaign and its runs deleted. The conversations they started are still in your Inbox.",
+      "recipientsAcrossRuns": "{recipients} recipients across {runs} runs",
+      "funnel": "Funnel across all runs",
+      "stats": {
+        "runs": "Runs"
+      },
+      "runsHeader": "Runs ({total})",
+      "runsHeaderFiltered": "Runs ({filtered} of {total})",
+      "noRunsYet": "No runs yet",
+      "noRunsHint": "This campaign hasn't been triggered yet. Send to it via the public API or the Google Sheets add-on, and every send will appear here with the values it used.",
+      "noRunsFilter": "No runs match this filter.",
+      "noReasonRecorded": "No reason recorded",
+      "viewFailure": "View why this failed",
+      "viewDelivery": "View delivery details",
+      "deleteCampaign": "Delete campaign",
+      "deleteTitle": "Delete API Campaign",
+      "deleteBody": "Delete \"{name}\"? Sends attempted through it afterwards will be refused, and the Google Sheets rules pointing at it will start failing.",
+      "deleteRunsNote": "Its {runs} runs and their delivery reports are deleted permanently, and this cannot be undone. The WhatsApp messages already sent are NOT deleted — those conversations stay in your Inbox exactly as they are.",
+      "deleteConfirm": "Delete campaign and {runs} runs",
+      "deleteConfirmNoRuns": "Delete Campaign",
+      "table": {
+        "run": "Run",
+        "openRun": "Open this run",
+        "sheetRow": "{sheet} · row {row}",
+        "genericValue": "Value {index}"
+      }
     },
     "new": {
       "title": "New Broadcast",
@@ -1303,6 +1383,7 @@
       "away": "away",
       "offline": "offline",
       "memberCount": "{count} {count, plural, =1 {member} other {members}}",
+      "lastSeen": "Last seen {time}",
       "you": "You",
       "unnamed": "Unnamed",
       "joined": "Joined {date}",
@@ -1592,8 +1673,13 @@
       "deals": "Deals & currency",
       "members": "Team members",
       "api": "API keys",
+      "integrations": "App integrations",
       "alerts": "Usage alerts",
       "opt-out": "Opt-in / opt-out"
+    },
+    "integrations": {
+      "title": "App integrations",
+      "description": "Connect Replai to the tools you already work in. Each integration sends through your approved WhatsApp templates and appears in the Inbox like any other message."
     },
     "groups": {
       "account": "Account",
@@ -1675,6 +1761,7 @@
       "title": "API keys",
       "description": "Keys authenticate the public REST API (<apiCode>/api/v1</apiCode>) so you can build your own automations. Send them as <headerCode>Authorization: Bearer &lt;key&gt;</headerCode>.",
       "newApiKey": "New API key",
+      "apiDocs": "API docs",
       "noApiKeys": "No API keys yet.",
       "createOneHint": "Click <bold>New API key</bold> to create one.",
       "askAdminHint": "Ask an admin to create one.",

@@ -91,11 +91,23 @@ export async function PATCH(
       );
     }
 
+    // Re-read to return the post-update state. We verified the contact
+    // exists above and only updated it, so a null here means the READ
+    // failed — report that rather than a 200 carrying `data: null`,
+    // which a client parsing the success envelope would treat as "this
+    // contact has no fields".
     const contact = await getContactById(ctx.supabase, ctx.accountId, id);
+    if (!contact) {
+      return fail('internal', 'Failed to read the updated contact', 500);
+    }
     return ok(contact);
   } catch (err) {
     if (err instanceof ContactError) {
-      return fail(err.status === 400 ? 'bad_request' : 'internal', err.message, err.status);
+      return fail(
+        err.status === 400 ? 'bad_request' : 'internal',
+        err.message,
+        err.status
+      );
     }
     return toApiErrorResponse(err);
   }

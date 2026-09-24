@@ -24,6 +24,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Loader2, Search, Users, CheckSquare, Square } from 'lucide-react';
 import type { AudienceConfig } from '@/hooks/use-broadcast-sending';
+import { PhoneDisplay } from '@/components/ui/phone-display';
 
 interface AudiencePreviewDialogProps {
   open: boolean;
@@ -552,9 +553,7 @@ export function AudiencePreviewDialog({
                         </p>
                       </TableCell>
                       <TableCell className="py-2.5">
-                        <span className="text-foreground font-mono text-xs font-medium">
-                          {contact.phone}
-                        </span>
+                        <PhoneDisplay phone={contact.phone} />
                       </TableCell>
                       {emailVisible && (
                         <TableCell className="text-muted-foreground hidden py-2.5 text-xs sm:table-cell">

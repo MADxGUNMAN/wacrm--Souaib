@@ -67,7 +67,15 @@ const SECURITY_HEADERS = [
       "img-src 'self' data: blob: https:",
       // Outbound media previews (blob: from MediaRecorder + file picker)
       // and Supabase public-bucket audio/video the inbox renders.
-      "media-src 'self' blob: https://*.supabase.co",
+      //
+      // `*.amazonaws.com` covers the S3 bucket that serves uploaded
+      // landing assets — the hero background video is loaded straight
+      // from `getS3PublicUrl()`, whose host is built from the bucket and
+      // region env vars, so it cannot be spelled out literally here.
+      // Without this the hero video logs a CSP violation on every
+      // landing-page load; it still plays only because this header is
+      // Report-Only, and would break the moment CSP is enforced.
+      "media-src 'self' blob: https://*.supabase.co https://*.amazonaws.com",
       "font-src 'self' data:",
       // Supabase REST + realtime (WSS). All Meta API calls happen
       // server-side, so graph.facebook.com does not belong here.
@@ -236,4 +244,3 @@ const nextConfig: NextConfig = {
 };
 
 export default withNextIntl(nextConfig);
-// Bust cache

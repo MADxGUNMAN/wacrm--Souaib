@@ -4,12 +4,14 @@
 //
 // List is keyset-paginated (see src/lib/api/v1/pagination.ts) and
 // supports `?search=` (name/phone) and `?tag=<tagId>` filters. Create
-// is find-or-create by phone: an existing match returns 200 with
-// `created: false`; a new row returns 201 with `created: true`.
+// is find-or-create by phone; the body is the contact either way, and
+// the STATUS carries which happened — 201 when this call created the
+// row, 200 when it matched an existing one.
 // ============================================================
 
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { isInvalidTextRepresentation } from '@/lib/api/v1/db-errors';
 import {
   parseListParams,
   keysetFilter,
@@ -72,6 +74,16 @@ export async function GET(request: Request) {
     if (kf) query = query.or(kf);
 
     const { data, error } = await query;
+    // `tag` is the only uuid-typed filter here (`search` is sanitized
+    // text and `cursor` is server-minted), so a failed cast can only be
+    // that parameter — most often a tag NAME passed where an id belongs.
+    if (isInvalidTextRepresentation(error)) {
+      return fail(
+        'bad_request',
+        "'tag' must be a valid tag UUID, not a tag name",
+        400
+      );
+    }
     if (error) {
       console.error('[api/v1/contacts] list error:', error);
       return fail('internal', 'Failed to list contacts', 500);
@@ -121,7 +133,10 @@ export async function POST(request: Request) {
         name: typeof body.name === 'string' ? body.name : undefined,
         email: typeof body.email === 'string' ? body.email : undefined,
         company: typeof body.company === 'string' ? body.company : undefined,
-      }
+      },
+      // Someone called the contacts API directly. A campaign send uses the
+      // same helper but passes 'campaign' — see broadcast-core.
+      'api'
     );
 
     if (Array.isArray(body.tags)) {

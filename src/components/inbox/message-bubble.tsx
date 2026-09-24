@@ -26,6 +26,7 @@ import {
   HelpCircle,
   EyeOff,
   AlertTriangle,
+  Megaphone,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ReplyQuote } from './reply-quote';
@@ -39,6 +40,7 @@ import { toast } from 'sonner';
 import type { WhatsAppContactCard } from '@/lib/whatsapp/meta-api';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { isOutboundSender } from '@/lib/messages/sender-type';
+import type { BroadcastOrigin } from '@/lib/messages/broadcast-origin';
 import {
   resolveMessageAuthorLabel,
   type AuthorDirectory,
@@ -72,6 +74,15 @@ interface MessageBubbleProps {
    * the body still renders on its own.
    */
   template?: TemplateRenderData | null;
+  /**
+   * Where a bulk send came from, when this message was part of one.
+   *
+   * Resolved by the thread from `messages.broadcast_id` and passed in for
+   * the same reason `template` is: one lookup per thread rather than one
+   * request per bubble. Null is the normal case — a one-to-one template
+   * send has no broadcast behind it, and gets no second badge.
+   */
+  broadcastOrigin?: BroadcastOrigin | null;
   /**
    * Sends a location request to this customer. Only reached from the
    * "Live Location Shared" limitation card, which used to *tell* the agent
@@ -636,11 +647,13 @@ function MessageContent({
   message,
   t,
   template,
+  broadcastOrigin,
   onRequestLocation,
 }: {
   message: Message;
   t: ReturnType<typeof useTranslations>;
   template?: TemplateRenderData | null;
+  broadcastOrigin?: BroadcastOrigin | null;
   onRequestLocation?: () => void;
 }) {
   switch (message.content_type) {
@@ -766,12 +779,49 @@ function MessageContent({
       // The badge is kept above the card because, unlike the customer, an
       // agent does need to know this was a template send — it is what
       // determines whether the 24-hour window applies.
+      //
+      // A SECOND badge sits beside it when the send was part of a bulk
+      // run, naming the campaign or broadcast it came from. Without it,
+      // three very different things looked identical in the thread: an
+      // agent picking a template by hand, a dashboard broadcast, and a
+      // Sheets rule firing automatically. When a customer asks "why did
+      // you message me", that distinction is the answer.
       return (
         <div>
-          <span className="bg-primary/20 text-primary mb-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium">
-            <LayoutTemplate className="h-3 w-3" />
-            {t('template')}
-          </span>
+          <div className="mb-1 flex flex-wrap items-center gap-1">
+            <span className="bg-primary/20 text-primary inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium">
+              <LayoutTemplate className="h-3 w-3" />
+              {t('template')}
+            </span>
+            {broadcastOrigin && (
+              <span
+                className={cn(
+                  'inline-flex max-w-[14rem] items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium',
+                  broadcastOrigin.kind === 'api_campaign'
+                    ? 'bg-violet-500/15 text-violet-600 dark:text-violet-400'
+                    : 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                )}
+                // The label is the campaign or broadcast name, which can be
+                // long; the title keeps it readable once truncated.
+                title={`${
+                  broadcastOrigin.kind === 'api_campaign'
+                    ? t('viaApiCampaign')
+                    : t('viaBroadcast')
+                }: ${broadcastOrigin.label}`}
+              >
+                {broadcastOrigin.kind === 'api_campaign' ? (
+                  <Zap className="h-3 w-3 shrink-0" />
+                ) : (
+                  <Megaphone className="h-3 w-3 shrink-0" />
+                )}
+                <span className="truncate">
+                  {broadcastOrigin.kind === 'api_campaign'
+                    ? t('viaApiCampaign')
+                    : t('viaBroadcast')}
+                </span>
+              </span>
+            )}
+          </div>
           <TemplateMessage body={message.content_text} template={template} />
         </div>
       );
@@ -869,6 +919,7 @@ export function MessageBubble({
   isStarred,
   onToggleReaction,
   template,
+  broadcastOrigin,
   authorDirectory,
   onRequestLocation,
 }: MessageBubbleProps) {
@@ -932,6 +983,7 @@ export function MessageBubble({
         ) : (
           <MessageContent
             message={message}
+            broadcastOrigin={broadcastOrigin}
             t={t}
             template={template}
             onRequestLocation={onRequestLocation}

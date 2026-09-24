@@ -1,0 +1,30 @@
+{
+  "name": "replai-sheets-addon",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Google Sheets editor add-on that sends WhatsApp messages through Replai API campaigns.",
+  "license": "MIT",
+  "author": "Junkies Coder",
+  "contributors": [
+    "Souaib Ansari <souaib@junkiescoder.com> (https://ansarisouaib.in)"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "login": "npx @google/clasp login",
+    "push": "npx @google/clasp push",
+    "pull": "npx @google/clasp pull",
+    "status": "npx @google/clasp show-file-status",
+    "open": "npx @google/clasp open-script",
+    "logs": "npx @google/clasp tail-logs --watch",
+    "version": "npx @google/clasp create-version",
+    "deploy": "npx @google/clasp create-deployment",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@google/clasp": "3.4.1",
+    "vitest": "4.1.10"
+  }
+}

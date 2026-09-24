@@ -16,15 +16,20 @@
 // ============================================================
 
 import type { MetadataRoute } from 'next';
-import { getSiteSettings, getLegalPagesList } from '@/lib/cms/queries';
+import {
+  getSiteSettings,
+  getLegalPagesList,
+  getIntegrationPage,
+} from '@/lib/cms/queries';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const [settings, legalPages] = await Promise.all([
+  const [settings, legalPages, sheetsPage] = await Promise.all([
     getSiteSettings(),
     getLegalPagesList(),
+    getIntegrationPage('google-sheets'),
   ]);
 
   // If no_index is on, return an empty sitemap — crawlers are already
@@ -71,5 +76,33 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.5,
   }));
 
-  return [...staticPages, ...legalEntries];
+  // Integration pages
+  const integrationEntries: MetadataRoute.Sitemap = [];
+  if (sheetsPage && sheetsPage.is_published) {
+    const pageMod = sheetsPage.updated_at
+      ? new Date(sheetsPage.updated_at)
+      : now;
+    integrationEntries.push(
+      {
+        url: `${siteUrl}/integrations/google-sheets`,
+        lastModified: pageMod,
+        changeFrequency: 'weekly',
+        priority: 0.8,
+      },
+      {
+        url: `${siteUrl}/integrations/google-sheets/privacy`,
+        lastModified: pageMod,
+        changeFrequency: 'monthly',
+        priority: 0.5,
+      },
+      {
+        url: `${siteUrl}/integrations/google-sheets/terms`,
+        lastModified: pageMod,
+        changeFrequency: 'monthly',
+        priority: 0.5,
+      }
+    );
+  }
+
+  return [...staticPages, ...legalEntries, ...integrationEntries];
 }

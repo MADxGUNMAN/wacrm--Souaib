@@ -2,18 +2,28 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Menu, X, MessageSquare } from 'lucide-react';
+import { Menu, X } from 'lucide-react';
 
 interface LandingNavbarProps {
   siteName?: string;
   logoUrl?: string | null;
   links?: { label: string; href: string; isExternal?: boolean }[];
+  /**
+   * Render with no background or border until the visitor scrolls, so a
+   * hero background shows through the bar.
+   *
+   * Opt-in, NOT the default: this navbar is also used by /docs, /contact,
+   * /legal/* and /integrations/*, whose content starts white at the top.
+   * Transparent there would make the bar disappear into the page.
+   */
+  transparentUntilScrolled?: boolean;
 }
 
 export function LandingNavbar({
   siteName = 'Replai',
   logoUrl,
   links,
+  transparentUntilScrolled = false,
 }: LandingNavbarProps) {
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -36,16 +46,21 @@ export function LandingNavbar({
 
   return (
     <nav
-      className={`fixed top-0 z-50 w-full border-b transition-all duration-300 ${
+      className={`fixed top-0 z-50 w-full transition-all duration-300 ${
         scrolled
-          ? 'border-slate-200 bg-white/95 shadow-sm backdrop-blur-xl'
-          : 'border-slate-200/50 bg-white/70 backdrop-blur-md'
+          ? 'border-b border-emerald-900/10 bg-[#edf7f2]/90 shadow-sm backdrop-blur-xl'
+          : transparentUntilScrolled
+            ? // Transparent border, not no border, so the bar does not shift
+              // by a pixel when it turns solid on scroll.
+              'border-b border-transparent bg-transparent'
+            : 'border-b border-emerald-900/10 bg-[#edf7f2]/80 backdrop-blur-md'
       }`}
     >
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
         {/* Brand */}
         <Link href="/" className="group flex items-center">
           {logoUrl ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
             <img
               src={logoUrl}
               alt={siteName}
@@ -104,7 +119,7 @@ export function LandingNavbar({
 
       {/* Mobile Menu */}
       {mobileOpen && (
-        <div className="space-y-4 border-t border-slate-200 bg-white/95 px-6 py-6 backdrop-blur-xl md:hidden">
+        <div className="space-y-4 border-t border-emerald-900/10 bg-[#edf7f2]/95 px-6 py-6 backdrop-blur-xl md:hidden">
           {navLinks.map((link) => (
             <a
               key={link.href}
@@ -115,16 +130,16 @@ export function LandingNavbar({
               {link.label}
             </a>
           ))}
-          <div className="space-y-3 border-t border-slate-200 pt-4">
+          <div className="space-y-3 border-t border-emerald-900/10 pt-4">
             <Link
               href="/login"
-              className="block rounded-xl border border-slate-200 py-2.5 text-center font-medium text-slate-600 transition-colors hover:text-slate-900"
+              className="block rounded-xl border border-emerald-900/15 bg-white/70 py-2.5 text-center font-medium text-slate-700 transition-colors hover:bg-white"
             >
               Login
             </Link>
             <Link
               href="/signup"
-              className="block rounded-full bg-[#25D366] py-2.5 text-center font-bold text-white transition-all"
+              className="block rounded-full bg-[#25D366] py-2.5 text-center font-bold text-white shadow-md transition-all"
             >
               Get Started
             </Link>

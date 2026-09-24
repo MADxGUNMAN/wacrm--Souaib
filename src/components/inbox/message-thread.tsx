@@ -53,6 +53,12 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { MessageBubble } from './message-bubble';
+import { useBroadcastOrigins } from '@/hooks/use-broadcast-origins';
+import {
+  primaryContactName,
+  whatsappNameSuffix,
+} from '@/lib/contacts/display-name';
+import { formatPhoneNumber } from '@/lib/phone/countries';
 import { MessageActions } from './message-actions';
 import {
   MessageComposer,
@@ -264,6 +270,12 @@ export function MessageThread({
    * Failure is silent by design: without this the body still renders, so a
    * fetch error must degrade the card rather than break the thread.
    */
+  /**
+   * Which bulk send each broadcast message in this thread came from, so a
+   * template bubble can name the campaign beside its Template badge.
+   */
+  const broadcastOrigins = useBroadcastOrigins(messages);
+
   const [templateRenderMap, setTemplateRenderMap] = useState<
     Record<string, TemplateRenderData>
   >({});
@@ -1411,7 +1423,11 @@ export function MessageThread({
     );
   }
 
-  const displayName = contact.name || contact.phone;
+  const displayName = primaryContactName(contact, contact.phone ?? 'Unknown');
+  // Shown beside the saved name in the header for the same reason as in the
+  // contact sidebar: this is where the operator confirms who they are talking
+  // to. The conversation list deliberately shows the saved name only.
+  const headerWaSuffix = whatsappNameSuffix(contact);
   const currentStatus = STATUS_OPTIONS.find(
     (s) => s.value === conversation.status
   );
@@ -1458,11 +1474,23 @@ export function MessageThread({
             {displayName.charAt(0).toUpperCase()}
           </div>
           <div className="min-w-0">
-            <h2 className="text-foreground truncate text-sm font-semibold">
+            <h2
+              className="text-foreground truncate text-sm font-semibold"
+              title={
+                headerWaSuffix
+                  ? `${displayName} ~${headerWaSuffix}`
+                  : displayName
+              }
+            >
               {displayName}
+              {headerWaSuffix && (
+                <span className="text-muted-foreground ml-1 font-normal">
+                  ~{headerWaSuffix}
+                </span>
+              )}
             </h2>
-            <p className="text-muted-foreground truncate text-xs">
-              {contact.phone}
+            <p className="text-muted-foreground truncate font-mono text-xs">
+              {formatPhoneNumber(contact.phone)}
             </p>
           </div>
           {/* Session timer badge — hidden on the narrowest phones so
@@ -1799,6 +1827,12 @@ export function MessageThread({
                             template={
                               msg.template_name
                                 ? (templateRenderMap[msg.template_name] ?? null)
+                                : null
+                            }
+                            broadcastOrigin={
+                              msg.broadcast_id
+                                ? (broadcastOrigins.get(msg.broadcast_id) ??
+                                  null)
                                 : null
                             }
                             reply={reply}

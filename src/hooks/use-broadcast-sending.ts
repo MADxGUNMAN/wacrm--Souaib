@@ -5,7 +5,8 @@ import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { Contact, MessageTemplate } from '@/types';
 import {
-  localInputToMs,
+  isMediaHeaderType,
+  sendValuesFromExtras,
   type BroadcastSendExtras,
 } from '@/lib/whatsapp/template-send-inputs';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
@@ -67,8 +68,19 @@ interface BroadcastPayload {
   draftId?: string;
 }
 
+interface SchedulePayload extends BroadcastPayload {
+  /** Absolute instant to send at, epoch ms. */
+  scheduledAtMs: number;
+}
+
 interface UseBroadcastSendingReturn {
   createAndSendBroadcast: (payload: BroadcastPayload) => Promise<string>;
+  /**
+   * Book a broadcast for later instead of sending it now. Resolves the
+   * audience and freezes each recipient's personalization immediately,
+   * then leaves the row for the server-side sweep to deliver.
+   */
+  scheduleBroadcast: (payload: SchedulePayload) => Promise<string>;
   isProcessing: boolean;
   progress: number;
 }
@@ -107,7 +119,7 @@ type CustomValueIndex = Map<string, Map<string, string>>;
 export function resolveVariables(
   variables: Record<string, VariableMapping>,
   contact: Contact,
-  customValues?: Map<string, string>,
+  customValues?: Map<string, string>
 ): string[] {
   // Keys are typically "1","2",... — numeric-aware sort keeps
   // {{1}} before {{10}}.
@@ -151,7 +163,7 @@ export function resolveVariables(
 export function resolveNamedVariables(
   variables: Record<string, VariableMapping>,
   contact: Contact | null,
-  customValues?: Map<string, string>,
+  customValues?: Map<string, string>
 ): [string, string][] {
   return Object.entries(variables).map(([name, v]) => {
     if (v.type === 'static') return [name, v.value];
@@ -175,7 +187,7 @@ export function resolveNamedVariables(
  */
 async function fetchCustomValueIndex(
   supabase: ReturnType<typeof createClient>,
-  contactIds: string[],
+  contactIds: string[]
 ): Promise<CustomValueIndex> {
   const index: CustomValueIndex = new Map();
   if (contactIds.length === 0) return index;
@@ -218,7 +230,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
   async function subtractOptedOut(
     supabase: ReturnType<typeof createClient>,
     account: string,
-    contacts: Contact[],
+    contacts: Contact[]
   ): Promise<Contact[]> {
     if (contacts.length === 0) return contacts;
 
@@ -230,7 +242,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     if (error) {
       console.warn(
         '[broadcast] could not read the opt-out list; the server will still filter:',
-        error.message,
+        error.message
       );
       return contacts;
     }
@@ -238,12 +250,12 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     const suppressed = new Set(
       (data ?? [])
         .map((r) => (r as { phone_normalized?: string }).phone_normalized)
-        .filter((p): p is string => Boolean(p)),
+        .filter((p): p is string => Boolean(p))
     );
     if (suppressed.size === 0) return contacts;
 
     return contacts.filter(
-      (c) => !suppressed.has(normalizePhone(c.phone ?? '')),
+      (c) => !suppressed.has(normalizePhone(c.phone ?? ''))
     );
   }
 
@@ -277,11 +289,15 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
           .from('contacts')
           .select('*')
           .in('id', uniqueContactIds);
-        if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
+        if (error)
+          throw new Error(`Failed to fetch contacts: ${error.message}`);
         contacts = data ?? [];
       }
     } else if (audience.type === 'custom_field' && audience.customField) {
-      contacts = await resolveCustomFieldAudience(supabase, audience.customField);
+      contacts = await resolveCustomFieldAudience(
+        supabase,
+        audience.customField
+      );
     } else if (audience.type === 'csv' && audience.csvContacts) {
       contacts = await upsertCsvContacts(supabase, audience.csvContacts);
     }
@@ -319,7 +335,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
    */
   async function upsertCsvContacts(
     supabase: ReturnType<typeof createClient>,
-    csvRows: { phone: string; name?: string }[],
+    csvRows: { phone: string; name?: string }[]
   ): Promise<Contact[]> {
     if (csvRows.length === 0) return [];
 
@@ -365,6 +381,11 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
         account_id: accountId,
         phone,
         name: uniqueByPhone.get(phone)?.name ?? null,
+        // The CSV here is an AUDIENCE for one send, not a contact import, so
+        // these are attributed to the campaign that pulled them in — same as
+        // a server-side campaign send resolving an unknown number. A CSV
+        // uploaded on the Contacts page records 'import' instead.
+        source: 'campaign' as const,
       }));
 
     const INSERT_CHUNK = 200;
@@ -390,7 +411,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
   async function resolveCustomFieldAudience(
     supabase: ReturnType<typeof createClient>,
-    filter: CustomFieldFilter,
+    filter: CustomFieldFilter
   ): Promise<Contact[]> {
     const { fieldId, operator, value } = filter;
 
@@ -404,7 +425,8 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
     if (operator === 'is') query = query.eq('value', value);
     else if (operator === 'is_not') query = query.neq('value', value);
-    else if (operator === 'contains') query = query.ilike('value', `%${value}%`);
+    else if (operator === 'contains')
+      query = query.ilike('value', `%${value}%`);
 
     const { data: matches, error: matchErr } = await query;
     if (matchErr)
@@ -421,7 +443,9 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     return data ?? [];
   }
 
-  async function createAndSendBroadcast(payload: BroadcastPayload): Promise<string> {
+  async function createAndSendBroadcast(
+    payload: BroadcastPayload
+  ): Promise<string> {
     setIsProcessing(true);
     setProgress(0);
 
@@ -470,7 +494,10 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
       // ── Step 2: Create or Update broadcast row ───────────────────
       setProgress(10);
-      let broadcast: any;
+      // Only the id is ever read off this row (recipient inserts, the
+      // status updates, and the return value), so it is typed to exactly
+      // that rather than `any`.
+      let broadcast: { id: string };
 
       if (payload.draftId) {
         const { data: updated, error: updateError } = await supabase
@@ -502,7 +529,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
         if (updateError || !updated) {
           throw new Error(
-            `Failed to update draft broadcast: ${updateError?.message ?? 'unknown error'}`,
+            `Failed to update draft broadcast: ${updateError?.message ?? 'unknown error'}`
           );
         }
         broadcast = updated;
@@ -536,7 +563,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
         if (broadcastError || !inserted) {
           throw new Error(
-            `Failed to create broadcast: ${broadcastError?.message ?? 'unknown error'}`,
+            `Failed to create broadcast: ${broadcastError?.message ?? 'unknown error'}`
           );
         }
         broadcast = inserted;
@@ -569,7 +596,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
             })
             .eq('id', broadcast.id);
           throw new Error(
-            `Failed to insert recipient batch ${i / INSERT_BATCH_SIZE + 1}: ${recipientError.message}`,
+            `Failed to insert recipient batch ${i / INSERT_BATCH_SIZE + 1}: ${recipientError.message}`
           );
         }
       }
@@ -592,7 +619,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
         .filter((id): id is string => Boolean(id));
       const customValueIndex = await fetchCustomValueIndex(
         supabase,
-        contactIds,
+        contactIds
       );
 
       let failedCount = 0;
@@ -602,43 +629,23 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
       // URL on every send. Collected in the personalize step and applied
       // to all recipients; falls back to the template's stored URL on the
       // server when omitted.
-      const headerType = payload.template.header_type;
-      const isMediaHeader =
-        headerType === 'image' ||
-        headerType === 'video' ||
-        headerType === 'document';
-      const headerMediaUrl = payload.headerMediaUrl?.trim();
+      const isMediaHeader = isMediaHeaderType(payload.template.header_type);
 
       // Everything that is the same for every recipient, assembled once.
       // Previously this was only ever `{ headerMediaUrl }`, which is why a
       // limited-time offer or a variable carousel could be created and
       // approved but never broadcast — there was no channel to carry the
       // expiry or the per-card values.
+      //
+      // Now delegated to the shared mapper so the test send and the
+      // scheduled executor build byte-identical params from the same
+      // state; three hand-rolled copies had already drifted apart.
       const isNamed = payload.template.parameter_format === 'NAMED';
-      const extras = payload.sendExtras;
-      const offerExpiresAtMs = extras?.offerExpiryLocal
-        ? localInputToMs(extras.offerExpiryLocal)
-        : undefined;
-      const cards = extras?.cards?.length ? extras.cards : undefined;
-      const extraButtonParams =
-        extras?.buttonParams && Object.keys(extras.buttonParams).length > 0
-          ? extras.buttonParams
-          : undefined;
-
-      const sharedParams = {
-        ...(isMediaHeader && headerMediaUrl ? { headerMediaUrl } : {}),
-        ...(extras?.headerLocation ? { headerLocation: extras.headerLocation } : {}),
-        ...(offerExpiresAtMs ? { offerExpiresAtMs } : {}),
-        ...(cards ? { cards } : {}),
-        ...(extraButtonParams ? { buttonParams: extraButtonParams } : {}),
-        ...(extras?.catalogThumbnailProductId ? { catalogThumbnailProductId: extras.catalogThumbnailProductId } : {}),
-        ...(extras?.mpm ? { mpm: extras.mpm } : {}),
-        ...(extras?.orderDetails ? { orderDetails: extras.orderDetails } : {}),
-        ...(extras?.orderStatus?.orderReferenceId ? { orderReferenceId: extras.orderStatus.orderReferenceId } : {}),
-        ...(extras?.orderStatus?.orderStatus ? { orderStatus: extras.orderStatus.orderStatus } : {}),
-        ...(extras?.orderStatus?.orderStatusDescription ? { orderStatusDescription: extras.orderStatus.orderStatusDescription } : {}),
-        ...(extras?.authCode ? { body: [extras.authCode] } : {}),
-      };
+      const sharedParams = sendValuesFromExtras({
+        extras: payload.sendExtras,
+        headerMediaUrl: payload.headerMediaUrl,
+        isMediaHeader,
+      });
       const messageParams =
         Object.keys(sharedParams).length > 0 ? sharedParams : undefined;
 
@@ -652,7 +659,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
               ? resolveVariables(
                   payload.variables,
                   r.contact,
-                  customValueIndex.get(r.contact.id),
+                  customValueIndex.get(r.contact.id)
                 )
               : [];
 
@@ -665,8 +672,8 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
                   resolveNamedVariables(
                     payload.variables,
                     r.contact ?? null,
-                    r.contact ? customValueIndex.get(r.contact.id) : undefined,
-                  ),
+                    r.contact ? customValueIndex.get(r.contact.id) : undefined
+                  )
                 )
               : null;
 
@@ -677,6 +684,11 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
             return {
               phone: r.contact!.phone as string,
+              // Lets the server record this send in the contact's Inbox
+              // thread. The audience was resolved from `contacts`, so the
+              // id is already known here — the send endpoint is phone-based
+              // and would otherwise have no way to identify the recipient.
+              contact_id: r.contact!.id as string,
               params: values,
               ...(Object.keys(perRecipient).length > 0
                 ? { messageParams: perRecipient }
@@ -692,6 +704,9 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               recipients: apiRecipients,
+              // Tags each stored message with this campaign so the Inbox
+              // can filter threads by broadcast.
+              broadcast_id: broadcast.id,
               template_name: payload.template.name,
               template_language: payload.template.language ?? 'en_US',
             }),
@@ -764,7 +779,8 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
               .from('broadcast_recipients')
               .update({
                 status: 'failed',
-                error_message: err instanceof Error ? err.message : 'Unknown error',
+                error_message:
+                  err instanceof Error ? err.message : 'Unknown error',
               })
               .eq('id', recipient.id);
           }
@@ -796,5 +812,216 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     }
   }
 
-  return { createAndSendBroadcast, isProcessing, progress };
+  /**
+   * Book a broadcast to send later.
+   *
+   * ─── Why the audience is resolved NOW, not at send time ───────────
+   *
+   * The alternative — storing only the audience rule and re-resolving it
+   * when the cron fires — sounds more "live", and is worse in three
+   * concrete ways:
+   *
+   *   1. The operator confirmed a specific number of recipients. If the
+   *      set silently changes under them, the campaign they approved is
+   *      not the campaign that sends.
+   *   2. Audience resolution lives in THIS hook, in the browser, behind
+   *      the user's RLS session. A cron has no session, so re-resolving
+   *      server-side would mean a second implementation of tag filters,
+   *      custom-field filters, CSV upserts and exclusion lists — two
+   *      copies of the rule that decides who gets messaged.
+   *   3. Per-recipient personalization has to be resolved against
+   *      contacts anyway, and doing it now freezes what was reviewed.
+   *
+   * The trade-off, stated plainly in the confirm dialog: contacts added
+   * after scheduling are not included.
+   */
+  async function scheduleBroadcast(payload: SchedulePayload): Promise<string> {
+    const supabase = createClient();
+    setIsProcessing(true);
+    setProgress(0);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const user = session?.user;
+      if (!user) throw new Error('You are not signed in.');
+      if (!accountId) {
+        throw new Error('Your profile is not linked to an account.');
+      }
+
+      // Refuse a past instant here as well as in the UI. This is the
+      // last point before it becomes a database row, and a row with a
+      // past scheduled_at would fire on the very next sweep — indistinct
+      // from "Send now" but without any of its progress feedback.
+      if (
+        !Number.isFinite(payload.scheduledAtMs) ||
+        payload.scheduledAtMs <= Date.now()
+      ) {
+        throw new Error('Pick a send time in the future.');
+      }
+
+      setProgress(10);
+      const resolved = await resolveAudience(payload.audience);
+      const contacts = isMarketingCategory(payload.template.category)
+        ? await subtractOptedOut(supabase, accountId, resolved)
+        : resolved;
+
+      if (contacts.length === 0) {
+        throw new Error(
+          resolved.length > 0
+            ? 'Every contact in this audience has opted out of marketing messages.'
+            : 'No contacts found for this audience.'
+        );
+      }
+
+      setProgress(35);
+
+      // Everything recipient-independent, from the same mapper the
+      // immediate send uses.
+      const isMediaHeader = isMediaHeaderType(payload.template.header_type);
+      const isNamed = payload.template.parameter_format === 'NAMED';
+      const sharedParams = sendValuesFromExtras({
+        extras: payload.sendExtras,
+        headerMediaUrl: payload.headerMediaUrl,
+        isMediaHeader,
+      });
+
+      const scheduledAtIso = new Date(payload.scheduledAtMs).toISOString();
+      const audienceFilter = {
+        type: payload.audience.type,
+        tagIds: payload.audience.tagIds,
+        customField: payload.audience.customField,
+        excludeTagIds: payload.audience.excludeTagIds,
+        excludedContactIds: payload.audience.excludedContactIds,
+      };
+
+      // `send_config` is what makes a scheduled send reconstructable —
+      // media, offer deadline and carousel values live only in React
+      // state otherwise, and would be gone by the time the sweep runs.
+      const row = {
+        name: payload.name,
+        template_name: payload.template.name,
+        template_language: payload.template.language ?? 'en_US',
+        template_variables: payload.variables,
+        audience_filter: audienceFilter,
+        status: 'scheduled' as const,
+        scheduled_at: scheduledAtIso,
+        send_config: {
+          headerMediaUrl: payload.headerMediaUrl ?? '',
+          sendExtras: payload.sendExtras ?? null,
+          csvContacts: payload.audience.csvContacts ?? null,
+        },
+        total_recipients: contacts.length,
+        updated_at: new Date().toISOString(),
+      };
+
+      let broadcastId: string;
+      if (payload.draftId) {
+        const { data: updated, error: updateError } = await supabase
+          .from('broadcasts')
+          .update(row)
+          .eq('id', payload.draftId)
+          .select('id')
+          .single();
+        if (updateError || !updated) {
+          throw new Error(
+            `Failed to schedule broadcast: ${updateError?.message ?? 'unknown error'}`
+          );
+        }
+        broadcastId = updated.id;
+
+        // A draft being rescheduled may already carry recipient rows from
+        // an earlier attempt. Clear them so the frozen list matches the
+        // audience just resolved, rather than a stale union of both.
+        const { error: clearError } = await supabase
+          .from('broadcast_recipients')
+          .delete()
+          .eq('broadcast_id', broadcastId);
+        if (clearError) {
+          throw new Error(`Failed to reset recipients: ${clearError.message}`);
+        }
+      } else {
+        const { data: inserted, error: insertError } = await supabase
+          .from('broadcasts')
+          .insert({ ...row, user_id: user.id, account_id: accountId })
+          .select('id')
+          .single();
+        if (insertError || !inserted) {
+          throw new Error(
+            `Failed to schedule broadcast: ${insertError?.message ?? 'unknown error'}`
+          );
+        }
+        broadcastId = inserted.id;
+      }
+
+      setProgress(55);
+
+      // Per-recipient personalization, resolved and stored now.
+      const contactIds = contacts.map((c) => c.id);
+      const customValueIndex = await fetchCustomValueIndex(
+        supabase,
+        contactIds
+      );
+
+      const recipientRows = contacts.map((contact) => {
+        const positional = resolveVariables(
+          payload.variables,
+          contact,
+          customValueIndex.get(contact.id)
+        );
+        const namedBody = isNamed
+          ? Object.fromEntries(
+              resolveNamedVariables(
+                payload.variables,
+                contact,
+                customValueIndex.get(contact.id)
+              )
+            )
+          : null;
+
+        return {
+          broadcast_id: broadcastId,
+          contact_id: contact.id,
+          status: 'pending' as const,
+          send_params: {
+            params: positional,
+            messageParams: {
+              ...sharedParams,
+              ...(namedBody ? { namedBody } : {}),
+            },
+          },
+        };
+      });
+
+      setProgress(75);
+
+      for (let i = 0; i < recipientRows.length; i += INSERT_BATCH_SIZE) {
+        const batch = recipientRows.slice(i, i + INSERT_BATCH_SIZE);
+        const { error: recipientError } = await supabase
+          .from('broadcast_recipients')
+          .insert(batch);
+        if (recipientError) {
+          // A half-populated scheduled broadcast would send to an
+          // arbitrary subset at the appointed time, which is worse than
+          // not sending. Put it back to draft so it cannot fire, and say
+          // so — the operator still has every value in the wizard.
+          await supabase
+            .from('broadcasts')
+            .update({ status: 'draft', scheduled_at: null })
+            .eq('id', broadcastId);
+          throw new Error(
+            `Failed to store recipients, so nothing was scheduled: ${recipientError.message}`
+          );
+        }
+      }
+
+      setProgress(100);
+      return broadcastId;
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
+  return { createAndSendBroadcast, scheduleBroadcast, isProcessing, progress };
 }

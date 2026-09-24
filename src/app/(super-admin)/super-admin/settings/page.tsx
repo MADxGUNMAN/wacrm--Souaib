@@ -8,12 +8,26 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import type { SiteSettings } from '@/types/super-admin';
+import { uploadAccountMedia } from '@/lib/storage/upload-media';
+
+/**
+ * Advertised ceiling for the hero background video.
+ *
+ * Checked in the browser BEFORE asking for a presigned URL, so an oversized
+ * file fails instantly with a readable reason instead of after a long upload.
+ * `/api/storage/presign` enforces its own hard backstop.
+ */
+const HERO_VIDEO_MAX_BYTES = 15 * 1024 * 1024;
+const HERO_VIDEO_ACCEPT = 'video/mp4';
 
 export default function PlatformSettingsPage() {
   const [settings, setSettings] = useState<Partial<SiteSettings>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [uploadingField, setUploadingField] = useState<string | null>(null);
+  /** 0-100 while the hero video uploads. A video is slow enough that a
+   *  button with no progress reads as hung. */
+  const [videoProgress, setVideoProgress] = useState(0);
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
@@ -63,6 +77,46 @@ export default function PlatformSettingsPage() {
       toast.error('Upload failed: ' + (err as Error).message);
     } finally {
       setUploadingField(null);
+    }
+  };
+
+  /**
+   * The hero video does NOT go through /api/super-admin/upload.
+   *
+   * That route buffers the whole file in memory and passes through nginx,
+   * whose request-body cap sits well below the size of a video - so a real
+   * upload there fails with a 413 that looks like a server fault. This uses
+   * the presigned browser-to-S3 path instead, into the platform-wide
+   * `landing-assets` prefix (allowed, and deliberately not account-scoped).
+   */
+  const handleVideoUpload = async (field: keyof SiteSettings, file: File) => {
+    if (file.size > HERO_VIDEO_MAX_BYTES) {
+      const mb = (file.size / 1024 / 1024).toFixed(1);
+      toast.error(
+        `That video is ${mb} MB. Keep it under ${HERO_VIDEO_MAX_BYTES / 1024 / 1024} MB so the landing page stays fast.`
+      );
+      return;
+    }
+    if (file.type !== HERO_VIDEO_ACCEPT) {
+      toast.error(
+        'Use an MP4 (H.264) - it is the one format every browser plays.'
+      );
+      return;
+    }
+
+    setUploadingField(field);
+    setVideoProgress(0);
+    try {
+      const { publicUrl } = await uploadAccountMedia('landing-assets', file, {
+        onProgress: setVideoProgress,
+      });
+      handleChange(field, publicUrl);
+      toast.success('Video uploaded. Press Save Settings to publish it.');
+    } catch (err) {
+      toast.error('Upload failed: ' + (err as Error).message);
+    } finally {
+      setUploadingField(null);
+      setVideoProgress(0);
     }
   };
 
@@ -216,6 +270,20 @@ export default function PlatformSettingsPage() {
               }
             />
           </div>
+
+          {/* 5. Landing hero background video. Full width: it behaves
+                differently from the logo fields above (different upload path,
+                different constraints) and the caveats need room. */}
+          <VideoAssetCard
+            label="Landing Hero Background Video"
+            description="Plays behind the hero on the public landing page. Desktop only - never loaded on phones, or for visitors who ask for reduced motion. Muted and looping, so a short clip works best."
+            value={settings.hero_video_url || ''}
+            isUploading={uploadingField === 'hero_video_url'}
+            progress={videoProgress}
+            maxMb={HERO_VIDEO_MAX_BYTES / 1024 / 1024}
+            onChange={(val) => handleChange('hero_video_url', val)}
+            onFileSelect={(file) => handleVideoUpload('hero_video_url', file)}
+          />
         </div>
 
         {/* Contact Emails */}
@@ -431,6 +499,100 @@ function AssetCard({
           />
         </label>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Same shape as AssetCard, but for a video.
+ *
+ * Separate rather than a prop on AssetCard because almost everything
+ * differs: the preview is a muted looping <video> instead of an <img>, the
+ * accept list is MP4 only, there is a byte ceiling worth stating up front,
+ * and the upload reports progress because it is large enough to look stuck
+ * without it.
+ */
+function VideoAssetCard({
+  label,
+  description,
+  value,
+  isUploading,
+  progress,
+  maxMb,
+  onChange,
+  onFileSelect,
+}: {
+  label: string;
+  description: string;
+  value: string;
+  isUploading: boolean;
+  progress: number;
+  maxMb: number;
+  onChange: (val: string) => void;
+  onFileSelect: (file: File) => void;
+}) {
+  return (
+    <div className="mt-6 space-y-3 rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <label className="text-xs font-bold tracking-wider text-slate-700 uppercase">
+            {label}
+          </label>
+          <p className="mt-0.5 max-w-2xl text-[11px] text-slate-500">
+            {description}
+          </p>
+        </div>
+
+        <div className="relative flex h-16 w-28 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+          {value ? (
+            // Muted + loop so the preview shows what visitors get, without
+            // audio firing inside the admin panel.
+            <video
+              src={value}
+              muted
+              loop
+              autoPlay
+              playsInline
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <Upload className="size-4 text-slate-300" />
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="https://... or upload an MP4"
+          className="h-9 flex-1 border-slate-200 bg-white text-xs text-slate-900"
+        />
+
+        <label className="inline-flex h-9 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+          {isUploading ? (
+            <Loader2 className="size-3.5 animate-spin text-blue-500" />
+          ) : (
+            <Upload className="size-3.5 text-slate-500" />
+          )}
+          <span>{isUploading ? `Uploading ${progress}%` : 'Upload Video'}</span>
+          <input
+            type="file"
+            accept="video/mp4"
+            className="hidden"
+            disabled={isUploading}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onFileSelect(file);
+            }}
+          />
+        </label>
+      </div>
+
+      <p className="text-[11px] text-slate-400">
+        MP4 (H.264), up to {maxMb} MB. Clearing this field returns the hero to
+        its static background.
+      </p>
     </div>
   );
 }

@@ -12,13 +12,16 @@ import {
   ChevronDown,
   CreditCard,
   FileText,
+  Inbox,
   LayoutDashboard,
   LibraryBig,
+  LifeBuoy,
   LogOut,
   Mail,
   Newspaper,
   Send,
   Settings,
+  Table2,
   Tag,
   Users,
   X,
@@ -85,6 +88,23 @@ const navGroups: NavGroup[] = [
       },
       { href: '/super-admin/auto-mail', label: 'Auto Mail', icon: Send },
       { href: '/super-admin/newsletter', label: 'Newsletter', icon: Newspaper },
+    ],
+  },
+  {
+    id: 'sheets-addon',
+    label: 'Sheet Add-on',
+    icon: Table2,
+    items: [
+      {
+        href: '/super-admin/sheets-addon/help',
+        label: 'Help Content',
+        icon: LifeBuoy,
+      },
+      {
+        href: '/super-admin/sheets-addon/reports',
+        label: 'Issue Reports',
+        icon: Inbox,
+      },
     ],
   },
   {
@@ -242,7 +262,7 @@ export function SuperAdminSidebar({ open, onClose }: SuperAdminSidebarProps) {
         </div>
 
         <nav
-          className="flex-1 overflow-y-auto pr-1"
+          className="scrollbar-sidebar flex-1 overflow-y-auto pr-1"
           aria-label="Main navigation"
         >
           <div className="space-y-1">

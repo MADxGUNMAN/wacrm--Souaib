@@ -259,6 +259,10 @@ export function ContactForm({
             phone: phone.trim(),
             email: email.trim() ? normalizeEmail(email) : null,
             company: company.trim() || null,
+            // A person filled in this form. Also covers the inbox's "add
+            // contact" on a shared contact card, which prefills and reuses it
+            // — still a human choosing to save the contact.
+            source: 'manual',
           })
           .select('id')
           .single();

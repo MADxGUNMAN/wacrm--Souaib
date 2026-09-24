@@ -20,6 +20,8 @@ import { Step2SelectAudience } from '@/components/broadcasts/step2-select-audien
 import { Step3Personalize } from '@/components/broadcasts/step3-personalize';
 import {
   EMPTY_SEND_EXTRAS,
+  msToLocalInput,
+  validateScheduleAt,
   type BroadcastSendExtras,
 } from '@/lib/whatsapp/template-send-inputs';
 import { Step4ScheduleSend } from '@/components/broadcasts/step4-schedule-send';
@@ -41,7 +43,7 @@ function NewBroadcastWizard() {
 
   const t = useTranslations('Broadcasts.new');
   const { accountId } = useAuth();
-  const { createAndSendBroadcast, isProcessing, progress } =
+  const { createAndSendBroadcast, scheduleBroadcast, isProcessing, progress } =
     useBroadcastSending();
 
   const [loadingDraft, setLoadingDraft] = useState(Boolean(draftId));
@@ -66,6 +68,13 @@ function NewBroadcastWizard() {
     Record<string, { type: 'static' | 'field' | 'custom_field'; value: string }>
   >({});
   const [headerMediaUrl, setHeaderMediaUrl] = useState('');
+  /**
+   * Schedule-for-later, opt-in. Held here rather than in step 4 so the
+   * choice survives stepping back to fix a variable — losing a chosen
+   * send time on a Back click would be its own small betrayal.
+   */
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduledAtLocal, setScheduledAtLocal] = useState('');
   /** Offer expiry and per-card carousel values — one set for the whole send. */
   const [sendExtras, setSendExtras] =
     useState<BroadcastSendExtras>(EMPTY_SEND_EXTRAS);
@@ -104,6 +113,37 @@ function NewBroadcastWizard() {
         }
         if (bc.audience_filter) {
           setAudience(bc.audience_filter);
+        }
+
+        // Restore the send-time values that used to be lost on reload.
+        // `csvContacts` is folded back into the audience because that is
+        // where the rest of the wizard reads it from; audience_filter has
+        // never carried it (the rows are synthetic, not a filter rule).
+        const cfg = bc.send_config as {
+          headerMediaUrl?: string;
+          sendExtras?: BroadcastSendExtras | null;
+          csvContacts?: { phone: string; name?: string }[] | null;
+        } | null;
+        if (cfg) {
+          if (typeof cfg.headerMediaUrl === 'string') {
+            setHeaderMediaUrl(cfg.headerMediaUrl);
+          }
+          if (cfg.sendExtras) {
+            setSendExtras(cfg.sendExtras);
+          }
+          if (cfg.csvContacts && cfg.csvContacts.length > 0) {
+            setAudience((prev) => ({ ...prev, csvContacts: cfg.csvContacts! }));
+          }
+        }
+
+        // A scheduled broadcast opened for editing keeps its time, so
+        // saving again does not silently turn it into an immediate send.
+        if (bc.status === 'scheduled' && bc.scheduled_at) {
+          const ms = new Date(bc.scheduled_at).getTime();
+          if (Number.isFinite(ms)) {
+            setScheduleEnabled(true);
+            setScheduledAtLocal(msToLocalInput(ms));
+          }
         }
 
         // Fetch APPROVED template matching name and language
@@ -211,6 +251,48 @@ function NewBroadcastWizard() {
     }
   }
 
+  async function handleSchedule() {
+    if (!template) return;
+
+    // Re-validate at the moment of submit, not just on change. The form
+    // can sit open long enough for a time that was comfortably ahead to
+    // fall inside (or behind) the minimum lead.
+    const check = validateScheduleAt(scheduledAtLocal);
+    if (!check.ok || check.atMs === null) {
+      toast.error(check.message ?? 'Pick a valid send time.');
+      return;
+    }
+
+    try {
+      const broadcastId = await scheduleBroadcast({
+        name,
+        template,
+        audience: {
+          type: audience.type,
+          tagIds: audience.tagIds,
+          customField: audience.customField,
+          csvContacts: audience.csvContacts,
+          excludeTagIds: audience.excludeTagIds,
+          excludedContactIds: audience.excludedContactIds,
+        },
+        variables,
+        headerMediaUrl,
+        sendExtras,
+        draftId: draftId ?? undefined,
+        scheduledAtMs: check.atMs,
+      });
+      toast.success(
+        `Scheduled for ${new Date(check.atMs).toLocaleString()}. You can close this page.`
+      );
+      router.push(`/broadcasts/${broadcastId}`);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to schedule broadcast';
+      console.error('Schedule failed:', err);
+      toast.error(message);
+    }
+  }
+
   async function handleSaveDraft() {
     if (!template || !name.trim()) {
       toast.error(t('toastGiveName'));
@@ -242,7 +324,20 @@ function NewBroadcastWizard() {
         excludeTagIds: audience.excludeTagIds,
         excludedContactIds: audience.excludedContactIds,
       },
+      // Media, offer deadline, carousel cards and a CSV audience used to
+      // be dropped on save, so reloading a draft carousel broadcast came
+      // back with no card images and a CSV draft came back with no
+      // audience at all. There is a column for them now.
+      send_config: {
+        headerMediaUrl,
+        sendExtras,
+        csvContacts: audience.csvContacts ?? null,
+      },
       status: 'draft',
+      // A draft that had been scheduled and is now being saved as a
+      // plain draft must lose its send time, or the sweep would still
+      // fire it.
+      scheduled_at: null,
       total_recipients: 0,
       sent_count: 0,
       delivered_count: 0,
@@ -252,7 +347,9 @@ function NewBroadcastWizard() {
       updated_at: new Date().toISOString(),
     };
 
-    let error: any;
+    // Only `.message` is read below, and Supabase returns null on
+    // success — so this is exactly the shape, rather than `any`.
+    let error: { message: string } | null;
     if (draftId) {
       const res = await supabase
         .from('broadcasts')
@@ -443,6 +540,11 @@ function NewBroadcastWizard() {
               onBack={() => setCurrentStep(2)}
               isProcessing={isProcessing}
               progress={progress}
+              scheduleEnabled={scheduleEnabled}
+              onScheduleEnabledChange={setScheduleEnabled}
+              scheduledAtLocal={scheduledAtLocal}
+              onScheduledAtLocalChange={setScheduledAtLocal}
+              onSchedule={handleSchedule}
             />
           )}
         </div>

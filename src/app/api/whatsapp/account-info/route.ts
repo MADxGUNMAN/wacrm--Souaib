@@ -78,7 +78,7 @@ export async function GET() {
 
     // Fetch phone number details from Meta
     const phoneFields =
-      'id,display_phone_number,verified_name,quality_rating,status,name_status,code_verification_status';
+      'id,display_phone_number,verified_name,quality_rating,status,name_status,code_verification_status,platform_type';
     const phoneRes = await fetch(
       `${META_API_BASE}/${config.phone_number_id}?fields=${phoneFields}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -340,6 +340,18 @@ export async function GET() {
         quality_rating: phoneData.quality_rating ?? null,
         status: phoneData.status ?? null,
         name_status: phoneData.name_status ?? null,
+        // Already fetched above, but was not being returned. Needed
+        // because Meta's health error for a number still being activated
+        // tells the operator to "finish the OTP authentication process"
+        // even when this field says VERIFIED — i.e. when the OTP is
+        // already done and there is nothing for them to finish.
+        code_verification_status: phoneData.code_verification_status ?? null,
+        // `CLOUD_API` once registered, `NOT_APPLICABLE` when the number
+        // was never registered at all. This is the only field that
+        // separates "Meta is still reviewing us" from "nobody ever called
+        // /register", which are the same status=PENDING to every other
+        // field and have completely different remedies.
+        platform_type: phoneData.platform_type ?? null,
       },
       waba: {
         id: wabaData.id ?? config.waba_id,

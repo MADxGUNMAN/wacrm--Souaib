@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { addContactTag, deleteContactTag } from '@/lib/contacts/tag-api';
 import { isGreenish } from '@/lib/contacts/tag-color';
@@ -34,6 +35,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { getContactSource } from '@/lib/contacts/contact-source';
+import { formatPhoneNumber } from '@/lib/phone/countries';
+import { PhoneInput } from '@/components/ui/phone-input';
+import { isUniqueViolation } from '@/lib/contacts/dedupe';
 import {
   Phone,
   Mail,
@@ -44,6 +49,7 @@ import {
   Save,
   LayoutTemplate,
   ChevronDown,
+  MessageSquare,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
@@ -61,12 +67,39 @@ export function ContactDetailView({
   onUpdated,
 }: ContactDetailViewProps) {
   const t = useTranslations('Contacts.detailView');
+  const tSource = useTranslations('Contacts.sources');
+  const router = useRouter();
   const supabase = createClient();
   const { defaultCurrency } = useAuth();
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
   const [copiedPhone, setCopiedPhone] = useState(false);
+  const [openingChat, setOpeningChat] = useState(false);
+
+  async function handleOpenChat() {
+    if (!contactId) return;
+    setOpeningChat(true);
+    try {
+      const res = await fetch(`/api/contacts/${contactId}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        conversationId?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.conversationId) {
+        throw new Error(data.error || 'Failed to open conversation');
+      }
+      onOpenChange(false);
+      router.push(`/inbox?c=${data.conversationId}`);
+    } catch (err) {
+      console.error('[contact-detail] failed to open chat:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to open chat');
+      setOpeningChat(false);
+    }
+  }
 
   // Send template — lets the business initiate (or re-open) a conversation
   // with this contact by sending an approved template. The send route
@@ -77,6 +110,7 @@ export function ContactDetailView({
   // Details tab
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
+  const [isPhoneValid, setIsPhoneValid] = useState(true);
   const [editEmail, setEditEmail] = useState('');
   const [editCompany, setEditCompany] = useState('');
   const [savingDetails, setSavingDetails] = useState(false);
@@ -205,7 +239,7 @@ export function ContactDetailView({
 
   async function copyPhone() {
     if (!contact) return;
-    await navigator.clipboard.writeText(contact.phone);
+    await navigator.clipboard.writeText(formatPhoneNumber(contact.phone));
     setCopiedPhone(true);
     setTimeout(() => setCopiedPhone(false), 2000);
   }
@@ -213,6 +247,11 @@ export function ContactDetailView({
   async function saveDetails() {
     if (!contactId || !editPhone.trim()) {
       toast.error(t('toastPhoneRequired'));
+      return;
+    }
+
+    if (!isPhoneValid) {
+      toast.error('Please enter a valid phone number');
       return;
     }
 
@@ -255,7 +294,12 @@ export function ContactDetailView({
       toast.success(t('toastUpdated'));
       fetchContact();
       onUpdated();
-    } catch {
+    } catch (err: unknown) {
+      if (isUniqueViolation(err)) {
+        toast.error('A contact with this phone number already exists');
+        setSavingDetails(false);
+        return;
+      }
       toast.error(t('toastUpdateFailed'));
     }
     setSavingDetails(false);
@@ -399,7 +443,7 @@ export function ContactDetailView({
                         className="hover:text-primary flex cursor-pointer items-center gap-1 transition-colors"
                       >
                         <Phone className="size-3" />
-                        {contact.phone}
+                        {formatPhoneNumber(contact.phone)}
                         {copiedPhone ? (
                           <Check className="text-primary size-3" />
                         ) : (
@@ -418,10 +462,40 @@ export function ContactDetailView({
                           {contact.company}
                         </span>
                       )}
+                      {/* How this contact got here. Shown alongside the
+                          identifiers rather than buried in a tab, because it
+                          is context for everything else on this sheet — a
+                          number a campaign created has no consent history
+                          behind it, and that changes how you treat it. */}
+                      {(() => {
+                        const display = getContactSource(contact.source);
+                        return (
+                          <span
+                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${display.classes}`}
+                            title={tSource(display.hint)}
+                          >
+                            {tSource(display.label)}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
-                <div className="mt-3">
+                <div className="mt-3 flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleOpenChat}
+                    disabled={openingChat}
+                    className="border-border hover:bg-muted"
+                  >
+                    {openingChat ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <MessageSquare className="size-4" />
+                    )}
+                    {t('openChatBtn')}
+                  </Button>
                   <Button
                     size="sm"
                     onClick={() => setTemplatePickerOpen(true)}
@@ -487,13 +561,21 @@ export function ContactDetailView({
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-muted-foreground text-xs">
+                      <Label
+                        htmlFor="cdv-phone"
+                        className="text-muted-foreground text-xs"
+                      >
                         {t('phone')} <span className="text-red-400">*</span>
                       </Label>
-                      <Input
+                      <PhoneInput
+                        id="cdv-phone"
                         value={editPhone}
-                        onChange={(e) => setEditPhone(e.target.value)}
-                        className="bg-muted border-border text-foreground h-8 text-sm"
+                        defaultCountryCode="IN"
+                        required
+                        onChange={(fullE164, isValid) => {
+                          setEditPhone(fullE164);
+                          setIsPhoneValid(isValid);
+                        }}
                       />
                     </div>
                     {emailVisible && (

@@ -126,12 +126,7 @@ export function parseThroughput(raw: unknown): Throughput | null {
  * next.
  */
 export type NameReviewState =
-  | 'approved'
-  | 'pending'
-  | 'declined'
-  | 'expired'
-  | 'none'
-  | 'unknown';
+  'approved' | 'pending' | 'declined' | 'expired' | 'none' | 'unknown';
 
 export interface NameReview {
   state: NameReviewState;
@@ -184,6 +179,24 @@ export function parseNameStatus(raw: unknown): NameReview {
         state: 'none',
         label: 'Not submitted',
         detail: 'No display name has been submitted for this number yet.',
+      };
+    // Meta's value for "this number has no display name record at all".
+    //
+    // It was missing from this switch and fell through to `unknown`, so the
+    // Display name tile rendered a bare em dash with no explanation — on a
+    // number that could not send a single message. The operator's first
+    // warning was Meta refusing the send with error 131037, which is exactly
+    // the situation this tile exists to prevent.
+    //
+    // The wording names the consequence, not just the state: on a
+    // WhatsApp-provided (+1 555) test number an unapproved display name
+    // BLOCKS sending outright, which is not obvious from "not submitted".
+    case 'NON_EXISTS':
+      return {
+        state: 'none',
+        label: 'Not submitted',
+        detail:
+          'No display name has been submitted for this number. Meta blocks sending until one is approved — submit it in WhatsApp Manager → Phone numbers → Display name.',
       };
     default:
       return { state: 'unknown', label: '—', detail: null };

@@ -1,0 +1,656 @@
+<script>
+  /*
+    Sidebar shell: loads state, swaps views, renders the rules list, and
+    hands off to the wizard (ui/Wizard.js). Vanilla on purpose — an
+    HtmlService iframe has no bundler, and pulling a framework over the
+    wire on every sidebar open would cost more than the round trip it is
+    meant to help.
+
+    Rule followed throughout: server values are written with textContent,
+    never innerHTML. innerHTML appears exactly twice, both times with a
+    literal icon string defined in this file — never with data.
+  */
+  var ReplaiUI = (function () {
+    'use strict';
+
+    var VIEWS = [
+      'view-loading',
+      'view-connect',
+      'view-offline',
+      'view-empty',
+      'view-list',
+      'view-wizard',
+    ];
+
+    var ICONS = {
+      pause:
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>',
+      play: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 14 9-14 9V3z"/></svg>',
+      edit: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+      trash:
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>',
+      preview:
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>',
+    };
+
+    var boot = null;
+
+    function el(id) {
+      return document.getElementById(id);
+    }
+
+    function setText(id, value) {
+      el(id).textContent = value || '';
+    }
+
+    function toggle(node, hidden) {
+      node.classList.toggle('hidden', !!hidden);
+    }
+
+    function show(viewId) {
+      VIEWS.forEach(function (id) {
+        toggle(el(id), id !== viewId);
+      });
+      // The account block belongs to the two "connected" screens only.
+      toggle(
+        el('account-block'),
+        viewId !== 'view-empty' && viewId !== 'view-list'
+      );
+      el('body').setAttribute('aria-busy', String(viewId === 'view-loading'));
+      // A sidebar keeps its scroll position across a view swap, which
+      // strands the user halfway down an unrelated screen.
+      window.scrollTo(0, 0);
+    }
+
+    function iconButton(iconName, label, action, ruleId, danger) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'icon-btn' + (danger ? ' icon-btn--danger' : '');
+      button.setAttribute('aria-label', label);
+      button.setAttribute('title', label);
+      button.dataset.action = action;
+      button.dataset.ruleId = ruleId;
+      button.innerHTML = ICONS[iconName]; // literal, never data
+      return button;
+    }
+
+    /**
+     * This rule's own running state, with a dot that can be read before
+     * the sentence is.
+     *
+     * Replaces an account-wide "Watching for sheet edits… Last fired …"
+     * line that used to sit above the list. That line could not name which
+     * rule had fired, so as soon as a spreadsheet had two rules it was
+     * ambiguous — and the useful question is always about one rule.
+     *
+     * Four states, because they need four different actions:
+     *   paused   — switched off on purpose, nothing is wrong
+     *   unarmed  — enabled but no trigger exists for this user, the one
+     *              state that looks fine and does nothing
+     *   waiting  — armed, but Google has never actually invoked us, which
+     *              is not the same claim as "installed"
+     *   live     — seen firing, with when and what it did
+     */
+    function ruleStatus(rule) {
+      var wrap = document.createElement('div');
+      wrap.className = 'rule__status';
+
+      var dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.setAttribute('aria-hidden', 'true');
+
+      var text = document.createElement('p');
+      text.className = 'rule__status-text';
+
+      if (!rule.enabled) {
+        dot.classList.add('dot--idle');
+        text.textContent = rule.lastRunAt
+          ? 'Paused. Last fired ' + rule.lastRunAt + '.'
+          : 'Paused — this rule is not watching the sheet.';
+      } else if (rule.armed === false) {
+        dot.classList.add('dot--warn');
+        text.textContent =
+          'Not armed — no trigger is installed for your account, so this rule cannot fire.';
+      } else if (rule.lastRunAt) {
+        dot.classList.add('dot--live');
+        text.textContent =
+          'Last fired ' +
+          rule.lastRunAt +
+          (rule.lastRunMessage ? ' · ' + rule.lastRunMessage : '');
+      } else {
+        dot.classList.add('dot--warn');
+        // Names what it is waiting FOR, so "nothing has happened yet" is
+        // distinguishable from "something is broken".
+        text.textContent =
+          'Armed, not fired yet — waiting for ' +
+          (rule.triggerLabel ? rule.triggerLabel.toLowerCase() : 'a match') +
+          '.';
+      }
+
+      wrap.appendChild(dot);
+      wrap.appendChild(text);
+      return wrap;
+    }
+
+    function ruleCard(rule) {
+      var card = document.createElement('article');
+      card.className = 'rule' + (rule.enabled ? '' : ' rule--paused');
+
+      var top = document.createElement('div');
+      top.className = 'rule__top';
+
+      var name = document.createElement('h3');
+      name.className = 'rule__name';
+      name.textContent = rule.name;
+      top.appendChild(name);
+
+      var pill = document.createElement('span');
+      if (!rule.enabled) {
+        pill.className = 'pill pill--paused';
+        pill.textContent = 'Paused';
+      } else if (rule.armed === false) {
+        // Enabled but with no trigger behind it is the one state that
+        // looks fine and does nothing, so it gets its own label rather
+        // than showing a reassuring "Active".
+        pill.className = 'pill pill--warning';
+        pill.textContent = 'Not armed';
+        pill.title =
+          'This rule is saved but no automatic trigger is installed for your account yet.';
+      } else {
+        pill.className = 'pill';
+        pill.textContent = 'Active';
+      }
+      top.appendChild(pill);
+
+      card.appendChild(top);
+
+      // 'Sheet1 • Order confirmations' — the two things that identify what
+      // a rule actually does, exactly as the reference product shows it.
+      var meta = document.createElement('p');
+      meta.className = 'rule__meta';
+      meta.textContent =
+        rule.sheetName + (rule.campaignName ? ' • ' + rule.campaignName : '');
+      card.appendChild(meta);
+
+      var trigger = document.createElement('p');
+      trigger.className = 'rule__meta';
+      trigger.textContent =
+        rule.triggerLabel +
+        (rule.conditionCount
+          ? ' · ' +
+            rule.conditionCount +
+            (rule.conditionCount === 1 ? ' condition' : ' conditions')
+          : ' · no conditions');
+      card.appendChild(trigger);
+
+      // Only reminders have one. Shown on the card because the schedule is
+      // now set per rule inside the wizard, so the list is the only place
+      // several rules' timings can be compared at a glance.
+      if (rule.scheduleLabel) {
+        var schedule = document.createElement('p');
+        schedule.className = 'rule__meta';
+        schedule.textContent = rule.scheduleLabel;
+        card.appendChild(schedule);
+      }
+
+      card.appendChild(ruleStatus(rule));
+
+      if (rule.ownerEmail) {
+        var owner = document.createElement('p');
+        owner.className = 'rule__owner';
+        // Ownership is never a surprise: a rule sends with the key of
+        // whoever created it, so the sidebar says whose (plan §14.5).
+        owner.textContent = 'Runs as ' + rule.ownerEmail;
+        card.appendChild(owner);
+      }
+
+      // A rule whose owner's key stopped working is flagged rather than
+      // failing silently — silence here means messages simply stop and
+      // nobody finds out until a customer asks (plan §14.5).
+      if (rule.needsAttention) {
+        var alert = document.createElement('div');
+        alert.className = 'rule__alert';
+
+        var alertText = document.createElement('span');
+        alertText.textContent =
+          rule.attentionReason || 'This rule could not run on its own account.';
+        alert.appendChild(alertText);
+
+        var takeOver = document.createElement('button');
+        takeOver.type = 'button';
+        takeOver.className = 'btn btn--quiet';
+        takeOver.textContent = 'Take over';
+        takeOver.dataset.action = 'take-over';
+        takeOver.dataset.ruleId = rule.id;
+        alert.appendChild(takeOver);
+
+        card.appendChild(alert);
+      }
+
+      var actions = document.createElement('div');
+      actions.className = 'rule__actions';
+      actions.appendChild(
+        rule.enabled
+          ? iconButton('pause', 'Pause rule', 'pause', rule.id, false)
+          : iconButton('play', 'Resume rule', 'resume', rule.id, false)
+      );
+      actions.appendChild(
+        iconButton(
+          'preview',
+          'Check which rows match, without sending',
+          'preview',
+          rule.id,
+          false
+        )
+      );
+      actions.appendChild(
+        iconButton('edit', 'Edit rule', 'edit', rule.id, false)
+      );
+      actions.appendChild(
+        iconButton('trash', 'Delete rule', 'delete', rule.id, true)
+      );
+      card.appendChild(actions);
+
+      var preview = document.createElement('div');
+      preview.className = 'rule__preview hidden';
+      preview.setAttribute('role', 'status');
+      card.appendChild(preview);
+
+      // Two-step inline confirm rather than window.confirm: a rule can
+      // represent a lot of setup, and a native dialog inside a sandboxed
+      // iframe is jarring and unstyleable.
+      var confirmBox = document.createElement('div');
+      confirmBox.className = 'rule__confirm hidden';
+      var confirmText = document.createElement('span');
+      confirmText.textContent = 'Delete this rule?';
+      confirmBox.appendChild(confirmText);
+
+      var yes = document.createElement('button');
+      yes.type = 'button';
+      yes.className = 'btn btn--primary';
+      yes.textContent = 'Delete';
+      yes.dataset.action = 'delete-confirm';
+      yes.dataset.ruleId = rule.id;
+      confirmBox.appendChild(yes);
+
+      var no = document.createElement('button');
+      no.type = 'button';
+      no.className = 'btn btn--quiet';
+      no.textContent = 'Keep';
+      no.dataset.action = 'delete-cancel';
+      confirmBox.appendChild(no);
+
+      card.appendChild(confirmBox);
+
+      return card;
+    }
+
+    /**
+     * Offer the repair only when it is the right repair.
+     *
+     * Hidden once triggers are both installed AND observed firing, because
+     * at that point reinstalling them can only make things worse.
+     */
+    function renderReinstall() {
+      toggle(el('btn-reinstall'), boot.triggersArmed && boot.triggersProven);
+    }
+
+    /** Deletes the triggers and builds fresh ones. See reinstallTriggers. */
+    function reinstall(button) {
+      var notice = el('engine-notice');
+      button.disabled = true;
+      button.textContent = 'Reinstalling…';
+
+      google.script.run
+        .withSuccessHandler(function (result) {
+          button.disabled = false;
+          button.textContent = 'Reinstall triggers';
+          notice.textContent = result.message;
+          toggle(notice, false);
+          if (result.ok) setTimeout(load, 1200);
+        })
+        .withFailureHandler(function (err) {
+          button.disabled = false;
+          button.textContent = 'Reinstall triggers';
+          notice.textContent = 'Could not reinstall: ' + message(err);
+          toggle(notice, false);
+        })
+        .reinstallTriggers();
+    }
+
+    function renderList() {
+      var host = el('rule-cards');
+      host.textContent = '';
+      boot.rules.forEach(function (rule) {
+        host.appendChild(ruleCard(rule));
+      });
+      setText('rule-count', String(boot.rules.length));
+      renderReinstall();
+
+      // Two different problems, so two different messages: the engine
+      // being switched off in this build, versus this build being fine but
+      // no trigger installed for the person looking at it.
+      var notice = el('engine-notice');
+      if (!boot.engineReady) {
+        notice.textContent =
+          'Rules are saved but do not run yet — the trigger engine arrives in the next update.';
+        toggle(notice, false);
+      } else if (boot.triggerWarning) {
+        notice.textContent = boot.triggerWarning;
+        toggle(notice, false);
+      } else {
+        toggle(notice, true);
+      }
+
+      show('view-list');
+    }
+
+    function renderConnect(isReconnect) {
+      setText(
+        'connect-title',
+        isReconnect
+          ? 'Reconnect your Replai account'
+          : 'Connect your Replai account'
+      );
+
+      var error = el('connect-error');
+      if (isReconnect && boot.message) {
+        error.textContent = boot.message;
+        toggle(error, false);
+      } else {
+        toggle(error, true);
+      }
+
+      el('btn-connect').textContent = isReconnect
+        ? 'Update API key'
+        : 'Enter API key';
+
+      show('view-connect');
+    }
+
+    function render() {
+      toggle(el('btn-reload'), false);
+      setText('footer-key', boot.keyMasked ? 'Key ' + boot.keyMasked : '');
+      setText('footer-version', boot.version ? 'Add-on v' + boot.version : '');
+      setText('account-name', boot.accountName || 'Connected');
+      setText('account-email', boot.email || 'this account');
+
+      if (boot.apiKeysUrl) {
+        el('link-api-keys').setAttribute('href', boot.apiKeysUrl);
+      }
+
+      switch (boot.state) {
+        case 'needs_key':
+          renderConnect(false);
+          break;
+        case 'key_invalid':
+          renderConnect(true);
+          break;
+        case 'offline':
+          setText('offline-message', boot.message);
+          show('view-offline');
+          break;
+        case 'empty':
+          show('view-empty');
+          break;
+        case 'list':
+          renderList();
+          break;
+        default:
+          setText(
+            'offline-message',
+            'The add-on returned an unexpected state. Reload the sidebar.'
+          );
+          show('view-offline');
+      }
+    }
+
+    function load() {
+      show('view-loading');
+      google.script.run
+        .withSuccessHandler(function (result) {
+          boot = result;
+          render();
+        })
+        .withFailureHandler(function (err) {
+          // Reached only if the server function itself threw, which the
+          // server side is written to avoid. Still handled, because a
+          // silent blank sidebar is the worst possible outcome.
+          setText(
+            'offline-message',
+            'Could not load the add-on: ' + message(err)
+          );
+          show('view-offline');
+        })
+        .getBootstrap();
+    }
+
+    function message(err) {
+      return err && err.message ? err.message : String(err);
+    }
+
+    function closeConfirms() {
+      var boxes = document.querySelectorAll('.rule__confirm');
+      for (var i = 0; i < boxes.length; i++) {
+        boxes[i].classList.add('hidden');
+      }
+    }
+
+    // Delegated so cards can be re-rendered without rebinding handlers.
+    el('rule-cards').addEventListener('click', function (event) {
+      var button = event.target.closest('button[data-action]');
+      if (!button) return;
+
+      var action = button.dataset.action;
+      var ruleId = button.dataset.ruleId;
+
+      if (action === 'delete') {
+        closeConfirms();
+        button
+          .closest('.rule')
+          .querySelector('.rule__confirm')
+          .classList.remove('hidden');
+        return;
+      }
+
+      if (action === 'delete-cancel') {
+        closeConfirms();
+        return;
+      }
+
+      if (action === 'delete-confirm') {
+        google.script.run
+          .withSuccessHandler(load)
+          .withFailureHandler(load)
+          .deleteRule(ruleId);
+        return;
+      }
+
+      if (action === 'pause' || action === 'resume') {
+        google.script.run
+          .withSuccessHandler(load)
+          .withFailureHandler(load)
+          .setRuleEnabled(ruleId, action === 'resume');
+        return;
+      }
+
+      if (action === 'take-over') {
+        button.disabled = true;
+        button.textContent = 'Moving…';
+        google.script.run
+          .withSuccessHandler(load)
+          .withFailureHandler(load)
+          .takeOverRule(ruleId);
+        return;
+      }
+
+      if (action === 'preview') {
+        runPreview(button, ruleId);
+        return;
+      }
+
+      if (action === 'edit') {
+        ReplaiWizard.open(ruleId);
+      }
+    });
+
+    /**
+     * Dry run: report which rows currently match without sending
+     * anything. The only other way to check a rule's conditions is to let
+     * it send real messages and read the results off people's phones.
+     */
+    function runPreview(button, ruleId) {
+      var card = button.closest('.rule');
+      var panel = card.querySelector('.rule__preview');
+
+      panel.textContent = 'Checking the sheet…';
+      toggle(panel, false);
+      button.disabled = true;
+
+      google.script.run
+        .withSuccessHandler(function (result) {
+          button.disabled = false;
+          panel.textContent = '';
+
+          if (!result.ok) {
+            panel.textContent = result.message;
+            return;
+          }
+
+          var line = document.createElement('div');
+          line.textContent =
+            result.sendable +
+            ' of ' +
+            result.scanned +
+            ' row(s) would send now' +
+            (result.skipped
+              ? ', ' + result.skipped + ' would be skipped'
+              : '') +
+            '.';
+          panel.appendChild(line);
+
+          // The per-row reasons are the useful part: "Whatsapp is empty
+          // in this row" is actionable, "3 skipped" is not.
+          (result.reasons || []).forEach(function (reason) {
+            var item = document.createElement('div');
+            item.className = 'tiny muted';
+            item.textContent = reason;
+            panel.appendChild(item);
+          });
+        })
+        .withFailureHandler(function (err) {
+          button.disabled = false;
+          panel.textContent = 'Could not check: ' + message(err);
+        })
+        .previewRule(ruleId);
+    }
+
+    el('btn-connect').addEventListener('click', function () {
+      google.script.run.showApiKeyDialog();
+    });
+
+    el('btn-retry').addEventListener('click', load);
+    el('btn-reload').addEventListener('click', load);
+
+    el('btn-reinstall').addEventListener('click', function () {
+      reinstall(this);
+    });
+
+    /**
+     * Disconnect, in two steps.
+     *
+     * The control is an icon, so the word "Disconnect" no longer warns
+     * anybody — and this throws away the stored API key. Replai shows a key
+     * exactly once, so someone who hits this by accident cannot simply
+     * paste it back; they have to mint a new one. Cheap to confirm,
+     * expensive to undo.
+     *
+     * Inline rather than window.confirm, matching the rule-delete confirm:
+     * a native dialog inside a sandboxed iframe is jarring and unstyleable.
+     */
+    var disconnectTimer = null;
+
+    function disarmDisconnect(button) {
+      clearTimeout(disconnectTimer);
+      disconnectTimer = null;
+      button.classList.remove('icon-btn--armed');
+      button.setAttribute('title', 'Disconnect this workspace');
+      toggle(el('disconnect-confirm'), true);
+    }
+
+    el('btn-disconnect').addEventListener('click', function () {
+      var button = this;
+      var hint = el('disconnect-confirm');
+
+      if (!disconnectTimer) {
+        button.classList.add('icon-btn--armed');
+        button.setAttribute('title', 'Click again to disconnect');
+        hint.textContent =
+          'Click again to disconnect. Reconnecting needs a new API key — Replai shows each key only once.';
+        toggle(hint, false);
+        // Disarms itself, so the button cannot sit primed indefinitely
+        // waiting for an unrelated click much later.
+        disconnectTimer = setTimeout(function () {
+          disarmDisconnect(button);
+        }, 6000);
+        return;
+      }
+
+      disarmDisconnect(button);
+      // disconnectAccount() reopens the sidebar server-side, so there is
+      // nothing to re-render here.
+      google.script.run.disconnectAccount();
+    });
+
+    el('btn-new-rule').addEventListener('click', function () {
+      ReplaiWizard.open(null);
+    });
+
+    el('btn-new-rule-2').addEventListener('click', function () {
+      ReplaiWizard.open(null);
+    });
+
+    el('btn-template').addEventListener('click', function () {
+      var button = this;
+      var notice = el('soon-notice');
+
+      button.disabled = true;
+      button.textContent = 'Creating…';
+      notice.textContent = '';
+      toggle(notice, true);
+
+      google.script.run
+        .withSuccessHandler(function (result) {
+          button.disabled = false;
+          button.textContent = 'Create template';
+          notice.textContent = result.message;
+          notice.classList.toggle('notice--success', result.ok);
+          notice.classList.toggle('notice--error', !result.ok);
+          toggle(notice, false);
+          // The wizard caches the workbook's tab list, so a new sheet
+          // would be missing from the Target sheet picker until reload.
+          if (result.ok) setTimeout(load, 1500);
+        })
+        .withFailureHandler(function (err) {
+          button.disabled = false;
+          button.textContent = 'Create template';
+          notice.textContent = 'Could not create the sheet: ' + message(err);
+          notice.classList.add('notice--error');
+          toggle(notice, false);
+        })
+        .createStarterSheet();
+    });
+
+    return {
+      el: el,
+      setText: setText,
+      toggle: toggle,
+      show: show,
+      load: load,
+      message: message,
+      state: function () {
+        return boot;
+      },
+    };
+  })();
+</script>

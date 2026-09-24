@@ -9,7 +9,7 @@
 // - CMS content types (site_settings, landing_sections, etc.)
 // ============================================================
 
-import type { MemberPermissions, WhatsAppConfig } from '@/types';
+import type { MemberPermissions } from '@/types';
 
 // ============================================================
 // Analytics
@@ -45,6 +45,8 @@ export interface AccountSummary {
   owner_user_id: string;
   owner_name: string;
   owner_email: string;
+  /** Captured at signup. Null for accounts created before the field existed. */
+  owner_phone: string | null;
   owner_avatar_url: string | null;
   member_count: number;
   contact_count: number;
@@ -65,6 +67,12 @@ export interface AccountMemberDetail {
   user_id: string;
   full_name: string;
   email: string;
+  /**
+   * E.164 contact number captured at signup. Super-admin surfaces only —
+   * no tenant-facing screen renders it. Null for members who predate the
+   * field or who an admin created directly (they never saw the form).
+   */
+  phone: string | null;
   avatar_url: string | null;
   account_role: 'owner' | 'member';
   permissions: MemberPermissions | null;
@@ -93,11 +101,154 @@ export interface AccountDeepDive {
     messages_30d: number;
     active_automations: number;
     total_automations: number;
+    /** Broadcasts that reached `status = 'sent'`. Delivery only. */
     broadcasts_sent: number;
+    /**
+     * Every broadcast the tenant created, whatever the outcome.
+     *
+     * This is what the header shows, not `broadcasts_sent` — the tenant's own
+     * Broadcasts page lists every run, so a header tile counting only sent
+     * ones disagrees with it (verified: an account with 4 broadcasts, 1
+     * failed, would have read 3).
+     */
+    broadcasts_total: number;
+    templates_total: number;
+    /** Templates Meta has approved, i.e. the ones actually usable. */
+    templates_approved: number;
     deals_open_value: number;
     deals_open_count: number;
   };
-  whatsapp_config: WhatsAppConfig | null;
+  whatsapp_config: SuperAdminWhatsAppConfig | null;
+}
+
+/**
+ * The WhatsApp connection as `fn_account_deep_dive` actually returns it.
+ *
+ * Deliberately NOT the app-wide `WhatsAppConfig`. That type declares
+ * `access_token: string`, which the RPC omits on purpose (migration 078 exists
+ * because `row_to_json(wc.*)` was shipping the encrypted token and the webhook
+ * verify token to the browser), and it lacks half the operational columns the
+ * RPC does return. Reusing it meant the fields present were untyped and the one
+ * field typed as required was absent.
+ *
+ * Everything here is safe to send to a super-admin browser: identifiers,
+ * timestamps and Meta's own state. No secrets.
+ */
+export interface SuperAdminWhatsAppConfig {
+  id: string;
+  account_id: string;
+  user_id: string | null;
+  /** Meta asset id. NEVER render this as a phone number. */
+  phone_number_id: string;
+  /** The real number, in Meta's formatting. Null until first sync. */
+  display_phone_number: string | null;
+  /** Business name Meta shows customers. */
+  verified_name: string | null;
+  waba_id: string | null;
+  /** Our own flag: 'connected' | 'disconnected'. Not Meta's phone status. */
+  status: string | null;
+  connected_at: string | null;
+  /** How they connected: 'embedded_signup' | 'manual'. */
+  connection_source: string | null;
+  /** Which API surface: 'cloud_api' | 'coexistence'. */
+  connection_mode: string | null;
+  /** First proof a Coexistence pairing is live (an `smb_message_echoes`). */
+  coexistence_detected_at: string | null;
+  /** Last successful `POST /{phone_number_id}/register`. */
+  registered_at: string | null;
+  /** Last successful `POST /{waba_id}/subscribed_apps`. Null = no webhooks. */
+  subscribed_apps_at: string | null;
+  last_registration_error: string | null;
+  /** Meta's raw disconnect event, e.g. PARTNER_REMOVED. */
+  disconnect_event: string | null;
+  /** Meta's raw reason, e.g. PRIMARY_INACTIVITY. */
+  disconnect_reason: string | null;
+  disconnected_at: string | null;
+  /** Null means no known expiry (a permanent system-user token). */
+  token_expires_at: string | null;
+  /** When template analytics were confirmed on. Null = never. */
+  insights_enabled_at: string | null;
+  /** Whether a two-step PIN is stored. The PIN itself is never sent. */
+  has_two_step_pin: boolean;
+}
+
+/**
+ * Live Meta state for one account, from
+ * `GET /api/super-admin/accounts/{id}/whatsapp-health`.
+ *
+ * Separate from the deep-dive payload because it costs several Meta round
+ * trips and needs the account's decrypted token, so the page renders without
+ * it and fills this in afterwards.
+ */
+export interface SuperAdminWhatsAppHealth {
+  /** Null when the account has no connection, or Meta could not be reached. */
+  phone: {
+    display_phone_number: string | null;
+    verified_name: string | null;
+    /** GREEN | YELLOW | RED | UNKNOWN */
+    quality_rating: string | null;
+    /** Meta's phone status, e.g. CONNECTED | PENDING | FLAGGED. */
+    status: string | null;
+    name_status: string | null;
+    code_verification_status: string | null;
+    platform_type: string | null;
+    /** True when the number is also live on the WhatsApp Business app. */
+    is_on_biz_app: boolean | null;
+  } | null;
+  waba: {
+    name: string | null;
+    account_review_status: string | null;
+    business_verification_status: string | null;
+    /** Meta's own insights flag, which can disagree with our stored one. */
+    is_enabled_for_insights: boolean | null;
+    currency: string | null;
+    timezone_id: string | null;
+  } | null;
+  /** Meta's messaging verdict plus every reason it is not fully available. */
+  sending: {
+    readiness: 'available' | 'limited' | 'blocked' | 'unknown';
+    /**
+     * Meta's payment verdict — NOT "a card exists".
+     *
+     * There is no public Graph field for whether a payment method is
+     * attached, so this reports whether Meta is currently raising a
+     * payment-related blocker. `no_issue` means Meta is not complaining,
+     * which is the strongest honest claim available.
+     */
+    payment: 'action_required' | 'no_issue' | 'unknown';
+    verification:
+      'verified' | 'pending' | 'rejected' | 'not_started' | 'unknown';
+    /** Every blocker/limitation Meta reported, grouped by subject. */
+    issues: {
+      subject: string;
+      description: string;
+      solution: string | null;
+      severity: 'blocked' | 'limited';
+      code: number | null;
+    }[];
+  };
+  /**
+   * Whether OUR app is subscribed to this WABA's webhooks, per Meta.
+   *
+   * Asked of Meta rather than read from `whatsapp_config.subscribed_apps_at`,
+   * which only records calls we made and is null on every account that
+   * connected before that column was written. Null means we could not ask —
+   * deliberately distinct from `false`, which would otherwise raise a false
+   * "inbound messages are being lost" alarm on a healthy account.
+   */
+  webhook_subscribed: boolean | null;
+  limits: {
+    /** Messaging tier label, e.g. "1,000 / 24h". */
+    messaging: string | null;
+    /** Throughput level, e.g. STANDARD. */
+    throughput: string | null;
+    /** Display-name review verdict, human-readable. */
+    nameReview: { label: string; detail: string | null } | null;
+  };
+  /** Set when Meta could not be reached at all; everything above is null. */
+  error: string | null;
+  /** When this snapshot was taken. */
+  checked_at: string;
 }
 
 export interface SignupDataPoint {
@@ -205,6 +356,12 @@ export interface SiteSettings {
   favicon_url: string | null;
   full_logo_url?: string | null;
   meta_partner_badge_url?: string | null;
+  /**
+   * Landing hero background video (public S3 URL). Null/absent means the
+   * hero renders on its static background, which is also the fallback while
+   * the video loads. Desktop only - see HeroBackgroundVideo.
+   */
+  hero_video_url?: string | null;
   meta_title: string | null;
   meta_description: string | null;
   og_image_url: string | null;
@@ -491,6 +648,12 @@ export interface SubscriberRow {
   createdAt: string;
   ownerName: string | null;
   ownerEmail: string | null;
+  /**
+   * Shown in place of `ownerName` in the Subscribers table, where the
+   * workspace name and owner name are almost always identical. `ownerName`
+   * is still carried so search keeps matching on it.
+   */
+  ownerPhone: string | null;
 
   storedStatus: string;
   liveStatus: 'trialing' | 'active' | 'expired' | 'none';
@@ -534,4 +697,217 @@ export interface ContactSubmission {
   status: 'new' | 'read' | 'replied' | 'archived';
   created_at: string;
   updated_at: string;
+}
+
+export interface IntegrationFeature {
+  title: string;
+  description: string;
+  icon?: string;
+}
+
+export interface IntegrationStep {
+  step_number: number;
+  title: string;
+  description: string;
+}
+
+export interface IntegrationFAQ {
+  question: string;
+  answer: string;
+}
+
+export interface IntegrationPage {
+  id: string;
+  slug: string;
+  title: string;
+  subtitle: string;
+  badge_text: string;
+  primary_cta_text: string;
+  primary_cta_url: string;
+  secondary_cta_text: string;
+  secondary_cta_url: string;
+  prerequisites: string[];
+  features: IntegrationFeature[];
+  how_it_works: IntegrationStep[];
+  faqs: IntegrationFAQ[];
+  privacy_markdown: string;
+  terms_markdown: string;
+  seo_meta_title: string;
+  seo_meta_description: string;
+  is_published: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// ============================================================
+// Google Sheets add-on — Help & Support
+//
+// Three tables behind the add-on's Help & Support dialog:
+//   sheets_addon_help_settings  singleton, all dialog copy
+//   sheets_addon_help_links     rows, the Get Support / Resources buttons
+//   sheets_addon_issue_reports  rows, reports submitted from the dialog
+//
+// The add-on ships NO fallback strings, so these rows are the only
+// source of the text it renders. That is why every text field is a
+// plain `string` and never `string | null`: the columns are NOT NULL
+// DEFAULT '', and an empty string is meaningful (hide this section)
+// rather than missing.
+// ============================================================
+
+/** Sections a help link can belong to. Mirrors the DB CHECK constraint. */
+export type SheetsAddonHelpSection = 'support' | 'resources';
+
+/**
+ * Icon names the add-on dialog has inline SVG for. Deliberately a closed
+ * set and not free text: the Apps Script dialog has no icon library, so
+ * an unrecognised name would draw nothing at all.
+ */
+export type SheetsAddonHelpIcon =
+  'whatsapp' | 'mail' | 'calendar' | 'book' | 'globe' | 'link';
+
+/**
+ * Lifecycle of a submitted report. Mirrors the DB CHECK constraint.
+ *
+ * Intentionally identical to `ContactSubmission['status']`. Two inboxes
+ * in the same panel with different vocabularies and different transition
+ * behaviour is its own source of operator error, so the add-on inbox
+ * adopted the contact inbox's set rather than keeping its own
+ * bug-tracker-shaped one (new / in_progress / resolved / closed).
+ */
+export type SheetsAddonReportStatus = 'new' | 'read' | 'replied' | 'archived';
+
+/** Singleton row: every heading and block of copy the dialog renders. */
+export interface SheetsAddonHelpSettings {
+  id: string;
+
+  dialog_title: string;
+  dialog_subtitle: string;
+
+  support_heading: string;
+  resources_heading: string;
+
+  /** Section holding the two actions that used to sit loose in the menu. */
+  maintenance_heading: string;
+  maintenance_description: string;
+  reinstall_label: string;
+  reinstall_description: string;
+  disconnect_label: string;
+  disconnect_description: string;
+
+  reset_heading: string;
+  reset_description: string;
+  reset_button_label: string;
+  /**
+   * Second-step label for the arm/confirm reset. The add-on appends the
+   * live rule count, so this reads as a verb phrase.
+   */
+  reset_confirm_label: string;
+
+  report_heading: string;
+  report_intro: string;
+  report_placeholder: string;
+  report_button_label: string;
+  report_success_message: string;
+
+  footer_text: string;
+  footer_url: string;
+
+  /**
+   * Whole-section kill switches, separate from blanking the copy so a
+   * section can be withdrawn and restored without retyping it.
+   */
+  is_report_enabled: boolean;
+  is_reset_enabled: boolean;
+
+  created_at: string;
+  updated_at: string;
+}
+
+/** One button under Get Support or Resources. */
+export interface SheetsAddonHelpLink {
+  id: string;
+  section: SheetsAddonHelpSection;
+  label: string;
+  description: string;
+  /**
+   * https://, mailto: or https://wa.me/ target. A blank value means
+   * unconfigured — the public endpoint omits such rows, so an enabled
+   * link with no URL can never reach the dialog as a dead button.
+   */
+  url: string;
+  icon: SheetsAddonHelpIcon;
+  sort_order: number;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Payload shape returned by `GET /api/public/sheets-addon/help`.
+ *
+ * This is what the add-on consumes. Links arrive pre-split and
+ * pre-filtered (enabled, non-blank URL, ordered) so the dialog does no
+ * decision-making of its own.
+ */
+export interface SheetsAddonHelpContent {
+  settings: SheetsAddonHelpSettings;
+  support: SheetsAddonHelpLink[];
+  resources: SheetsAddonHelpLink[];
+}
+
+/** One report submitted from the add-on dialog. */
+export interface SheetsAddonIssueReport {
+  id: string;
+  message: string;
+  /** Google account the add-on ran as — the only reliable way to reply. */
+  reporter_email: string | null;
+  /**
+   * NULL when the submission carried no valid API key. Expected rather
+   * than exceptional: a user who cannot connect their key is precisely
+   * the person who needs to reach support.
+   */
+  account_id: string | null;
+  /** Denormalised so the row stays readable after the account is deleted. */
+  account_name: string | null;
+  spreadsheet_id: string | null;
+  spreadsheet_name: string | null;
+  addon_version: string | null;
+  status: SheetsAddonReportStatus;
+  /** Operator-only. Never returned by a public endpoint. */
+  admin_note: string | null;
+  /** Abuse triage for an unauthenticated write, not analytics. */
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+/** Tile counts above the Issue Reports inbox. */
+export interface SheetsAddonReportCounts {
+  new: number;
+  read: number;
+  replied: number;
+  archived: number;
+  total: number;
+}
+
+/**
+ * One operator reply emailed back to a reporter.
+ *
+ * Mirrors the contact-submissions reply shape so the thread UI is the
+ * same, with one addition: `sent_by_email` records which operator
+ * actually sent it. `contact_replies` hardcodes 'Super Admin' and loses
+ * that, which stops being acceptable as soon as there is more than one
+ * person answering.
+ */
+export interface SheetsAddonIssueReply {
+  id: string;
+  subject: string;
+  body: string;
+  /** Display name shown in the thread. */
+  sent_by: string;
+  /** Audit only — never rendered. */
+  sent_by_email: string | null;
+  created_at: string;
 }

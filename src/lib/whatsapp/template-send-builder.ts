@@ -313,7 +313,8 @@ function buildHeaderComponent(
     const value = params.headerText;
     if (!value || !value.trim()) {
       throw new Error(
-        'Header text variable {{1}} requires a value — pass headerText.'
+        "This template's header contains a {{1}} variable and needs a value " +
+          'on every send. Via the API, pass it as template.params.headerText.'
       );
     }
     return {
@@ -364,8 +365,22 @@ function buildHeaderComponent(
   const link = params.headerMediaUrl ?? template.header_media_url;
   const id = params.headerMediaId;
   if (!link && !id) {
+    // NAME THE REQUEST PATH, NOT THE INTERNAL FIELD.
+    //
+    // This message used to read "pass headerMediaUrl/headerMediaId". Both
+    // names are correct for `SendTimeParams` — the type right here — but
+    // an API caller never sees that layer: over the wire the value belongs
+    // at `template.params.headerMediaUrl`, and nothing else in the request
+    // body is read. A support ticket in Sep 2026 came from exactly that
+    // gap: the caller put `headerMediaUrl` at the top level of the body,
+    // where it was silently ignored, and this error told them they had
+    // not sent it at all.
     throw new Error(
-      `${headerType} header requires a media link or id at send time — set header_media_url on the template or pass headerMediaUrl/headerMediaId.`
+      `This template's ${headerType} header needs a file on every send. ` +
+        `Via the API, pass template.params.headerMediaUrl (a public https:// link) ` +
+        `or template.params.headerMediaId (an id from a prior Meta media upload). ` +
+        `Alternatively set a default file on the template itself, which every ` +
+        `send then reuses.`
     );
   }
   const mediaPayload: { link?: string; id?: string } = id ? { id } : { link };
@@ -490,7 +505,9 @@ function buildButtonComponent(
       // the button's index in the template's buttons array.
       if (!override || !override.trim()) {
         throw new Error(
-          `URL button #${index + 1} uses {{1}} — requires a buttonParams[${index}] value.`
+          `URL button #${index + 1} has a {{1}} in its link and needs a value ` +
+            `on every send. Via the API, pass it as ` +
+            `template.params.buttonParams["${index}"].`
         );
       }
       return {
@@ -601,8 +618,12 @@ export function buildCarouselSendComponents(
     const link = given.headerMediaUrl ?? mediaHeader.example?.header_url?.[0];
     const id = given.headerMediaId;
     if (!link && !id) {
+      // Leading clause kept verbatim: template-carousel-send.test.ts
+      // asserts on it, and the card number is the part that matters most.
       throw new Error(
-        `Card ${cardIndex + 1} needs a media link or id at send time.`
+        `Card ${cardIndex + 1} needs a media link or id at send time. ` +
+          `Via the API, pass template.params.cards[${cardIndex}].headerMediaUrl ` +
+          `(a public https:// link) or .headerMediaId.`
       );
     }
     const media: { link?: string; id?: string } = id ? { id } : { link };
@@ -702,7 +723,9 @@ export function buildLtoSendComponents(
   const expiresAt = params.offerExpiresAtMs;
   if (!expiresAt || !Number.isFinite(expiresAt)) {
     throw new Error(
-      'A limited-time offer needs an expiry time (offerExpiresAtMs, a UNIX timestamp in milliseconds).'
+      'A limited-time offer needs an expiry time on every send. Via the API, ' +
+        'pass template.params.offerExpiresAtMs as a UNIX timestamp in ' +
+        'MILLISECONDS (not seconds).'
     );
   }
   if (expiresAt <= Date.now()) {

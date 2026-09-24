@@ -105,6 +105,11 @@ export async function resolveConversationByPhone(
         user_id: ownerUserId,
         phone: sanitized,
         name: name || sanitized,
+        // Reached only from POST /api/v1/messages, where a caller sent to a
+        // bare phone number instead of a conversation id. If this helper ever
+        // gains a caller that is not the public API, this needs to become a
+        // parameter rather than staying a constant.
+        source: 'api',
       })
       .select('id')
       .single();
@@ -157,8 +162,14 @@ export async function resolveConversationByPhone(
  * `(accountId, contactId)`. Handles the unique-index race the same way
  * the inbound webhook does: on a 23505 from a concurrent create,
  * re-resolve the winning row rather than failing the send.
+ *
+ * Exported so the broadcast fan-out can reach the same thread a customer
+ * reply will land in. It already holds a contact id, so it needs this
+ * half of `resolveConversationByPhone` without the contact create.
+ * A separate copy would be a fourth implementation of the same
+ * find-or-create race.
  */
-async function findOrCreateConversationRow(
+export async function findOrCreateConversationRow(
   db: SupabaseClient,
   accountId: string,
   contactId: string,
@@ -174,7 +185,11 @@ async function findOrCreateConversationRow(
 
   if (findErr) {
     console.error('[resolve-conversation] conversation lookup error:', findErr);
-    throw new SendMessageError('db_error', 'Failed to resolve conversation', 500);
+    throw new SendMessageError(
+      'db_error',
+      'Failed to resolve conversation',
+      500
+    );
   }
 
   if (existing && existing.length > 0) {
@@ -205,7 +220,11 @@ async function findOrCreateConversationRow(
       }
     }
     console.error('[resolve-conversation] conversation create error:', convErr);
-    throw new SendMessageError('db_error', 'Failed to create conversation', 500);
+    throw new SendMessageError(
+      'db_error',
+      'Failed to create conversation',
+      500
+    );
   }
 
   return newConv.id;

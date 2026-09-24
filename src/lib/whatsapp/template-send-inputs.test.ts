@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  MAX_SCHEDULE_AHEAD_MS,
+  MIN_SCHEDULE_LEAD_MS,
   buildSendPlan,
   defaultOfferExpiryLocal,
+  isMediaHeaderType,
   localInputToMs,
   missingSendValues,
   msToLocalInput,
+  sendValuesFromExtras,
+  validateScheduleAt,
+  type BroadcastSendExtras,
 } from './template-send-inputs';
 import type { TemplateRowLike } from './template-definition';
 
@@ -37,14 +43,21 @@ function mediaHeader(url?: string) {
   };
 }
 
-function card(over: { body?: string; url?: string; media?: string | null } = {}) {
+function card(
+  over: { body?: string; url?: string; media?: string | null } = {}
+) {
   const media = over.media === null ? undefined : (over.media ?? IMG);
   return {
     components: [
       mediaHeader(media),
       ...(over.body ? [{ type: 'BODY', text: over.body }] : []),
       ...(over.url
-        ? [{ type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Shop', url: over.url }] }]
+        ? [
+            {
+              type: 'BUTTONS',
+              buttons: [{ type: 'URL', text: 'Shop', url: over.url }],
+            },
+          ]
         : []),
     ],
   };
@@ -53,7 +66,7 @@ function card(over: { body?: string; url?: string; media?: string | null } = {})
 describe('buildSendPlan', () => {
   it('reports nothing to fill in for a fully static template', () => {
     const plan = buildSendPlan(
-      row({ components: [{ type: 'BODY', text: 'No variables here' }] }),
+      row({ components: [{ type: 'BODY', text: 'No variables here' }] })
     );
     expect(plan.needsNoInput).toBe(true);
     expect(plan.bodyVarCount).toBe(0);
@@ -68,7 +81,7 @@ describe('buildSendPlan', () => {
           { type: 'HEADER', format: 'TEXT', text: 'Re: {{1}}' },
           { type: 'BODY', text: 'Hi {{1}}, your {{2}} is ready' },
         ],
-      }),
+      })
     );
     expect(plan.bodyVarCount).toBe(2);
     expect(plan.headerVarCount).toBe(1);
@@ -79,7 +92,7 @@ describe('buildSendPlan', () => {
     // It rides along on every send using the approved sample, exactly as
     // the send builder does.
     const plan = buildSendPlan(
-      row({ components: [mediaHeader(IMG), { type: 'BODY', text: 'Static' }] }),
+      row({ components: [mediaHeader(IMG), { type: 'BODY', text: 'Static' }] })
     );
     expect(plan.headerMedia).toEqual({ format: 'IMAGE', defaultUrl: IMG });
     expect(plan.needsNoInput).toBe(true);
@@ -87,9 +100,14 @@ describe('buildSendPlan', () => {
 
   it('requires a media link when the template stored none', () => {
     const plan = buildSendPlan(
-      row({ components: [mediaHeader(undefined), { type: 'BODY', text: 'Static' }] }),
+      row({
+        components: [mediaHeader(undefined), { type: 'BODY', text: 'Static' }],
+      })
     );
-    expect(plan.headerMedia).toEqual({ format: 'IMAGE', defaultUrl: undefined });
+    expect(plan.headerMedia).toEqual({
+      format: 'IMAGE',
+      defaultUrl: undefined,
+    });
     expect(plan.needsNoInput).toBe(false);
     expect(missingSendValues(plan, {})).toContain('A image for the header');
   });
@@ -100,10 +118,14 @@ describe('buildSendPlan', () => {
     const plan = buildSendPlan(
       row({
         components: [
-          { type: 'HEADER', format: 'IMAGE', example: { header_handle: ['4::abc'] } },
+          {
+            type: 'HEADER',
+            format: 'IMAGE',
+            example: { header_handle: ['4::abc'] },
+          },
           { type: 'BODY', text: 'Static' },
         ],
-      }),
+      })
     );
     expect(plan.headerMedia?.defaultUrl).toBeUndefined();
   });
@@ -123,7 +145,7 @@ describe('buildSendPlan', () => {
             ],
           },
         ],
-      }),
+      })
     );
     expect(plan.urlButtons).toEqual([
       { index: 1, text: 'Track', url: 'https://x.test/{{1}}' },
@@ -138,7 +160,7 @@ describe('buildSendPlan', () => {
         category: 'Authentication',
         template_type: 'authentication',
         body_text: '{{1}} is your verification code.',
-      }),
+      })
     );
     expect(plan.isAuthentication).toBe(true);
     expect(plan.bodyVarCount).toBe(0);
@@ -176,9 +198,12 @@ describe('buildSendPlan', () => {
     it('always needs input, because the expiry has no default', () => {
       const plan = buildSendPlan(offerRow({ code: 'SAVE10' }));
       expect(plan.needsNoInput).toBe(false);
-      expect(plan.offer).toMatchObject({ text: '10% off', hasExpiration: true });
+      expect(plan.offer).toMatchObject({
+        text: '10% off',
+        hasExpiration: true,
+      });
       expect(missingSendValues(plan, {})).toContain(
-        'The offer expiry date and time',
+        'The offer expiry date and time'
       );
     });
 
@@ -187,7 +212,7 @@ describe('buildSendPlan', () => {
       const plan = buildSendPlan(offerRow({ hasExpiration: false, code: 'X' }));
       expect(plan.offer?.hasExpiration).toBe(false);
       expect(missingSendValues(plan, {})).toContain(
-        'The offer expiry date and time',
+        'The offer expiry date and time'
       );
     });
 
@@ -203,14 +228,14 @@ describe('buildSendPlan', () => {
       const plan = buildSendPlan(offerRow({ code: 'SAVE10' }));
       expect(plan.offer?.code).toMatchObject({ defaultCode: 'SAVE10' });
       expect(
-        missingSendValues(plan, { offerExpiresAtMs: Date.now() + 60_000 }),
+        missingSendValues(plan, { offerExpiresAtMs: Date.now() + 60_000 })
       ).toEqual([]);
     });
 
     it('requires a code when the template carries no default', () => {
       const plan = buildSendPlan(offerRow());
       expect(
-        missingSendValues(plan, { offerExpiresAtMs: Date.now() + 60_000 }),
+        missingSendValues(plan, { offerExpiresAtMs: Date.now() + 60_000 })
       ).toEqual(['The offer code']);
     });
 
@@ -232,7 +257,9 @@ describe('buildSendPlan', () => {
       });
 
     it('needs no input when every card is static with stored media', () => {
-      const plan = buildSendPlan(carouselRow([card({ body: 'A' }), card({ body: 'B' })]));
+      const plan = buildSendPlan(
+        carouselRow([card({ body: 'A' }), card({ body: 'B' })])
+      );
       expect(plan.needsNoInput).toBe(true);
       expect(plan.cards).toHaveLength(2);
       expect(missingSendValues(plan, {})).toEqual([]);
@@ -243,7 +270,7 @@ describe('buildSendPlan', () => {
         carouselRow([
           card({ body: 'Aloe {{1}}' }),
           card({ url: 'https://x.test/{{1}}' }),
-        ]),
+        ])
       );
       expect(plan.cards[0]).toMatchObject({
         cardIndex: 0,
@@ -265,7 +292,7 @@ describe('buildSendPlan', () => {
           card({ body: 'Aloe {{1}}' }),
           card({ media: null }),
           card({ url: 'https://x.test/{{1}}' }),
-        ]),
+        ])
       );
       const missing = missingSendValues(plan, {});
       expect(missing).toContain('Card 1: variable {{1}}');
@@ -275,12 +302,15 @@ describe('buildSendPlan', () => {
 
     it('clears once each card is filled in', () => {
       const plan = buildSendPlan(
-        carouselRow([card({ body: 'Aloe {{1}}' }), card({ url: 'https://x.test/{{1}}' })]),
+        carouselRow([
+          card({ body: 'Aloe {{1}}' }),
+          card({ url: 'https://x.test/{{1}}' }),
+        ])
       );
       expect(
         missingSendValues(plan, {
           cards: [{ body: ['fresh'] }, { buttonParams: { 0: 'aloe-2' } }],
-        }),
+        })
       ).toEqual([]);
     });
 
@@ -292,7 +322,9 @@ describe('buildSendPlan', () => {
   });
 
   it('treats whitespace as unfilled', () => {
-    const plan = buildSendPlan(row({ components: [{ type: 'BODY', text: 'Hi {{1}}' }] }));
+    const plan = buildSendPlan(
+      row({ components: [{ type: 'BODY', text: 'Hi {{1}}' }] })
+    );
     expect(missingSendValues(plan, { body: ['   '] })).toEqual([
       'Message variable {{1}}',
     ]);
@@ -328,7 +360,255 @@ describe('datetime-local conversion', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 7, 12, 17, 30));
     expect(localInputToMs(defaultOfferExpiryLocal(24))).toBe(
-      new Date(2026, 7, 13, 17, 30).getTime(),
+      new Date(2026, 7, 13, 17, 30).getTime()
     );
+  });
+});
+
+/**
+ * A scheduled broadcast fires from a server-side sweep the operator
+ * cannot watch. So the only place a bad instant can be caught is here,
+ * before it becomes a row — an off-by-one at either boundary means a
+ * campaign that either sends immediately (surprising thousands of
+ * recipients) or never sends at all (silently, with the UI still
+ * claiming "Scheduled").
+ */
+describe('validateScheduleAt', () => {
+  const NOW = new Date(2026, 8, 10, 12, 0).getTime();
+  const local = (y: number, m: number, d: number, h: number, min = 0): string =>
+    msToLocalInput(new Date(y, m - 1, d, h, min).getTime());
+
+  it('rejects an empty value with a prompt, not a scary error', () => {
+    const result = validateScheduleAt('', NOW);
+    expect(result.ok).toBe(false);
+    expect(result.problem).toBe('empty');
+    expect(result.atMs).toBeNull();
+    expect(result.message).toBeTruthy();
+  });
+
+  it('rejects an unparseable value', () => {
+    const result = validateScheduleAt('tomorrow-ish', NOW);
+    expect(result.ok).toBe(false);
+    expect(result.problem).toBe('unparseable');
+  });
+
+  it('rejects a time in the past', () => {
+    const result = validateScheduleAt(local(2026, 9, 10, 11), NOW);
+    expect(result.ok).toBe(false);
+    expect(result.problem).toBe('past');
+  });
+
+  it('rejects "now" itself, which would fire on the next sweep', () => {
+    const result = validateScheduleAt(local(2026, 9, 10, 12), NOW);
+    expect(result.ok).toBe(false);
+    expect(result.problem).toBe('past');
+  });
+
+  it('rejects a lead time under the minimum', () => {
+    // 1 minute ahead: the sweep runs every 5 minutes, so this would
+    // send LATE and look broken rather than scheduled.
+    const oneMinute = msToLocalInput(NOW + 60_000);
+    const result = validateScheduleAt(oneMinute, NOW);
+    expect(result.ok).toBe(false);
+    expect(result.problem).toBe('too_soon');
+  });
+
+  it('accepts exactly the minimum lead time', () => {
+    const atMin = msToLocalInput(NOW + MIN_SCHEDULE_LEAD_MS);
+    const result = validateScheduleAt(atMin, NOW);
+    expect(result.ok).toBe(true);
+    expect(result.problem).toBeNull();
+    expect(result.message).toBeNull();
+  });
+
+  it('accepts the far edge of the allowed window', () => {
+    const atMax = msToLocalInput(NOW + MAX_SCHEDULE_AHEAD_MS);
+    expect(validateScheduleAt(atMax, NOW).ok).toBe(true);
+  });
+
+  it('rejects beyond the allowed window', () => {
+    const past = msToLocalInput(NOW + MAX_SCHEDULE_AHEAD_MS + 60_000);
+    const result = validateScheduleAt(past, NOW);
+    expect(result.ok).toBe(false);
+    expect(result.problem).toBe('too_far');
+  });
+
+  it('returns the parsed instant so the caller stores the same value it validated', () => {
+    const chosen = new Date(2026, 8, 11, 9, 30).getTime();
+    const result = validateScheduleAt(msToLocalInput(chosen), NOW);
+    expect(result.ok).toBe(true);
+    expect(result.atMs).toBe(chosen);
+  });
+});
+
+/**
+ * This mapper is the single source of the recipient-independent half of
+ * a send. Three hand-written copies existed before it and had already
+ * drifted, so these assertions are about the contract every surface now
+ * shares: the immediate broadcast, the scheduled executor and the test
+ * send must build byte-identical params from the same state.
+ */
+describe('sendValuesFromExtras', () => {
+  const extras = (
+    over: Partial<BroadcastSendExtras> = {}
+  ): BroadcastSendExtras => ({
+    offerExpiryLocal: '',
+    cards: [],
+    buttonParams: {},
+    ...over,
+  });
+
+  it('omits everything when there is nothing to send', () => {
+    const values = sendValuesFromExtras({
+      extras: extras(),
+      isMediaHeader: false,
+    });
+    expect(values).toEqual({});
+  });
+
+  it('omits, rather than empties, an absent extras object', () => {
+    expect(
+      sendValuesFromExtras({ extras: undefined, isMediaHeader: true })
+    ).toEqual({});
+  });
+
+  it('drops the media URL when the template has no media header', () => {
+    // Attaching media to a text-header template sends Meta a component
+    // it never approved, which it rejects.
+    const values = sendValuesFromExtras({
+      extras: extras(),
+      headerMediaUrl: IMG,
+      isMediaHeader: false,
+    });
+    expect(values.headerMediaUrl).toBeUndefined();
+  });
+
+  it('carries the media URL when the header is media', () => {
+    const values = sendValuesFromExtras({
+      extras: extras(),
+      headerMediaUrl: IMG,
+      isMediaHeader: true,
+    });
+    expect(values.headerMediaUrl).toBe(IMG);
+  });
+
+  it('ignores a whitespace-only media URL', () => {
+    const values = sendValuesFromExtras({
+      extras: extras(),
+      headerMediaUrl: '   ',
+      isMediaHeader: true,
+    });
+    expect(values.headerMediaUrl).toBeUndefined();
+  });
+
+  it('converts the offer deadline to epoch ms', () => {
+    const deadline = new Date(2026, 8, 20, 18, 0).getTime();
+    const values = sendValuesFromExtras({
+      extras: extras({ offerExpiryLocal: msToLocalInput(deadline) }),
+      isMediaHeader: false,
+    });
+    expect(values.offerExpiresAtMs).toBe(deadline);
+  });
+
+  it('omits empty button params rather than sending an empty map', () => {
+    const values = sendValuesFromExtras({
+      extras: extras({ buttonParams: {} }),
+      isMediaHeader: false,
+    });
+    expect('buttonParams' in values).toBe(false);
+  });
+
+  it('carries button params when present', () => {
+    const values = sendValuesFromExtras({
+      extras: extras({ buttonParams: { 0: 'SAVE10' } }),
+      isMediaHeader: false,
+    });
+    expect(values.buttonParams).toEqual({ 0: 'SAVE10' });
+  });
+
+  it('omits an empty card list but carries a populated one', () => {
+    expect(
+      'cards' in
+        sendValuesFromExtras({
+          extras: extras({ cards: [] }),
+          isMediaHeader: false,
+        })
+    ).toBe(false);
+
+    const cards = [{ headerMediaUrl: IMG }];
+    expect(
+      sendValuesFromExtras({ extras: extras({ cards }), isMediaHeader: false })
+        .cards
+    ).toEqual(cards);
+  });
+
+  it('uses the auth code as body[0] when no explicit body is given', () => {
+    const values = sendValuesFromExtras({
+      extras: extras({ authCode: '123456' }),
+      isMediaHeader: false,
+    });
+    expect(values.body).toEqual(['123456']);
+  });
+
+  it('lets an explicit body win over the auth code', () => {
+    // The caller resolved real per-recipient values; those are more
+    // specific than the wizard-level auth code and must not be replaced.
+    const values = sendValuesFromExtras({
+      extras: extras({ authCode: '123456' }),
+      isMediaHeader: false,
+      body: ['Jane'],
+    });
+    expect(values.body).toEqual(['Jane']);
+  });
+
+  it('omits an empty namedBody but carries a populated one', () => {
+    expect(
+      'namedBody' in
+        sendValuesFromExtras({
+          extras: extras(),
+          isMediaHeader: false,
+          namedBody: {},
+        })
+    ).toBe(false);
+
+    const values = sendValuesFromExtras({
+      extras: extras(),
+      isMediaHeader: false,
+      namedBody: { order_id: 'A-1' },
+    });
+    expect(values.namedBody).toEqual({ order_id: 'A-1' });
+  });
+
+  it('carries the commerce and order-status fields', () => {
+    const values = sendValuesFromExtras({
+      extras: extras({
+        catalogThumbnailProductId: 'sku-1',
+        orderStatus: {
+          orderReferenceId: 'ORD-9',
+          orderStatus: 'shipped',
+          orderStatusDescription: 'On its way',
+        },
+      }),
+      isMediaHeader: false,
+    });
+    expect(values.catalogThumbnailProductId).toBe('sku-1');
+    expect(values.orderReferenceId).toBe('ORD-9');
+    expect(values.orderStatus).toBe('shipped');
+    expect(values.orderStatusDescription).toBe('On its way');
+  });
+});
+
+describe('isMediaHeaderType', () => {
+  it('recognises exactly the three media header formats', () => {
+    expect(isMediaHeaderType('image')).toBe(true);
+    expect(isMediaHeaderType('video')).toBe(true);
+    expect(isMediaHeaderType('document')).toBe(true);
+  });
+
+  it('rejects text, location, absent and unknown headers', () => {
+    expect(isMediaHeaderType('text')).toBe(false);
+    expect(isMediaHeaderType('location')).toBe(false);
+    expect(isMediaHeaderType(null)).toBe(false);
+    expect(isMediaHeaderType(undefined)).toBe(false);
   });
 });

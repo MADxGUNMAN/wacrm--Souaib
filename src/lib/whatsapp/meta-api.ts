@@ -10,6 +10,12 @@
  */
 
 import { META_API_BASE } from './graph-version';
+import {
+  DEFAULT_TEMPLATE_ANALYTICS_METRICS,
+  TEMPLATE_ANALYTICS_MAX_TEMPLATE_IDS,
+  type RawTemplateAnalyticsResponse,
+  type TemplateAnalyticsMetric,
+} from './template-analytics';
 
 export interface MetaSendResult {
   messageId: string;
@@ -20,6 +26,23 @@ export interface MetaPhoneInfo {
   display_phone_number: string;
   verified_name?: string;
   quality_rating?: string;
+  /**
+   * `CLOUD_API`, `ON_PREMISE` or `NOT_APPLICABLE`.
+   *
+   * NOTE: this does NOT identify coexistence. A coexistence number reports
+   * `CLOUD_API` exactly like an ordinary Cloud API number does — verified
+   * against three live numbers on this app. Use `is_on_biz_app` for that.
+   */
+  platform_type?: string;
+  /**
+   * True when this number is ALSO live on the WhatsApp Business app, i.e.
+   * coexistence. This is the only field Meta exposes that separates the two,
+   * and it is what makes `connection_mode` verifiable instead of inferred.
+   *
+   * Optional on purpose. Meta omits it on some responses, and absence must
+   * never be read as `false` — see `reconcileConnectionMode`.
+   */
+  is_on_biz_app?: boolean;
 }
 
 interface MetaErrorResponse {
@@ -148,14 +171,19 @@ export interface VerifyPhoneNumberArgs {
 }
 
 /**
- * Verify a Meta phone number ID by fetching its public metadata
- * (display_phone_number, verified_name, quality_rating).
+ * Verify a Meta phone number ID by fetching its public metadata.
+ *
+ * `platform_type` and `is_on_biz_app` are requested alongside the display
+ * fields because this call already runs on every connection path, so asking
+ * for them costs nothing and turns coexistence from something we infer from
+ * the operator's clicks into something Meta tells us. See
+ * `reconcileConnectionMode`.
  */
 export async function verifyPhoneNumber(
   args: VerifyPhoneNumberArgs
 ): Promise<MetaPhoneInfo> {
   const { phoneNumberId, accessToken } = args;
-  const url = `${META_API_BASE}/${phoneNumberId}?fields=id,display_phone_number,verified_name,quality_rating`;
+  const url = `${META_API_BASE}/${phoneNumberId}?fields=id,display_phone_number,verified_name,quality_rating,platform_type,is_on_biz_app`;
   const response = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -1430,6 +1458,501 @@ export async function fetchMessageTemplateByName(
         : undefined,
   };
 }
+
+// ============================================================
+// Account-level analytics (WABA node fields)
+// ============================================================
+//
+// These four all read the SAME node with different `fields` specs, using
+// Meta's dotted-filter syntax:
+//
+//   GET /{waba-id}?fields=analytics.start(X).end(Y).granularity(DAY)
+//
+// They are four separate functions, and the route calls them in
+// parallel with allSettled, deliberately: bundling them into one
+// comma-separated `fields` request would be one round trip instead of
+// four, but any single unavailable metric (calling not enabled, cost
+// withheld on a partner credit line) fails the WHOLE request and blanks
+// an entire dashboard. Isolation is worth the extra calls.
+//
+// Filter-syntax note: each function mirrors the array form used in
+// Meta's own documented example for THAT field — bracketed and quoted
+// for conversation_analytics, bare comma-separated for
+// pricing_analytics. Meta is inconsistent here and the safest choice is
+// to copy its own examples rather than normalise them.
+
+export interface WabaAnalyticsArgs {
+  wabaId: string;
+  accessToken: string;
+  /** UNIX seconds, inclusive. */
+  startSec: number;
+  /** UNIX seconds, exclusive. */
+  endSec: number;
+  /** DAY/MONTH for messaging; DAILY/MONTHLY for the rest. */
+  granularity: string;
+}
+
+/**
+ * Read one dotted-filter field off the WABA node, following pagination.
+ *
+ * These fields paginate too, and with the same trap as
+ * template_analytics: the first page carries the OLDEST buckets, so
+ * reading one page makes a long window report less than a short one.
+ * Pages are merged into the field's own shape — `data_points` for
+ * messaging and call analytics, `data[]` groups for conversation and
+ * pricing analytics — so the parsers see one complete payload.
+ */
+async function fetchWabaAnalyticsField(args: {
+  wabaId: string;
+  accessToken: string;
+  fieldSpec: string;
+  field: string;
+}): Promise<unknown> {
+  const { wabaId, accessToken, fieldSpec, field } = args;
+  const params = new URLSearchParams({ fields: fieldSpec });
+
+  let nextUrl: string | null =
+    `${META_API_BASE}/${wabaId}?${params.toString()}`;
+  const PAGE_CAP = 25;
+  let page = 0;
+
+  /** The first page's field object, used as the shape to merge into. */
+  let merged: Record<string, unknown> | null = null;
+  const dataPoints: unknown[] = [];
+  const groups: unknown[] = [];
+
+  while (nextUrl && page < PAGE_CAP) {
+    page++;
+    const response: Response = await fetch(nextUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) {
+      await throwMetaError(response, `Meta API error: ${response.status}`);
+    }
+    const body = (await response.json()) as Record<string, unknown>;
+    const payload = body[field];
+    if (!payload || typeof payload !== 'object') break;
+
+    const obj = payload as Record<string, unknown>;
+    if (!merged) merged = { ...obj };
+    if (Array.isArray(obj.data_points)) dataPoints.push(...obj.data_points);
+    if (Array.isArray(obj.data)) groups.push(...obj.data);
+
+    // Paging can sit on the field object or, for a plain field
+    // expansion, on the response root.
+    const fieldPaging = obj.paging as { next?: string } | undefined;
+    const rootPaging = body.paging as { next?: string } | undefined;
+    nextUrl = fieldPaging?.next ?? rootPaging?.next ?? null;
+  }
+
+  if (!merged) return null;
+  if (dataPoints.length > 0) merged.data_points = dataPoints;
+  if (groups.length > 0) merged.data = groups;
+  return merged;
+}
+
+/** Sent/delivered message counts. Granularity: HALF_HOUR | DAY | MONTH. */
+export async function fetchMessagingAnalytics(
+  args: WabaAnalyticsArgs
+): Promise<unknown> {
+  const { wabaId, accessToken, startSec, endSec, granularity } = args;
+  return fetchWabaAnalyticsField({
+    wabaId,
+    accessToken,
+    field: 'analytics',
+    fieldSpec: `analytics.start(${startSec}).end(${endSec}).granularity(${granularity})`,
+  });
+}
+
+/**
+ * Conversation counts and cost, broken down every way Meta offers.
+ *
+ * Note this measures 24-hour CONVERSATIONS, not messages. Meta moved
+ * most accounts to per-message pricing in July 2025, so on a newer
+ * account this can legitimately return nothing while pricing_analytics
+ * is full — which is why the two are presented separately rather than
+ * reconciled into one "cost" figure.
+ */
+export async function fetchConversationAnalytics(
+  args: WabaAnalyticsArgs
+): Promise<unknown> {
+  const { wabaId, accessToken, startSec, endSec, granularity } = args;
+  const dimensions =
+    '["CONVERSATION_CATEGORY","CONVERSATION_TYPE","CONVERSATION_DIRECTION","COUNTRY"]';
+  return fetchWabaAnalyticsField({
+    wabaId,
+    accessToken,
+    field: 'conversation_analytics',
+    // metric_types omitted on purpose: Meta returns every available
+    // metric when it is absent, and asking for COST alone throws
+    // outright on partner-billed WABAs.
+    fieldSpec: `conversation_analytics.start(${startSec}).end(${endSec}).granularity(${granularity}).phone_numbers([]).dimensions(${dimensions})`,
+  });
+}
+
+/** Per-message volume and cost by category, type, country and tier. */
+export async function fetchPricingAnalytics(
+  args: WabaAnalyticsArgs
+): Promise<unknown> {
+  const { wabaId, accessToken, startSec, endSec, granularity } = args;
+  return fetchWabaAnalyticsField({
+    wabaId,
+    accessToken,
+    field: 'pricing_analytics',
+    // PHONE is deliberately NOT requested. Every extra dimension
+    // multiplies the number of data points Meta returns, and a per-number
+    // split is not shown anywhere — asking for it only made a year-long
+    // daily response larger for no benefit.
+    fieldSpec: `pricing_analytics.start(${startSec}).end(${endSec}).granularity(${granularity}).dimensions(PRICING_CATEGORY,PRICING_TYPE,TIER,COUNTRY)`,
+  });
+}
+
+/**
+ * Call count, cost and average duration.
+ *
+ * Only meaningful once WhatsApp Business Calling is enabled on a number;
+ * otherwise Meta may reject the field outright. Callers treat a failure
+ * here as "section unavailable", never as a page-level error.
+ */
+export async function fetchCallAnalytics(
+  args: WabaAnalyticsArgs
+): Promise<unknown> {
+  const { wabaId, accessToken, startSec, endSec, granularity } = args;
+  return fetchWabaAnalyticsField({
+    wabaId,
+    accessToken,
+    field: 'call_analytics',
+    fieldSpec: `call_analytics.start(${startSec}).end(${endSec}).granularity(${granularity})`,
+  });
+}
+
+// ============================================================
+// Template analytics
+// ============================================================
+
+export interface FetchTemplateAnalyticsArgs {
+  wabaId: string;
+  accessToken: string;
+  /** Meta template ids (`meta_template_id`), not our row ids. Max 10. */
+  templateIds: string[];
+  /** UNIX seconds, 00:00 UTC. See resolveAnalyticsWindow. */
+  startSec: number;
+  /** UNIX seconds, exclusive. */
+  endSec: number;
+  metricTypes?: TemplateAnalyticsMetric[];
+}
+
+/**
+ * Read per-template send/delivery/read/click counts from Meta.
+ *
+ * Returns the raw response; `normalizeTemplateAnalytics` in
+ * template-analytics.ts turns it into totals and a daily series. The
+ * split keeps the awkward parts of the payload — uniques mixed into the
+ * `clicked` array, cost absent on partner credit lines — in a pure
+ * function that can be reasoned about without a network call.
+ *
+ * Two parameter-encoding details that Meta is strict about:
+ *   • `template_ids` must be a bracketed array literal — `[123,456]`.
+ *     A bare `123` is rejected.
+ *   • `granularity` must be exactly DAILY. There is no hourly option.
+ *
+ * Requires template analytics to have been enabled on the WABA
+ * (`enableTemplateInsights`); until then Meta answers every request with
+ * error 200005 / subcode 4182002 regardless of the parameters.
+ */
+export async function fetchTemplateAnalytics(
+  args: FetchTemplateAnalyticsArgs
+): Promise<RawTemplateAnalyticsResponse> {
+  const {
+    wabaId,
+    accessToken,
+    templateIds,
+    startSec,
+    endSec,
+    metricTypes = DEFAULT_TEMPLATE_ANALYTICS_METRICS,
+  } = args;
+
+  if (templateIds.length === 0) {
+    throw new Error(
+      'fetchTemplateAnalytics requires at least one template id.'
+    );
+  }
+  if (templateIds.length > TEMPLATE_ANALYTICS_MAX_TEMPLATE_IDS) {
+    throw new Error(
+      `Meta accepts at most ${TEMPLATE_ANALYTICS_MAX_TEMPLATE_IDS} template ids per analytics request (got ${templateIds.length}).`
+    );
+  }
+
+  const params = new URLSearchParams({
+    start: String(startSec),
+    end: String(endSec),
+    granularity: 'DAILY',
+    // Bracketed literal, per Meta's own documented example. URLSearchParams
+    // percent-encodes the brackets and commas, which Graph accepts.
+    template_ids: `[${templateIds.join(',')}]`,
+    metric_types: metricTypes.join(','),
+  });
+
+  // ─── Pagination is NOT optional here ──────────────────────────
+  //
+  // Meta paginates template_analytics with cursors, and the FIRST page
+  // holds the OLDEST days in the requested range. Reading only page one
+  // therefore does not return "less detail", it returns the wrong end of
+  // the window: a 30-day request came back with two sends from three
+  // weeks ago while silently dropping three sends from yesterday that a
+  // 7-day request over the same data reported fine.
+  //
+  // That is what made a wider window show a SMALLER total than a
+  // narrower one — the single most trust-destroying way for an analytics
+  // screen to be wrong, because both numbers look plausible in
+  // isolation. Every page is followed and the groups concatenated;
+  // normalizeTemplateAnalytics already flattens groups, so the merged
+  // response parses identically to a single-page one.
+  let nextUrl: string | null =
+    `${META_API_BASE}/${wabaId}/template_analytics?${params.toString()}`;
+  const groups: NonNullable<RawTemplateAnalyticsResponse['data']> = [];
+  // Same guard as the template sync loop: a cursor that never terminates
+  // must not become an infinite request loop.
+  const PAGE_CAP = 25;
+  let page = 0;
+
+  while (nextUrl && page < PAGE_CAP) {
+    page++;
+    const response: Response = await fetch(nextUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) {
+      await throwMetaError(response, `Meta API error: ${response.status}`);
+    }
+    const body = (await response.json()) as RawTemplateAnalyticsResponse & {
+      paging?: { next?: string };
+    };
+    if (Array.isArray(body.data)) groups.push(...body.data);
+    nextUrl = body.paging?.next ?? null;
+  }
+
+  return { data: groups };
+}
+
+/**
+ * Read template analytics across a range, in slices Meta will answer.
+ *
+ * ─── Why slicing is necessary ─────────────────────────────────────
+ *
+ * Meta documents a 90-day lookback, but in practice a request spanning
+ * the full 90 days can come back completely empty on an account whose
+ * 7-day and 30-day requests return data perfectly. The observed shape is
+ * "narrow windows answer, wide windows do not" — which made a Spent
+ * column disappear entirely the moment the list switched from a 30-day
+ * request to a 90-day one.
+ *
+ * Rather than trusting one wide request, the range is walked in slices
+ * of `sliceDays` and the groups concatenated. `normalizeTemplateAnalytics`
+ * flattens groups, so the merged result parses exactly like a single
+ * response, and totals are unaffected by where the slice boundaries fall
+ * because each data point still lands in its own day bucket.
+ *
+ * Partial success beats failure here: if some slices answer and others
+ * error, the answered ones are returned. Only a total failure throws, so
+ * a genuine problem (insights not enabled, bad token) still surfaces
+ * instead of silently rendering as "no data".
+ */
+export async function fetchTemplateAnalyticsWindowed(
+  args: FetchTemplateAnalyticsArgs & { sliceDays?: number }
+): Promise<RawTemplateAnalyticsResponse> {
+  const { startSec, endSec, sliceDays = 30, ...rest } = args;
+  const SECONDS_PER_DAY = 86_400;
+  const step = Math.max(1, sliceDays) * SECONDS_PER_DAY;
+
+  // Slices run in PARALLEL. Sequentially, a 90-day window over 8
+  // templates was ~30 round trips end to end (Meta paginates at 25 data
+  // points per page), which is how a page load reached two minutes.
+  // They are independent ranges, so there is no ordering requirement.
+  const slices: { from: number; to: number }[] = [];
+  for (let from = startSec; from < endSec; from += step) {
+    slices.push({ from, to: Math.min(from + step, endSec) });
+  }
+
+  const settled = await Promise.allSettled(
+    slices.map((slice) =>
+      fetchTemplateAnalytics({
+        ...rest,
+        startSec: slice.from,
+        endSec: slice.to,
+      })
+    )
+  );
+
+  const groups: NonNullable<RawTemplateAnalyticsResponse['data']> = [];
+  const errors: unknown[] = [];
+  for (const result of settled) {
+    if (result.status === 'fulfilled') {
+      if (Array.isArray(result.value.data)) groups.push(...result.value.data);
+    } else {
+      errors.push(result.reason);
+    }
+  }
+
+  if (groups.length === 0 && errors.length > 0) throw errors[0];
+  return { data: groups };
+}
+
+/**
+ * Turn on template analytics for a WABA.
+ *
+ * Meta captures nothing until this is confirmed, so a brand-new account
+ * sees empty insights forever without it. Confirming also opts the
+ * account into Meta's link tracking and anonymised chat analysis, which
+ * is why this is a deliberate action behind a button rather than
+ * something the app does silently on first view.
+ *
+ * One-way: Meta does not allow disabling it again afterwards.
+ */
+export async function enableTemplateInsights(args: {
+  wabaId: string;
+  accessToken: string;
+}): Promise<void> {
+  const { wabaId, accessToken } = args;
+  const response = await fetch(
+    `${META_API_BASE}/${wabaId}?is_enabled_for_insights=true`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`);
+  }
+}
+
+/**
+ * Read whether template analytics are switched on for a WABA.
+ *
+ * ─── Why this exists alongside the error classifier ───────────────
+ *
+ * Asking the WABA directly is authoritative; inferring the state from a
+ * failed analytics call is not. Meta was observed answering
+ * `template_analytics` on a WABA with insights off using code **1**
+ * (generic `API Unknown`) and putting the real explanation in
+ * `error_user_msg` — so the code/subcode pair the classifier was built
+ * around (200005 / 4182002) never appeared, and the app reported a
+ * fixable setting as an unexplained failure.
+ *
+ * One field on one node, so it is cheap enough to use as a follow-up
+ * question whenever a window comes back empty.
+ *
+ * Returns null when the flag could not be read (bad token, network,
+ * Meta withholding the field). Null means "unknown" and callers must
+ * treat it as such — claiming insights are off when we could not check
+ * would push the operator at an irreversible switch for no reason.
+ */
+export async function fetchInsightsEnabled(args: {
+  wabaId: string;
+  accessToken: string;
+}): Promise<boolean | null> {
+  const { wabaId, accessToken } = args;
+  try {
+    const response = await fetch(
+      `${META_API_BASE}/${wabaId}?fields=is_enabled_for_insights`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!response.ok) return null;
+    const body = (await response.json()) as {
+      is_enabled_for_insights?: unknown;
+    };
+    return typeof body.is_enabled_for_insights === 'boolean'
+      ? body.is_enabled_for_insights
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when Meta is refusing analytics because insights were never
+ * confirmed for this WABA, rather than because the request was wrong.
+ *
+ * Codes are checked first because they are stable. The wording check is
+ * a fallback, and it deliberately reads every text field Meta might have
+ * put the reason in — `error_user_msg` and `error_data.details` as well
+ * as `message`.
+ *
+ * Testing only `message` was the bug: Meta sent "Template insights have
+ * not been enabled for this WhatsApp Business account." as
+ * `error_user_msg` under the generic code 1, so a classifier looking at
+ * `message` alone for the phrase "are not available" matched nothing and
+ * the operator got no route to the fix.
+ *
+ * Prefer `fetchInsightsEnabled` where an extra request is acceptable —
+ * a flag beats a sentence.
+ */
+export function isTemplateInsightsDisabledError(error: unknown): boolean {
+  const candidates: string[] = [];
+  if (error instanceof MetaApiError) {
+    if (error.subcode === 4182002) return true;
+    if (error.code === 200005) return true;
+    if (error.userMessage) candidates.push(error.userMessage);
+    if (error.details) candidates.push(error.details);
+  }
+  if (error instanceof Error) candidates.push(error.message);
+
+  // "insights" plus any of Meta's ways of saying off. Kept narrow enough
+  // that an unrelated failure mentioning insights in passing does not
+  // send the operator to an irreversible switch.
+  return candidates.some((text) =>
+    /insights?\b[\s\S]*\b(not (?:been )?enabled|not available|not turned on|disabled)/i.test(
+      text
+    )
+  );
+}
+
+/**
+ * Is this Meta's refusal to run an operation on a Coexistence number?
+ *
+ * Meta calls a number that also lives on the WhatsApp Business phone app an
+ * "SMB business type", and refuses template analytics on one outright:
+ *
+ *   (#10) This operation can not be performed on SMB business type
+ *
+ * This is a PERMANENT product limit, not a setting. Template insights are
+ * only available on pure Cloud API numbers, so on a Coexistence number the
+ * enable call can never succeed no matter how often it is retried, who is
+ * signed in, or what is changed in WhatsApp Manager.
+ *
+ * Verified across all five WABAs on this installation: both Coexistence ones
+ * report `is_enabled_for_insights: false` and answer the enable call with #10,
+ * while all three Cloud API ones report `true`.
+ *
+ * Kept separate from `isTemplateInsightsDisabledError` because the two lead to
+ * opposite UI: that one means "you can switch this on", this one means "no one
+ * can, stop offering it".
+ */
+export function isSmbBusinessTypeError(error: unknown): boolean {
+  const candidates: string[] = [];
+  if (error instanceof MetaApiError) {
+    // Code 10 is Meta's generic "permission denied for this operation", so it
+    // is matched together with the SMB wording rather than on its own — other
+    // refusals share the code and must not be reported as a Coexistence limit.
+    if (error.message) candidates.push(error.message);
+    if (error.userMessage) candidates.push(error.userMessage);
+    if (error.details) candidates.push(error.details);
+  }
+  if (error instanceof Error) candidates.push(error.message);
+
+  return candidates.some((text) => /\bSMB\b[\s\S]*business\s*type/i.test(text));
+}
+
+/**
+ * The one honest explanation for a Coexistence number, shared by every
+ * surface so they cannot drift apart.
+ *
+ * Names where the numbers CAN be seen, because "not supported" on its own
+ * reads as a dead end when the data does in fact exist in two other places.
+ */
+export const SMB_INSIGHTS_UNSUPPORTED_MESSAGE =
+  'Meta does not support template insights on numbers connected through the WhatsApp Business app (Coexistence). ' +
+  'This is a permanent Meta limitation for this connection type, not a setting — it cannot be switched on from here or in WhatsApp Manager. ' +
+  'Delivery and read rates for your sends are still available in this CRM under Broadcasts, and per-template stats are in the WhatsApp Business app on your phone under Settings → Business tools → Statistics.';
 
 // ============================================================
 // WhatsApp Flows (WABA assets)

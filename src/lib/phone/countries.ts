@@ -1164,3 +1164,120 @@ export function validateCountryPhoneNumber(
     formattedNumber: cleaned,
   };
 }
+
+/**
+ * Formats a national number using the country's example format or fallback grouping.
+ */
+export function formatNationalNumber(
+  country: Country,
+  nationalNumber: string
+): string {
+  const digits = nationalNumber.replace(/\D/g, '');
+  if (!digits) return '';
+
+  if (country.format) {
+    const formatDigitsCount = (country.format.match(/\d/g) || []).length;
+    if (formatDigitsCount === digits.length) {
+      let digitIdx = 0;
+      let res = '';
+      for (const ch of country.format) {
+        if (/\d/.test(ch)) {
+          res += digits[digitIdx++];
+        } else {
+          res += ch;
+        }
+      }
+      return res;
+    }
+  }
+
+  // Fallback grouping based on digit length
+  if (digits.length === 10) {
+    return `${digits.slice(0, 5)} ${digits.slice(5)}`;
+  }
+  if (digits.length === 9) {
+    return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
+  }
+  if (digits.length === 8) {
+    return `${digits.slice(0, 4)} ${digits.slice(4)}`;
+  }
+  if (digits.length === 7) {
+    return `${digits.slice(0, 3)} ${digits.slice(3)}`;
+  }
+  return digits.match(/.{1,4}/g)?.join(' ') ?? digits;
+}
+
+export interface FormattedPhoneParts {
+  dialCode: string;
+  nationalNumber: string;
+  country: Country | null;
+  formatted: string;
+}
+
+/**
+ * Parses and formats an E.164-like phone string into structured parts:
+ * dialCode (e.g. "+91"), nationalNumber (e.g. "63594 63987"), country object, and full string ("+91 63594 63987").
+ */
+export function formatPhoneNumberParts(
+  phone: string | null | undefined,
+  defaultCountryCode = 'IN'
+): FormattedPhoneParts {
+  if (!phone || !phone.trim()) {
+    return {
+      dialCode: '',
+      nationalNumber: '',
+      country: null,
+      formatted: '',
+    };
+  }
+
+  const raw = phone.trim();
+  const digits = raw.replace(/\D/g, '');
+
+  // Too short to be a valid phone number
+  if (digits.length < 5) {
+    const fallback = raw.startsWith('+') ? raw : `+${raw}`;
+    return {
+      dialCode: '',
+      nationalNumber: fallback,
+      country: null,
+      formatted: fallback,
+    };
+  }
+
+  const { country, nationalNumber } = parsePhoneToCountryAndNational(
+    raw,
+    defaultCountryCode
+  );
+
+  if (!nationalNumber) {
+    const withPlus = raw.startsWith('+') ? raw : `+${raw}`;
+    return {
+      dialCode: '',
+      nationalNumber: withPlus,
+      country: null,
+      formatted: withPlus,
+    };
+  }
+
+  const formattedNat = formatNationalNumber(country, nationalNumber);
+  const formatted = `${country.dialCode} ${formattedNat}`.trim();
+
+  return {
+    dialCode: country.dialCode,
+    nationalNumber: formattedNat,
+    country,
+    formatted,
+  };
+}
+
+/**
+ * Returns a professionally formatted phone number with leading `+` and country code separation.
+ * E.g. "916359463987" -> "+91 63594 63987"
+ */
+export function formatPhoneNumber(
+  phone: string | null | undefined,
+  defaultCountryCode = 'IN'
+): string {
+  return formatPhoneNumberParts(phone, defaultCountryCode).formatted;
+}

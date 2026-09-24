@@ -1,0 +1,517 @@
+<style>
+  /* ---- rules list ---- */
+
+  /*
+    The heading row. `margin-bottom` is gone: `.stack` owns the spacing
+    between the header and everything under it, and having both meant the
+    gaps in this view were never the same twice.
+
+    The title is allowed to shrink and ellipsise while the button is not,
+    so at 300px the action can never be pushed out of the panel or wrap
+    under the heading.
+  */
+  .list__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .list__title {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .list__head .btn {
+    flex: 0 0 auto;
+  }
+
+  /* The rule count, so the heading carries information as well as a label. */
+  .list__count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    margin-left: 6px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-size: 10px;
+    font-weight: 600;
+    vertical-align: 1px;
+  }
+
+  .rule {
+    padding: 11px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card);
+    box-shadow: var(--shadow-sm);
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+
+  .rule:hover {
+    border-color: #d6d7de;
+    box-shadow: var(--shadow-md);
+  }
+
+  .rule + .rule {
+    margin-top: 10px;
+  }
+
+  /* A paused rule reads as switched off without becoming unreadable. */
+  .rule--paused {
+    background: var(--muted);
+    box-shadow: none;
+  }
+
+  .rule--paused .rule__name {
+    color: var(--muted-foreground);
+  }
+
+  .rule__top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .rule__name {
+    font-size: 13px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .rule__meta,
+  .rule__owner {
+    font-size: 11px;
+    color: var(--muted-foreground);
+    overflow-wrap: anywhere;
+  }
+
+  .rule__meta {
+    margin-top: 2px;
+  }
+
+  .rule__owner {
+    margin-top: 4px;
+  }
+
+  .rule__actions {
+    display: flex;
+    gap: 2px;
+    margin-top: 10px;
+    padding-top: 9px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Delete sits apart from the three safe actions, so the destructive
+     one is never the button next to the one you meant to press. */
+  .rule__actions .icon-btn--danger {
+    margin-left: auto;
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition:
+      background 0.15s ease,
+      color 0.15s ease;
+  }
+
+  .icon-btn:hover {
+    background: var(--muted);
+    color: var(--foreground);
+  }
+
+  .icon-btn[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* Inline variant, for an icon sharing a row with label text. */
+  .icon-btn--sm {
+    width: 22px;
+    height: 22px;
+  }
+
+  .icon-btn--danger:hover {
+    background: var(--destructive-soft);
+    color: var(--destructive);
+  }
+
+  /*
+    Primed for a destructive second click. Held state rather than hover, so
+    it is obvious the button is waiting for confirmation and not merely
+    under the cursor.
+  */
+  .icon-btn--armed,
+  .icon-btn--armed:hover {
+    background: var(--destructive);
+    color: #ffffff;
+  }
+
+  .rule__confirm {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    background: var(--destructive-soft);
+    color: #912018;
+    font-size: 11px;
+  }
+
+  /* Owner's key stopped working — needs a person, not a retry. */
+  .rule__alert {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 8px;
+    border: 1px solid #fec84b;
+    border-radius: var(--radius-sm);
+    background: var(--warning-soft);
+    color: #7a4100;
+    font-size: 11px;
+  }
+
+  .rule__alert .btn {
+    min-height: 26px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  /*
+    Dry-run result. Left border rather than a full box: it is an outcome
+    attached to the rule above it, not a section of its own.
+  */
+  .rule__preview {
+    margin-top: 9px;
+    padding: 8px 10px;
+    border-left: 2px solid var(--primary);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    background: var(--muted);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
+  .rule__preview .tiny {
+    margin-top: 2px;
+  }
+
+  .rule__confirm .btn {
+    min-height: 26px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  .pill {
+    flex: 0 0 auto;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--success-soft);
+    color: #05603a;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .pill--paused {
+    background: var(--muted);
+    color: var(--muted-foreground);
+  }
+
+  .pill--warning {
+    background: var(--warning-soft);
+    color: #7a4100;
+  }
+
+  /*
+    Per-rule running state. "Did this rule fire?" is the reason most people
+    open the sidebar, and a dot answers it before the sentence is read.
+
+    Tinted band rather than a bordered card: it belongs to the rule card it
+    sits inside, and a card within a card reads as a separate object.
+  */
+  .rule__status {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    margin-top: 8px;
+    padding: 7px 9px;
+    border-radius: var(--radius-sm);
+    background: var(--muted);
+  }
+
+  .rule__status-text {
+    font-size: 11px;
+    color: var(--muted-foreground);
+    overflow-wrap: anywhere;
+  }
+
+  /* A paused rule's own band must not look like the card behind it. */
+  .rule--paused .rule__status {
+    background: #eceef1;
+  }
+
+  .dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: var(--muted-foreground);
+  }
+
+  /*
+    Green ONLY once a trigger has been observed firing. "Installed" and
+    "working" are different claims — Google's own trigger list cannot tell
+    them apart — and showing green for the first is how a plugin earns a
+    support ticket instead of trust.
+  */
+  .dot--live {
+    background: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.18);
+  }
+
+  .dot--warn {
+    background: var(--warning);
+    box-shadow: 0 0 0 3px rgba(245, 165, 36, 0.16);
+  }
+
+  .dot--idle {
+    background: var(--muted-foreground);
+    box-shadow: 0 0 0 3px rgba(111, 114, 128, 0.14);
+  }
+
+  .hour {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--card);
+    font-size: 11px;
+  }
+
+  .hour select {
+    min-height: 28px;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--card);
+    color: var(--foreground);
+    font: inherit;
+    font-size: 11px;
+  }
+
+  /* ---- wizard ---- */
+
+  .wiz__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .stepper {
+    display: flex;
+    gap: 6px;
+    margin: 12px 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .stepper__item {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--card);
+    font-size: 11px;
+    color: var(--muted-foreground);
+  }
+
+  .stepper__item[aria-current='step'] {
+    border-color: var(--primary);
+    background: var(--success-soft);
+    color: #05603a;
+    font-weight: 600;
+  }
+
+  .stepper__num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 17px;
+    height: 17px;
+    border-radius: 50%;
+    background: var(--muted);
+    color: var(--muted-foreground);
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  .stepper__item[aria-current='step'] .stepper__num {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  .group {
+    margin-bottom: 14px;
+  }
+
+  .group__title {
+    margin-bottom: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .select,
+  .text {
+    width: 100%;
+    min-height: 32px;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--card);
+    color: var(--foreground);
+    font: inherit;
+    font-size: 12px;
+  }
+
+  .select:focus,
+  .text:focus {
+    border-color: var(--primary);
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.18);
+  }
+
+  .select--invalid,
+  .text--invalid {
+    border-color: var(--destructive);
+  }
+
+  .row {
+    margin-bottom: 10px;
+  }
+
+  .row__label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .row__hint {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--muted-foreground);
+  }
+
+  .row__error {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--destructive);
+  }
+
+  .cond,
+  .var {
+    padding: 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--card-2, var(--muted));
+  }
+
+  .cond + .cond,
+  .var + .var {
+    margin-top: 8px;
+  }
+
+  .cond__head,
+  .var__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .cond__index,
+  .var__token {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+  }
+
+  .cond__field + .cond__field {
+    margin-top: 6px;
+  }
+
+  /* Column / fixed-value switch on a template variable. */
+  .seg {
+    display: inline-flex;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--muted);
+  }
+
+  .seg__btn {
+    padding: 3px 9px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--muted-foreground);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .seg__btn[aria-pressed='true'] {
+    background: var(--card);
+    color: var(--foreground);
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+  }
+
+  .wiz__footer {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .wiz__footer .btn {
+    flex: 1;
+  }
+</style>
