@@ -168,7 +168,11 @@ const COPY_GROUPS: {
     fields: [
       { key: 'member_blocked_heading', label: 'Heading' },
       { key: 'member_blocked_body', label: 'Body', multiline: true },
-      { key: 'member_blocked_note', label: 'Reassurance note', multiline: true },
+      {
+        key: 'member_blocked_note',
+        label: 'Reassurance note',
+        multiline: true,
+      },
       { key: 'member_blocked_contact_label', label: 'Contact button' },
     ],
   },
@@ -315,8 +319,20 @@ function SharedFeatureList() {
   );
 }
 
-export function BillingConfigPanel() {
-  const [settings, setSettings] = useState<Partial<SubscriptionSettings> | null>(null);
+/**
+ * `region` is 'global' (default: exactly today's editor) or a country
+ * code, which opens the country's own copy editor instead.
+ */
+export function BillingConfigPanel({
+  region = 'global',
+}: { region?: string } = {}) {
+  if (region !== 'global') return <RegionSettingsPanel code={region} />;
+  return <GlobalBillingConfigPanel />;
+}
+
+function GlobalBillingConfigPanel() {
+  const [settings, setSettings] =
+    useState<Partial<SubscriptionSettings> | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -344,7 +360,7 @@ export function BillingConfigPanel() {
 
   const set = <K extends keyof SubscriptionSettings>(
     key: K,
-    value: SubscriptionSettings[K],
+    value: SubscriptionSettings[K]
   ) => {
     setSettings((prev) => ({ ...(prev ?? {}), [key]: value }));
     setSaved(false);
@@ -374,6 +390,11 @@ export function BillingConfigPanel() {
       // edit made there in the meantime. Not sending them at all makes
       // the boundary real rather than a convention.
       for (const key of CUSTOM_CARD_SETTING_KEYS) delete payload[key];
+
+      // The Global currency is owned by the Global header, which changes it
+      // together with every Global price. The settings API refuses a
+      // different value here (409 use_global_currency_header).
+      delete payload.currency;
 
       const res = await fetch('/api/super-admin/billing/settings', {
         method: 'PUT',
@@ -408,6 +429,7 @@ export function BillingConfigPanel() {
 
   const upiId = (settings?.upi_id ?? '') as string;
   const upiLooksWrong = upiId.length > 0 && !isValidUpiId(upiId);
+  const globalCurrency = String(settings?.currency ?? 'INR').toUpperCase();
 
   return (
     <div className="space-y-5 pb-24">
@@ -445,7 +467,7 @@ export function BillingConfigPanel() {
                 'bg-white font-mono text-slate-900',
                 upiLooksWrong || errorField === 'upi_id'
                   ? 'border-red-300'
-                  : 'border-slate-200',
+                  : 'border-slate-200'
               )}
             />
             {upiLooksWrong ? (
@@ -461,7 +483,9 @@ export function BillingConfigPanel() {
           </div>
 
           <div>
-            <p className="mb-1.5 text-xs font-medium text-slate-600">Payee name</p>
+            <p className="mb-1.5 text-xs font-medium text-slate-600">
+              Payee name
+            </p>
             <Input
               value={(settings?.upi_payee_name ?? '') as string}
               onChange={(e) => set('upi_payee_name', e.target.value)}
@@ -474,26 +498,37 @@ export function BillingConfigPanel() {
           </div>
 
           <div>
-            <p className="mb-1.5 text-xs font-medium text-slate-600">Currency</p>
-            <Input
-              value={(settings?.currency ?? 'INR') as string}
-              onChange={(e) => set('currency', e.target.value.toUpperCase())}
-              maxLength={3}
-              className={cn(
-                'bg-white text-slate-900',
-                errorField === 'currency' ? 'border-red-300' : 'border-slate-200',
-              )}
-            />
+            <p className="mb-1.5 text-xs font-medium text-slate-600">
+              Currency
+            </p>
+            {/* Read-only: the Global currency changes in the Global header
+                with every Global price at once (report section 12). */}
+            <div className="flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 font-mono text-sm text-slate-700">
+              {globalCurrency}
+            </div>
             <p className="mt-1 text-xs text-slate-400">
-              3-letter code. UPI settles INR only.
+              Change it in the Global header above, so prices are converted at
+              the same time. UPI settles INR only.
             </p>
           </div>
         </div>
+
+        {globalCurrency !== 'INR' ? (
+          <div className="mt-4 flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
+            <p className="text-sm text-slate-600">
+              UPI accepts INR only. While Global is in {globalCurrency}, no
+              workspace on the Global plan can pay by UPI.
+            </p>
+          </div>
+        ) : null}
       </section>
 
       {/* ---- Trial & enforcement (operational) ---- */}
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-4 font-semibold text-slate-900">Trial &amp; enforcement</h3>
+        <h3 className="mb-4 font-semibold text-slate-900">
+          Trial &amp; enforcement
+        </h3>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -507,7 +542,9 @@ export function BillingConfigPanel() {
               onChange={(e) => set('trial_days', Number(e.target.value))}
               className={cn(
                 'bg-white text-slate-900',
-                errorField === 'trial_days' ? 'border-red-300' : 'border-slate-200',
+                errorField === 'trial_days'
+                  ? 'border-red-300'
+                  : 'border-slate-200'
               )}
             />
             <p className="mt-1 text-xs text-slate-400">
@@ -526,7 +563,9 @@ export function BillingConfigPanel() {
               onChange={(e) => set('grace_days', Number(e.target.value))}
               className={cn(
                 'bg-white text-slate-900',
-                errorField === 'grace_days' ? 'border-red-300' : 'border-slate-200',
+                errorField === 'grace_days'
+                  ? 'border-red-300'
+                  : 'border-slate-200'
               )}
             />
             <p className="mt-1 text-xs text-slate-400">
@@ -585,7 +624,9 @@ export function BillingConfigPanel() {
             </p>
           </div>
           <Switch
-            checked={Boolean(settings?.member_blocked_show_owner_contact ?? true)}
+            checked={Boolean(
+              settings?.member_blocked_show_owner_contact ?? true
+            )}
             onCheckedChange={(v: boolean) =>
               set('member_blocked_show_owner_contact', v)
             }
@@ -600,7 +641,9 @@ export function BillingConfigPanel() {
           className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
         >
           <h3 className="font-semibold text-slate-900">{group.title}</h3>
-          <p className="mt-0.5 mb-4 text-xs text-slate-500">{group.description}</p>
+          <p className="mt-0.5 mb-4 text-xs text-slate-500">
+            {group.description}
+          </p>
 
           <div className="grid gap-4 sm:grid-cols-2">
             {group.fields.map((field) => {
@@ -622,12 +665,13 @@ export function BillingConfigPanel() {
                       onChange={(e) =>
                         set(
                           field.key,
-                          e.target.value as SubscriptionSettings[typeof field.key],
+                          e.target
+                            .value as SubscriptionSettings[typeof field.key]
                         )
                       }
                       className={cn(
                         'w-full resize-none rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:ring-1 focus:ring-[#25D366] focus:outline-none',
-                        invalid ? 'border-red-300' : 'border-slate-200',
+                        invalid ? 'border-red-300' : 'border-slate-200'
                       )}
                     />
                   ) : (
@@ -636,12 +680,13 @@ export function BillingConfigPanel() {
                       onChange={(e) =>
                         set(
                           field.key,
-                          e.target.value as SubscriptionSettings[typeof field.key],
+                          e.target
+                            .value as SubscriptionSettings[typeof field.key]
                         )
                       }
                       className={cn(
                         'bg-white text-slate-900',
-                        invalid ? 'border-red-300' : 'border-slate-200',
+                        invalid ? 'border-red-300' : 'border-slate-200'
                       )}
                     />
                   )}
@@ -693,6 +738,356 @@ export function BillingConfigPanel() {
               <Save className="h-4 w-4" />
             )}
             Save settings
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Country page copy (localized pricing).
+//
+// Every field opens blank: a blank field uses the Global wording, which
+// is shown as its placeholder. Only what the admin types is stored, in
+// `pricing_regions.settings`. Trial length, grace, enforcement and the
+// shared feature list apply to every country and stay under Global. The
+// UPI payee is offered only for an INR country: UPI cannot collect any
+// other currency.
+// ============================================================
+
+const REGION_CUSTOM_CARD_GROUP: (typeof COPY_GROUPS)[number] = {
+  title: 'Custom card',
+  description:
+    'The enquiry card beside the priced terms. Its bullet list is shared with Global.',
+  fields: [
+    { key: 'custom_plan_label', label: 'Card title' },
+    { key: 'custom_plan_price_text', label: 'Text where a price would be' },
+    { key: 'custom_plan_body', label: 'Body', multiline: true },
+    { key: 'custom_plan_cta_text', label: 'Button text' },
+    { key: 'custom_plan_cta_link', label: 'Button link' },
+  ],
+};
+
+const REGION_TOGGLES: {
+  key:
+    | 'show_trial_badges'
+    | 'show_custom_plan'
+    | 'member_blocked_show_owner_contact';
+  label: string;
+}[] = [
+  { key: 'show_trial_badges', label: 'Offer the trial on the plan page' },
+  { key: 'show_custom_plan', label: 'Show the Custom card' },
+  {
+    key: 'member_blocked_show_owner_contact',
+    label: 'Show owner contact to blocked members',
+  },
+];
+
+type Overrides = Record<string, string | boolean | null | undefined>;
+
+function RegionSettingsPanel({ code }: { code: string }) {
+  const [overrides, setOverrides] = useState<Overrides>({});
+  const [global, setGlobal] = useState<Partial<SubscriptionSettings>>({});
+  const [currency, setCurrency] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [errorField, setErrorField] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const query = `?region=${encodeURIComponent(code)}`;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/super-admin/billing/settings${query}`);
+      if (!res.ok) throw new Error('Failed to load settings');
+      const data = await res.json();
+      setOverrides((data.settings ?? {}) as Overrides);
+      setGlobal((data.global ?? {}) as Partial<SubscriptionSettings>);
+      setCurrency(data.region?.currency ?? null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load settings');
+    } finally {
+      setLoading(false);
+    }
+  }, [query]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const set = (key: string, value: string | boolean | null) => {
+    setOverrides((prev) => ({ ...prev, [key]: value }));
+    setSaved(false);
+  };
+
+  const isInr = currency === 'INR';
+  const textGroups = [...COPY_GROUPS, REGION_CUSTOM_CARD_GROUP];
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    setErrorField(null);
+    try {
+      // Every shown field is sent; blank clears the override.
+      const payload: Record<string, unknown> = {};
+      for (const group of textGroups) {
+        for (const field of group.fields) {
+          const v = overrides[field.key as string];
+          payload[field.key as string] =
+            typeof v === 'string' && v.trim() ? v : null;
+        }
+      }
+      for (const t of REGION_TOGGLES) {
+        const v = overrides[t.key];
+        payload[t.key] = typeof v === 'boolean' ? v : null;
+      }
+      if (isInr) {
+        for (const key of ['upi_id', 'upi_payee_name']) {
+          const v = overrides[key];
+          payload[key] = typeof v === 'string' && v.trim() ? v : null;
+        }
+      }
+
+      const res = await fetch(`/api/super-admin/billing/settings${query}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body?.error ?? `Could not save settings (${res.status})`);
+        setErrorField(body?.field ?? null);
+        return;
+      }
+      setOverrides((body.settings ?? {}) as Overrides);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch {
+      setError('Could not save settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-6 w-6 animate-spin text-[#25D366]" />
+      </div>
+    );
+  }
+
+  const placeholderOf = (key: string) => {
+    const v = (global as Record<string, unknown>)[key];
+    return typeof v === 'string' && v ? v : 'Not set under Global';
+  };
+  const upiId = String(overrides.upi_id ?? '');
+  const upiLooksWrong = upiId.length > 0 && !isValidUpiId(upiId);
+
+  return (
+    <div className="space-y-5 pb-24">
+      <p className="text-sm text-slate-500">
+        Blank fields use the Global wording, shown as the placeholder. Only what
+        you type here is stored for this country.
+      </p>
+
+      {/* ---- Payments ---- */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <Wallet className="h-4 w-4 text-[#25D366]" />
+          <h3 className="font-semibold text-slate-900">Payments</h3>
+        </div>
+        {!currency ? (
+          <p className="text-sm text-slate-500">
+            Set this country&apos;s currency in the header above first.
+          </p>
+        ) : isInr ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-slate-600">
+                UPI ID (VPA)
+              </p>
+              <Input
+                value={upiId}
+                onChange={(e) => set('upi_id', e.target.value)}
+                placeholder={placeholderOf('upi_id')}
+                className={cn(
+                  'bg-white font-mono text-slate-900',
+                  upiLooksWrong || errorField === 'upi_id'
+                    ? 'border-red-300'
+                    : 'border-slate-200'
+                )}
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                Leave blank to use the Global UPI ID.
+              </p>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-slate-600">
+                Payee name
+              </p>
+              <Input
+                value={String(overrides.upi_payee_name ?? '')}
+                onChange={(e) => set('upi_payee_name', e.target.value)}
+                placeholder={placeholderOf('upi_payee_name')}
+                className="border-slate-200 bg-white text-slate-900"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
+            <p className="text-sm text-slate-600">
+              UPI payments are available in INR only, so this country has no UPI
+              settings. Customers here pay {currency} by card AutoPay.
+            </p>
+          </div>
+        )}
+        <p className="mt-4 text-xs text-slate-500">
+          Trial length, grace period, enforcement and the shared feature list
+          are set under Global and apply to every country.
+        </p>
+      </section>
+
+      {/* ---- Toggles: Global, on or off ---- */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-4 font-semibold text-slate-900">Display options</h3>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {REGION_TOGGLES.map((t) => {
+            const v = overrides[t.key];
+            const current =
+              typeof v === 'boolean' ? (v ? 'on' : 'off') : 'global';
+            const globalOn = Boolean(
+              (global as Record<string, unknown>)[t.key] ?? true
+            );
+            return (
+              <label key={t.key} className="block">
+                <span className="mb-1.5 block text-xs font-medium text-slate-600">
+                  {t.label}
+                </span>
+                <select
+                  value={current}
+                  onChange={(e) =>
+                    set(
+                      t.key,
+                      e.target.value === 'global'
+                        ? null
+                        : e.target.value === 'on'
+                    )
+                  }
+                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-900"
+                >
+                  <option value="global">
+                    Same as Global ({globalOn ? 'on' : 'off'})
+                  </option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </label>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* ---- Copy ---- */}
+      {textGroups.map((group) => (
+        <section
+          key={group.title}
+          className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+        >
+          <h3 className="font-semibold text-slate-900">{group.title}</h3>
+          <p className="mt-0.5 mb-4 text-xs text-slate-500">
+            {group.description}
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {group.fields.map((field) => {
+              const key = field.key as string;
+              const value = String(overrides[key] ?? '');
+              const invalid = errorField === key;
+              const common = {
+                value,
+                placeholder: placeholderOf(key),
+                'aria-label': field.label,
+              };
+              return (
+                <div
+                  key={key}
+                  className={field.multiline ? 'sm:col-span-2' : undefined}
+                >
+                  <p className="mb-1.5 text-xs font-medium text-slate-600">
+                    {field.label}
+                  </p>
+                  {field.multiline ? (
+                    <textarea
+                      rows={2}
+                      {...common}
+                      onChange={(e) => set(key, e.target.value)}
+                      className={cn(
+                        'w-full resize-none rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:ring-1 focus:ring-[#25D366] focus:outline-none',
+                        invalid ? 'border-red-300' : 'border-slate-200'
+                      )}
+                    />
+                  ) : (
+                    <Input
+                      {...common}
+                      onChange={(e) => set(key, e.target.value)}
+                      className={cn(
+                        'bg-white text-slate-900',
+                        invalid ? 'border-red-300' : 'border-slate-200'
+                      )}
+                    />
+                  )}
+                  {field.hint ? (
+                    <p className="mt-1 text-xs text-slate-400">{field.hint}</p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          {group.withFeatureList ? (
+            <p className="mt-4 text-xs text-slate-500">
+              The feature lines themselves are shared by every country. Set them
+              under Global.
+            </p>
+          ) : null}
+        </section>
+      ))}
+
+      {/* ---- Sticky save ---- */}
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur lg:left-64">
+        <div className="flex items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          <div className="min-w-0">
+            {error ? (
+              <p className="flex items-center gap-1.5 text-sm text-red-600">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                {error}
+              </p>
+            ) : saved ? (
+              <p className="flex items-center gap-1.5 text-sm text-green-600">
+                <Check className="h-4 w-4" />
+                Saved for this country
+              </p>
+            ) : (
+              <p className="truncate text-sm text-slate-400">
+                Customers see this only once the localized plan is enabled.
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void save()}
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-[#25D366] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#20b958] disabled:opacity-60"
+          >
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            Save country settings
           </button>
         </div>
       </div>

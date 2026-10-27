@@ -38,7 +38,15 @@ export type SuperAdminNotificationType =
   | 'contact_submitted'
   | 'newsletter_subscribed'
   | 'template_rejected'
-  | 'subscription_expiring';
+  | 'subscription_expiring'
+  | 'support_message_received'
+  // Razorpay AutoPay (migration 20261022000000)
+  | 'autopay_payment_failed'
+  | 'autopay_halted'
+  | 'billing_dispute'
+  | 'billing_webhook_dead'
+  | 'billing_anomaly'
+  | 'billing_refund';
 
 export type SuperAdminNotificationSeverity =
   'info' | 'success' | 'warning' | 'critical';

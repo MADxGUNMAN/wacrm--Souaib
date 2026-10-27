@@ -17,6 +17,11 @@ import { ArrowLeft, Save, Loader2, ImagePlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { updateSiteSettings } from './actions';
+import { MarketingCopyEditor } from './marketing-copy-editor';
+import {
+  resolveMarketingCopy,
+  type MarketingCopy,
+} from '@/lib/cms/marketing-copy';
 
 export default function GlobalSettingsPage() {
   const router = useRouter();
@@ -35,6 +40,11 @@ export default function GlobalSettingsPage() {
     support_email: '',
     copyright_text: '',
   });
+  // site_settings.marketing_copy, resolved over the defaults so every
+  // input shows what the public pages render.
+  const [marketingCopy, setMarketingCopy] = useState<MarketingCopy>(() =>
+    resolveMarketingCopy(null)
+  );
 
   useEffect(() => {
     async function loadSettings() {
@@ -58,6 +68,7 @@ export default function GlobalSettingsPage() {
           support_email: data.support_email || '',
           copyright_text: data.copyright_text || '',
         });
+        setMarketingCopy(resolveMarketingCopy(data.marketing_copy));
       }
       setIsLoading(false);
     }
@@ -69,7 +80,10 @@ export default function GlobalSettingsPage() {
     setIsSaving(true);
 
     try {
-      const res = await updateSiteSettings(formData);
+      const res = await updateSiteSettings({
+        ...formData,
+        marketing_copy: marketingCopy,
+      });
       if (res.error) {
         toast.error('Failed to save settings: ' + res.error);
       } else {
@@ -405,6 +419,12 @@ export default function GlobalSettingsPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Marketing copy (site_settings.marketing_copy) */}
+          <MarketingCopyEditor
+            value={marketingCopy}
+            onChange={setMarketingCopy}
+          />
         </div>
 
         {/* Sidebar */}

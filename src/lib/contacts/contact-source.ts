@@ -22,6 +22,7 @@ export type ContactSource =
   | 'api'
   | 'campaign'
   | 'phone_sync'
+  | 'ai'
   | 'unknown';
 
 export interface ContactSourceDisplay {
@@ -70,6 +71,11 @@ export const contactSourceConfig: Record<ContactSource, ContactSourceDisplay> =
       hint: 'phoneSyncHint',
       classes: 'bg-teal-500/10 text-teal-400 border-teal-500/20',
     },
+    ai: {
+      label: 'ai',
+      hint: 'aiHint',
+      classes: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
+    },
     // Deliberately the flattest of the set. It is the most common value on
     // any account that predates this column, and dressing "we don't know"
     // in a colour would give it more weight than the values that mean
@@ -93,6 +99,7 @@ export const CONTACT_SOURCES: readonly ContactSource[] = [
   'campaign',
   'api',
   'phone_sync',
+  'ai',
   'unknown',
 ];
 

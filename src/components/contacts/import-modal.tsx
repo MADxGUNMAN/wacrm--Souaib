@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import {
@@ -9,6 +9,7 @@ import {
   normalizeKey,
 } from '@/lib/contacts/dedupe';
 import {
+  decodeCsvBytes,
   parseContactCsv,
   type ParsedContactRow,
 } from '@/lib/contacts/parse-contact-csv';
@@ -44,6 +45,92 @@ import { useTranslations } from 'next-intl';
 
 const DEFAULT_TAG_COLOR = '#3b82f6';
 const PREVIEW_LIMIT = 5;
+
+type ImportPhase = 'checking' | 'contacts' | 'tags' | 'customFields';
+
+interface ImportProgress {
+  phase: ImportPhase;
+  /** Units finished in this phase (rows, tag pairs or field values). */
+  done: number;
+  total: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+}
+
+function ImportProgressPanel({ progress }: { progress: ImportProgress }) {
+  const t = useTranslations('Contacts.importModal');
+  const { phase, done, total, imported, skipped, failed } = progress;
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const label = {
+    checking: t('progressChecking'),
+    contacts: t('progressContacts'),
+    tags: t('progressTags'),
+    customFields: t('progressCustomFields'),
+  }[phase];
+
+  return (
+    <div
+      className="border-border bg-background/50 space-y-3 rounded-xl border p-4"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <span className="text-popover-foreground flex items-center gap-1.5 font-medium">
+          <Loader2 className="text-primary size-3.5 animate-spin" />
+          {label}
+        </span>
+        {total > 0 && (
+          <span className="text-muted-foreground tabular-nums">
+            {t('progressCount', {
+              done: done.toLocaleString(),
+              total: total.toLocaleString(),
+            })}{' '}
+            · {pct}%
+          </span>
+        )}
+      </div>
+      <div
+        className="bg-border h-1.5 w-full overflow-hidden rounded-full"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct}
+        aria-label={label}
+      >
+        <div
+          className="bg-primary h-full rounded-full transition-[width] duration-300 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums">
+        <span className="text-primary">
+          {t('resultImported', { count: imported.toLocaleString() })}
+        </span>
+        {phase === 'contacts' && total - done > 0 && (
+          <span className="text-muted-foreground">
+            {t('progressRemaining', {
+              count: (total - done).toLocaleString(),
+            })}
+          </span>
+        )}
+        {skipped > 0 && (
+          <span className="text-amber-400">
+            {t('progressSkipped', { count: skipped.toLocaleString() })}
+          </span>
+        )}
+        {failed > 0 && (
+          <span className="text-red-400">
+            {t('resultFailed', { count: failed.toLocaleString() })}
+          </span>
+        )}
+      </div>
+      <p className="text-muted-foreground text-[11px]">
+        {t('progressKeepOpen')}
+      </p>
+    </div>
+  );
+}
 
 function truncateFilename(name: string, max = 48): string {
   if (name.length <= max) return name;
@@ -142,10 +229,18 @@ export function ImportModal({
   const [tagColorByKey, setTagColorByKey] = useState<Map<string, string>>(
     new Map()
   );
+  const [parseStats, setParseStats] = useState<{
+    emptyPhoneRows: number;
+    invalidPhones: string[];
+  }>({ emptyPhoneRows: 0, invalidPhones: [] });
   const [importing, setImporting] = useState(false);
+  /** Live status while an import runs (null when idle). */
+  const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [result, setResult] = useState<{
     imported: number;
     skipped: number;
+    /** Imported numbers the sheet gave without a "+" country code. */
+    noCountryCode: number;
     failed: number;
     tagsAssigned: number;
     customFieldsCreated: number;
@@ -159,11 +254,26 @@ export function ImportModal({
     setHasCompanyColumn(false);
     setCustomFieldColumns([]);
     setTagColorByKey(new Map());
+    setParseStats({ emptyPhoneRows: 0, invalidPhones: [] });
     setResult(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
+  // Warn before a tab close/refresh would abandon a running import.
+  useEffect(() => {
+    if (!importing) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [importing]);
+
   function handleOpenChange(next: boolean) {
+    // Closing mid-import would reset the file state while inserts are
+    // still running, leaving the user with no result to look at.
+    if (!next && importing) return;
     if (!next) reset();
     onOpenChange(next);
   }
@@ -175,13 +285,16 @@ export function ImportModal({
     setFile(selected);
     setResult(null);
 
-    const text = await selected.text();
+    const text = decodeCsvBytes(await selected.arrayBuffer());
     const {
       rows,
       hasTagsColumn: csvHasTags,
       hasCompanyColumn: csvHasCompany,
       customFieldColumns: detectedCustomCols,
+      emptyPhoneRows,
+      invalidPhones,
     } = parseContactCsv(text);
+    setParseStats({ emptyPhoneRows, invalidPhones });
 
     if (rows.length === 0) {
       toast.error(t('toastNoValidRows'));
@@ -230,25 +343,47 @@ export function ImportModal({
 
       let imported = 0;
       let skipped = 0;
+      let noCountryCode = 0;
       let failed = 0;
+      const total = parsedRows.length;
+      const report = (
+        phase: ImportPhase,
+        done: number,
+        phaseTotal: number = total
+      ) =>
+        setProgress({
+          phase,
+          done,
+          total: phaseTotal,
+          imported,
+          skipped,
+          failed,
+        });
 
       // 1) De-dupe within the file by normalized phone (keep first).
       const { unique, duplicates: inFileDupes } = dedupeByPhone(parsedRows);
       skipped += inFileDupes;
+      report('checking', skipped);
 
       // 2) Skip numbers already in this account. One read of the
       //    generated `phone_normalized` column (migration 022) → Set.
-      const { data: existingRows } = await supabase
-        .from('contacts')
-        .select('phone_normalized')
-        .eq('account_id', accountId);
-      const existing = new Set(
-        (existingRows ?? [])
-          .map(
-            (r) => (r as { phone_normalized: string | null }).phone_normalized
-          )
-          .filter((p): p is string => !!p)
-      );
+      //    Paged: PostgREST caps a response at 1,000 rows, so a single
+      //    read would miss existing numbers in larger accounts.
+      const existing = new Set<string>();
+      for (let from = 0; ; from += 1000) {
+        const { data: page, error: pageErr } = await supabase
+          .from('contacts')
+          .select('phone_normalized')
+          .eq('account_id', accountId)
+          .order('id')
+          .range(from, from + 999);
+        if (pageErr) throw pageErr;
+        for (const r of page ?? []) {
+          const p = (r as { phone_normalized: string | null }).phone_normalized;
+          if (p) existing.add(p);
+        }
+        if (!page || page.length < 1000) break;
+      }
 
       const toInsert = unique.filter((row) => {
         if (existing.has(normalizeKey(row.phone))) {
@@ -257,6 +392,7 @@ export function ImportModal({
         }
         return true;
       });
+      report('checking', skipped);
 
       // 3) Resolve tag names → ids (admin+ may auto-create missing tags).
       //    Skip the round-trip when the import carries no tag names.
@@ -337,6 +473,9 @@ export function ImportModal({
       //    unique index is the backstop: a 23505 (race, or a format
       //    that normalizes equal) counts as skipped, not failed.
       const chunkSize = 50;
+      // Rows already settled before any insert (in-file + existing dupes).
+      const preSkipped = skipped;
+      report('contacts', preSkipped);
 
       for (let i = 0; i < toInsert.length; i += chunkSize) {
         const chunk = toInsert.slice(i, i + chunkSize);
@@ -369,6 +508,7 @@ export function ImportModal({
 
             if (!singleErr && singleData) {
               imported++;
+              if (!source.hasCountryCode) noCountryCode++;
               if (source.tagNames.length > 0) {
                 tagAssignments.push({
                   contactId: singleData.id,
@@ -403,6 +543,7 @@ export function ImportModal({
           for (let j = 0; j < inserted.length; j++) {
             const source = chunk[j];
             if (!source) continue;
+            if (!source.hasCountryCode) noCountryCode++;
             if (source.tagNames.length > 0) {
               tagAssignments.push({
                 contactId: inserted[j].id,
@@ -425,24 +566,32 @@ export function ImportModal({
             }
           }
         }
+
+        report('contacts', preSkipped + i + chunk.length);
       }
 
       // 5) Wire tags onto the contacts we just created.
       let tagsAssigned = 0;
-      try {
-        tagsAssigned = await assignImportedContactTags(
-          supabase,
-          tagAssignments,
-          tagIdByKey
-        );
-      } catch {
-        toast.warning(t('toastTagsWarning'));
+      if (tagAssignments.length > 0) {
+        report('tags', 0, 0);
+        try {
+          tagsAssigned = await assignImportedContactTags(
+            supabase,
+            tagAssignments,
+            tagIdByKey,
+            (done, pairs) => report('tags', done, pairs)
+          );
+        } catch {
+          toast.warning(t('toastTagsWarning'));
+        }
       }
 
       // 5.5) Insert custom field values in chunks of 100.
       let customValuesAssigned = 0;
       if (customValueAssignments.length > 0) {
-        for (let i = 0; i < customValueAssignments.length; i += 100) {
+        const cvTotal = customValueAssignments.length;
+        report('customFields', 0, cvTotal);
+        for (let i = 0; i < cvTotal; i += 100) {
           const chunk = customValueAssignments.slice(i, i + 100);
           const { error: cvErr } = await supabase
             .from('contact_custom_values')
@@ -450,12 +599,14 @@ export function ImportModal({
           if (!cvErr) {
             customValuesAssigned += chunk.length;
           }
+          report('customFields', Math.min(i + 100, cvTotal), cvTotal);
         }
       }
 
       setResult({
         imported,
         skipped,
+        noCountryCode,
         failed,
         tagsAssigned,
         customFieldsCreated,
@@ -489,6 +640,7 @@ export function ImportModal({
       toast.error(message);
     } finally {
       setImporting(false);
+      setProgress(null);
     }
   }
 
@@ -510,6 +662,32 @@ export function ImportModal({
     }
     return { unique: names.size, rowsWithTags };
   }, [parsedRows]);
+
+  const noCountryCodeRows = useMemo(
+    () => parsedRows.filter((row) => !row.hasCountryCode).length,
+    [parsedRows]
+  );
+
+  // Rows the file had that won't be imported, plus numbers to double-check.
+  const phoneNotices = (
+    <>
+      {parseStats.emptyPhoneRows > 0 && (
+        <p className="text-muted-foreground flex items-start gap-1.5 text-xs">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-400" />
+          {t('noticeEmptyPhone', { count: parseStats.emptyPhoneRows })}
+        </p>
+      )}
+      {parseStats.invalidPhones.length > 0 && (
+        <p className="text-muted-foreground flex items-start gap-1.5 text-xs">
+          <XCircle className="mt-0.5 size-3.5 shrink-0 text-red-400" />
+          {t('noticeInvalidPhone', {
+            count: parseStats.invalidPhones.length,
+            sample: parseStats.invalidPhones.slice(0, 3).join(', '),
+          })}
+        </p>
+      )}
+    </>
+  );
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -609,7 +787,9 @@ export function ImportModal({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-          {preview.length > 0 && !result && (
+          {importing && progress && <ImportProgressPanel progress={progress} />}
+
+          {preview.length > 0 && !result && !importing && (
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-muted-foreground text-[11px] font-semibold tracking-[0.14em] uppercase">
@@ -733,6 +913,16 @@ export function ImportModal({
                   {t('moreRows', { count: parsedRows.length - PREVIEW_LIMIT })}
                 </p>
               )}
+
+              <div className="space-y-1.5">
+                {noCountryCodeRows > 0 && (
+                  <p className="text-muted-foreground flex items-start gap-1.5 text-xs">
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-400" />
+                    {t('noticeNoCountryCode', { count: noCountryCodeRows })}
+                  </p>
+                )}
+                {phoneNotices}
+              </div>
             </div>
           )}
 
@@ -783,6 +973,15 @@ export function ImportModal({
                   </div>
                 )}
               </div>
+              <div className="mt-3 space-y-1.5">
+                {result.noCountryCode > 0 && (
+                  <p className="text-muted-foreground flex items-start gap-1.5 text-xs">
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-400" />
+                    {t('resultNoCountryCode', { count: result.noCountryCode })}
+                  </p>
+                )}
+                {phoneNotices}
+              </div>
             </div>
           )}
         </div>
@@ -792,6 +991,7 @@ export function ImportModal({
             type="button"
             variant="outline"
             onClick={() => handleOpenChange(false)}
+            disabled={importing}
             className="border-border text-muted-foreground hover:bg-muted"
           >
             {result ? t('close') : t('cancel')}
@@ -804,9 +1004,9 @@ export function ImportModal({
               className="bg-primary hover:bg-primary/90 text-primary-foreground"
             >
               {importing && <Loader2 className="size-4 animate-spin" />}
-              {parsedRows.length > 0
-                ? t('importBtn', { count: parsedRows.length })
-                : t('importBtn', { count: 0 })}
+              {importing
+                ? t('importingBtn')
+                : t('importBtn', { count: parsedRows.length })}
             </Button>
           )}
         </DialogFooter>

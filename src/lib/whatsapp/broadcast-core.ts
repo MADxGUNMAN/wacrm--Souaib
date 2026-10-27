@@ -31,6 +31,7 @@ import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 import type { MessageTemplate } from '@/types';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
 import { persistBroadcastMessage } from '@/lib/whatsapp/broadcast-inbox';
+import { stampRecipientSent } from '@/lib/whatsapp/broadcast-recipient-status';
 import {
   filterOptedOutPhones,
   isMarketingCategory,
@@ -147,6 +148,12 @@ export interface CreateBroadcastParams {
   sourceRef?: Record<string, unknown> | null;
   /** Defaults to `deliver_now` — see {@link BroadcastDeliveryMode}. */
   mode?: BroadcastDeliveryMode;
+  /**
+   * `schedule` mode only: when the sweep may start it (ISO). Omitted
+   * means due now. Set at insert time so the cron can never pick the row
+   * up early in the gap before a later update.
+   */
+  scheduledAt?: string | null;
 }
 
 /**
@@ -403,7 +410,10 @@ export async function createBroadcast(
   // is mandatory in that state (constraint
   // `broadcasts_scheduled_needs_time`), and backdating it by nothing at
   // all is exactly right: due now, drain immediately.
-  const scheduledAt = mode === 'schedule' ? new Date().toISOString() : null;
+  const scheduledAt =
+    mode === 'schedule'
+      ? (params.scheduledAt ?? new Date().toISOString())
+      : null;
 
   const { data: broadcast, error: bErr } = await db
     .from('broadcasts')
@@ -549,15 +559,15 @@ export async function deliverBroadcast(
 
     if (sentMessageId) {
       sentCount++;
-      await db
-        .from('broadcast_recipients')
-        .update({
-          status: 'sent',
-          sent_at: new Date().toISOString(),
-          whatsapp_message_id: sentMessageId,
-          error_message: null,
-        })
-        .eq('id', recipient.recipientRowId);
+      // Same forward-only stamp as the wizard route: correlate the wamid
+      // first, advance status only from 'pending', so a status webhook
+      // that got here first is never dragged backwards.
+      await stampRecipientSent(db, {
+        recipientId: recipient.recipientRowId,
+        broadcastId: plan.broadcastId,
+        contactId: recipient.contactId || null,
+        waMessageId: sentMessageId,
+      });
 
       // Put the message in the Inbox thread as well as the campaign
       // report. Without this the customer receives a message, replies, and
@@ -614,7 +624,10 @@ export async function deliverBroadcast(
             source: 'send_time',
           },
         })
-        .eq('id', recipient.recipientRowId);
+        .eq('id', recipient.recipientRowId)
+        // Symmetry with the forward-only sent stamp: only a row that has
+        // not advanced yet can be marked failed here.
+        .eq('status', 'pending');
     }
   }
 

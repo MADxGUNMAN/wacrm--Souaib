@@ -31,6 +31,9 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit';
+import { supabaseAdmin } from '@/lib/auth/admin-client';
+import { recordSecurityEvent } from '@/lib/security/server';
+import { requestDeviceMeta } from '@/lib/security/device';
 
 const MAX_NAME_LEN = 80;
 // Hard ceiling on caller-supplied expiry (1 year), mirroring the
@@ -144,6 +147,15 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+
+    await recordSecurityEvent(supabaseAdmin(), {
+      userId: ctx.userId,
+      accountId: ctx.accountId,
+      type: 'api_key_created',
+      meta: requestDeviceMeta(request.headers),
+      // Name and public prefix only, never the key or its hash.
+      metadata: { key_id: data.id, name: data.name, prefix: data.key_prefix },
+    });
 
     return NextResponse.json(
       {

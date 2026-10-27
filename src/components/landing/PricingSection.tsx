@@ -11,7 +11,7 @@ import {
   toAmount,
   visibleCycles,
 } from '@/lib/subscription/plans';
-import { formatCurrency } from '@/lib/currency';
+import { formatPlanAmount } from '@/lib/billing/money-format';
 import { cn } from '@/lib/utils';
 
 interface PricingSectionProps {
@@ -65,12 +65,32 @@ export function PricingSection({ section, bundle }: PricingSectionProps) {
     'One plan with every feature. Pay monthly, or save by paying yearly.';
 
   const settings = bundle?.settings;
+
+  // Plan-card button and empty state, editable on the pricing section's
+  // extra_data (CMS → Landing Sections → pricing).
+  const extra = (section?.extra_data ?? {}) as Record<string, unknown>;
+  const pick = (key: string, fallback: string) => {
+    const v = extra[key];
+    return typeof v === 'string' && v.trim() ? v : fallback;
+  };
+  const ctaText = pick('cta_text', 'Start Free Trial');
+  const ctaLink = pick('cta_link', '/signup');
+  const emptyMessage = pick(
+    'empty_message',
+    'No plans are available right now. Please check back later.'
+  );
   // A CMS currency override applies to the priced cards only; the Custom
   // card and the shared feature list always read real settings.
   const overrideCurrency = (
     section?.extra_data?.price_currency as string | undefined
   )?.trim();
-  const currency = overrideCurrency || settings?.currency || 'INR';
+  // The CMS override belongs to the Global plan only: a localized bundle
+  // is always shown in the currency it is charged in.
+  const isGlobalBundle = !bundle?.region || bundle.region.isGlobal;
+  const currency =
+    (isGlobalBundle ? overrideCurrency : undefined) ||
+    settings?.currency ||
+    'INR';
 
   // The product being sold
   const plan =
@@ -96,7 +116,8 @@ export function PricingSection({ section, bundle }: PricingSectionProps) {
     if (realPerDay === null || !cycle.duration_days) return [];
 
     // CMS override — see readOverride at the top of this file.
-    const override = readOverride(section, cycle.label);
+    // Like the currency override, it belongs to the Global plan only.
+    const override = isGlobalBundle ? readOverride(section, cycle.label) : {};
     const total = override.total ?? realTotal;
     const perDay = override.perDay ?? realPerDay;
 
@@ -147,9 +168,7 @@ export function PricingSection({ section, bundle }: PricingSectionProps) {
         {/* ---- Cards ---- */}
         {offers.length === 0 ? (
           <div className="mx-auto max-w-md rounded-xl border border-emerald-900/10 bg-white/80 p-6 text-center shadow-sm backdrop-blur-sm">
-            <p className="text-sm text-slate-500">
-              No plans are available right now. Please check back later.
-            </p>
+            <p className="text-sm text-slate-500">{emptyMessage}</p>
           </div>
         ) : (
           <div
@@ -197,7 +216,7 @@ export function PricingSection({ section, bundle }: PricingSectionProps) {
                   <div className="mt-5">
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-4xl font-bold tracking-tight text-slate-900">
-                        {formatCurrency(offer.perDay, currency)}
+                        {formatPlanAmount(offer.perDay, currency)}
                       </span>
                       <span className="text-sm font-medium text-slate-500">
                         {settings?.per_day_label ?? '/ day'}
@@ -205,7 +224,7 @@ export function PricingSection({ section, bundle }: PricingSectionProps) {
                     </div>
                     <p className="mt-1.5 text-sm text-slate-500">
                       {formatPriceEquals(settings?.price_equals_template, {
-                        total: formatCurrency(offer.total, currency),
+                        total: formatPlanAmount(offer.total, currency),
                         days: offer.days,
                       })}
                     </p>
@@ -214,14 +233,14 @@ export function PricingSection({ section, bundle }: PricingSectionProps) {
                   {offer.savings ? (
                     <span className="mt-4 inline-flex w-fit items-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
                       {settings?.save_label ?? 'Save'}{' '}
-                      {formatCurrency(offer.savings, currency)}
+                      {formatPlanAmount(offer.savings, currency)}
                     </span>
                   ) : (
                     <div className="mt-4 h-6" /> // spacer to keep cards aligned
                   )}
 
                   <Link
-                    href="/signup"
+                    href={ctaLink}
                     className={cn(
                       'mt-8 flex w-full items-center justify-center rounded-xl px-4 py-3 text-sm font-bold transition-all',
                       recommended
@@ -229,7 +248,7 @@ export function PricingSection({ section, bundle }: PricingSectionProps) {
                         : 'bg-slate-100 text-slate-900 hover:bg-slate-200'
                     )}
                   >
-                    Start Free Trial
+                    {ctaText}
                   </Link>
                 </div>
               );

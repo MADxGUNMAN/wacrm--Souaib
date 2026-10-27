@@ -107,7 +107,9 @@ export interface ContactTagAssignment {
 export async function assignImportedContactTags(
   supabase: SupabaseClient,
   assignments: ContactTagAssignment[],
-  tagIdByKey: Map<string, string>
+  tagIdByKey: Map<string, string>,
+  /** Called after each saved chunk with (pairs done, pairs total). */
+  onProgress?: (done: number, total: number) => void
 ): Promise<number> {
   const rows: { contact_id: string; tag_id: string }[] = [];
 
@@ -134,7 +136,28 @@ export async function assignImportedContactTags(
     });
     if (error) throw error;
     assigned += chunk.length;
+    onProgress?.(assigned, rows.length);
   }
 
   return assigned;
+}
+
+/**
+ * Ids for exactly the requested names, in request order.
+ *
+ * 
+esolveImportTagIds returns a lookup of EVERY tag in the account
+ * (that is how it finds existing ones), so iterating its values would
+ * select all of them — use this to pick only what was asked for.
+ */
+export function idsForTagNames(
+  tagIdByKey: Map<string, string>,
+  names: readonly string[]
+): string[] {
+  const out: string[] = [];
+  for (const name of names) {
+    const id = tagIdByKey.get(name.trim().toLowerCase());
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
 }

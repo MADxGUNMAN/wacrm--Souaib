@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
 import { formatPhoneNumber } from '@/lib/phone/countries';
+import { buildContactSearchFilter } from '@/lib/contacts/search';
 import type { WhatsAppContactCard } from '@/lib/whatsapp/meta-api';
 import { toast } from 'sonner';
 
@@ -74,9 +75,8 @@ export function ContactPickerDialog({
         .limit(30);
 
       if (query.trim()) {
-        const q = `%${query.trim()}%`;
         req = req.or(
-          `name.ilike.${q},phone.ilike.${q},company.ilike.${q},email.ilike.${q}`
+          buildContactSearchFilter(query, ['name', 'phone', 'company', 'email'])
         );
       }
 

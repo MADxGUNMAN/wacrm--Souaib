@@ -153,9 +153,23 @@ describe('body field flattening', () => {
 
     expect(paths).toContain('template.params.headerMediaUrl');
     expect(paths).toContain('template.params.headerMediaId');
+    expect(paths).toContain('template.params.headerDocumentFilename');
     expect(paths).toContain('template.params.body');
     expect(paths).not.toContain('template.params[].headerMediaUrl');
     expect(paths.some((p) => p.startsWith('template.params[]'))).toBe(false);
+  });
+
+  it('documents the document-header filename key', () => {
+    // The second ticket from the same integrator: the PDF delivered but
+    // arrived named "Untitled", and there was no documented field for it.
+    const field = send.bodyFields.find(
+      (f) => f.path === 'template.params.headerDocumentFilename'
+    );
+    expect(field).toBeDefined();
+    expect(field!.depth).toBe(2);
+    // Must say it is derived when omitted, or callers will assume it is
+    // mandatory and hardcode a filename they already have in the URL.
+    expect(field!.description).toMatch(/derived/i);
   });
 
   it('documents the media-header key a DOCUMENT template needs', () => {

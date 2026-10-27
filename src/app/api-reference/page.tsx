@@ -26,17 +26,47 @@ import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 
 import { ApiReference } from '@/components/api-docs/api-reference';
+import { getSiteSettings } from '@/lib/cms/queries';
+import { resolveSiteUrl } from '@/lib/cms/sitemap';
 import { DEFAULT_BASE_URL } from '@/lib/api-docs/code-samples';
 import {
   buildApiReferenceView,
   resolveDocsBaseUrl,
 } from '@/lib/api-docs/view-model';
 
-export const metadata: Metadata = {
-  title: 'API reference',
-  description:
-    'Developer reference for the WhatsApp CRM public REST API (v1): endpoints, scopes, error codes, rate limits, pagination and webhooks, with runnable examples in cURL, Node.js, Python, PHP, Go and Ruby.',
-};
+const API_REFERENCE_TITLE = 'API reference';
+const API_REFERENCE_DESCRIPTION =
+  'Developer reference for the WhatsApp CRM public REST API (v1): endpoints, scopes, error codes, rate limits, pagination and webhooks, with runnable examples in cURL, Node.js, Python, PHP, Go and Ruby.';
+
+// Public and indexable (it's listed in sitemap.xml), unless the global
+// "no_index" switch in CMS → Global Settings is on.
+export async function generateMetadata(): Promise<Metadata> {
+  const settings = await getSiteSettings();
+  const noIndex = settings?.no_index ?? false;
+  const siteName = settings?.site_name || 'Replai';
+  const url = `${resolveSiteUrl(settings)}/api-reference`;
+  // The root layout's title template appends the site name.
+  const title = API_REFERENCE_TITLE;
+  return {
+    title,
+    description: API_REFERENCE_DESCRIPTION,
+    alternates: { canonical: url },
+    openGraph: {
+      title: `${title} — ${siteName}`,
+      description: API_REFERENCE_DESCRIPTION,
+      type: 'website',
+      url,
+      siteName,
+      images: settings?.og_image_url ? [{ url: settings.og_image_url }] : [],
+    },
+    twitter: {
+      card: 'summary',
+      title: `${title} — ${siteName}`,
+      description: API_REFERENCE_DESCRIPTION,
+    },
+    robots: { index: !noIndex, follow: !noIndex },
+  };
+}
 
 export default async function ApiReferencePage() {
   const headerList = await headers();

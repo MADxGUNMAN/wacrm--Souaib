@@ -16,6 +16,7 @@ import {
   Loader2,
   Mail,
   Megaphone,
+  MessagesSquare,
   UserPlus,
   XCircle,
 } from 'lucide-react';
@@ -79,6 +80,17 @@ function notificationIcon(type: SuperAdminNotificationType) {
       return <FileWarning className="h-3.5 w-3.5 text-amber-500" />;
     case 'subscription_expiring':
       return <Clock className="h-3.5 w-3.5 text-amber-500" />;
+    case 'support_message_received':
+      return <MessagesSquare className="h-3.5 w-3.5 text-[#159947]" />;
+    case 'autopay_payment_failed':
+    case 'autopay_halted':
+      return <CreditCard className="h-3.5 w-3.5 text-amber-500" />;
+    case 'billing_refund':
+      return <CreditCard className="h-3.5 w-3.5 text-blue-500" />;
+    case 'billing_dispute':
+    case 'billing_anomaly':
+    case 'billing_webhook_dead':
+      return <FileWarning className="h-3.5 w-3.5 text-red-500" />;
     default:
       return <Building2 className="h-3.5 w-3.5 text-slate-400" />;
   }
@@ -107,7 +119,8 @@ function getSuperAdminTitle(pathname: string): {
   if (pathname.startsWith('/super-admin/payments')) {
     return {
       title: 'Payments & Subscriptions',
-      subtitle: 'Verify UPI payments manually and manage active subscriptions',
+      subtitle:
+        'Manual UPI review, Razorpay AutoPay, payments and billing health',
     };
   }
   if (pathname.startsWith('/super-admin/plans')) {
@@ -189,6 +202,22 @@ function getSuperAdminTitle(pathname: string): {
     return {
       title: 'Newsletter Subscribers',
       subtitle: 'Manage email subscriber list and export contacts',
+    };
+  }
+  // Must come BEFORE the Live Chat check below — '/super-admin/live-chat'
+  // is a prefix of this path, and startsWith would otherwise title the
+  // settings page "Live Chat".
+  if (pathname.startsWith('/super-admin/live-chat-settings')) {
+    return {
+      title: 'Live Chat Settings',
+      subtitle:
+        'Turn Live chat on or off, choose which workspaces get it, and manage the chat bubble',
+    };
+  }
+  if (pathname.startsWith('/super-admin/live-chat')) {
+    return {
+      title: 'Live Chat',
+      subtitle: 'In-app support conversations with customer workspaces',
     };
   }
   // Both Sheet Add-on pages. Without these the pathname fell through to

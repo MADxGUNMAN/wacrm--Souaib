@@ -19,8 +19,10 @@ import {
   Ban,
   CheckCircle2,
   ChevronDown,
+  Trash2,
 } from 'lucide-react';
 import type { AccountDeepDive } from '@/types/super-admin';
+import { DeleteAccountDialog } from '@/components/super-admin/accounts/delete-account-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Table,
@@ -43,6 +45,7 @@ import {
 } from '@/lib/super-admin/account-status';
 import { AccountAutoEmailCard } from '@/components/super-admin/auto-mail/account-auto-email-card';
 import { WhatsAppConnectionCard } from '@/components/super-admin/accounts/whatsapp-connection-card';
+import { AiConnectorsCard } from '@/components/super-admin/accounts/ai-connectors-card';
 import { toast } from 'sonner';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -101,6 +104,7 @@ export default function AccountDeepDivePage() {
 
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [isBanning, setIsBanning] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const formatter = useMemo(() => new Intl.NumberFormat('en-US'), []);
 
@@ -157,21 +161,55 @@ export default function AccountDeepDivePage() {
     setIsBanning(true);
     try {
       const method = isCurrentlyBanned ? 'DELETE' : 'POST';
-      const body = !isCurrentlyBanned
-        ? JSON.stringify({ reason: 'Admin enforced ban' })
-        : undefined;
+      const send = (extra: Record<string, unknown> = {}) =>
+        fetch(`/api/super-admin/accounts/${id}/ban`, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: !isCurrentlyBanned
+            ? JSON.stringify({ reason: 'Admin enforced ban', ...extra })
+            : undefined,
+        });
+      let res = await send();
+      let payload = await res.json().catch(() => ({}));
 
-      const res = await fetch(`/api/super-admin/accounts/${id}/ban`, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body,
-      });
+      // The server refuses to ban a workspace with live AutoPay until the
+      // admin confirms that banning also cancels it at Razorpay.
+      if (
+        res.status === 409 &&
+        payload.code === 'autopay_confirmation_required'
+      ) {
+        const first = (
+          payload.autopay as { mode: string; status: string }[] | undefined
+        )?.[0];
+        const label = first
+          ? `${first.status}, ${first.mode === 'live' ? 'Live mode' : 'Test mode'}`
+          : 'active';
+        const again = await confirm({
+          title: 'Ban and cancel AutoPay?',
+          description: `This workspace has Razorpay AutoPay (${label}). Banning cancels it at Razorpay immediately. Unbanning later does not restore it; the customer would need to set up AutoPay again.`,
+          confirmText: 'Ban and cancel AutoPay',
+          cancelText: 'Cancel',
+          variant: 'destructive',
+        });
+        if (!again) return;
+        res = await send({ confirmAutopayCancel: true });
+        payload = await res.json().catch(() => ({}));
+      }
 
-      if (!res.ok) throw new Error('Failed to update ban status');
-
-      toast.success(
-        isCurrentlyBanned ? 'Account unbanned successfully' : 'Account banned'
-      );
+      if (!res.ok) {
+        throw new Error(payload.error || 'Failed to update ban status');
+      }
+      if (isCurrentlyBanned) {
+        toast.success('Account unbanned successfully');
+      } else if (payload.autopay?.outcome === 'cancelled') {
+        toast.success('Account banned. AutoPay was cancelled at Razorpay.');
+      } else if (payload.autopay?.outcome === 'failed') {
+        toast.warning(
+          `Account banned, but AutoPay was not cancelled: ${payload.autopay.message}`
+        );
+      } else {
+        toast.success('Account banned');
+      }
       await fetchAccount();
     } catch (err) {
       toast.error((err as Error).message);
@@ -206,6 +244,23 @@ export default function AccountDeepDivePage() {
 
   const { account, members, stats, whatsapp_config } = data;
   const owner = members.find((m) => m.account_role === 'owner');
+
+  const holdsSuperAdmin = members.some(
+    (m) => (m as { is_super_admin?: boolean }).is_super_admin === true
+  );
+  const deleteBlocked = account.is_banned
+    ? 'This account is banned. Unban it first, then you can delete it.'
+    : holdsSuperAdmin
+      ? 'This workspace contains a super admin account and cannot be deleted.'
+      : null;
+
+  const handleDeleteClick = () => {
+    if (deleteBlocked) {
+      toast.error(deleteBlocked);
+      return;
+    }
+    setDeleteOpen(true);
+  };
 
   // Same inputs the accounts-list view exposes as `whatsapp_status` and
   // `messages_30d`, run through the same helper — so the badge here is
@@ -361,6 +416,26 @@ export default function AccountDeepDivePage() {
                   <Ban className="mr-1 h-3.5 w-3.5" /> Ban Account
                 </>
               )}
+            </Button>
+
+            {/* Permanent delete. Greyed out while the account is banned
+                (it must be unbanned first) or when it holds a super admin.
+                aria-disabled rather than `disabled`, so a click still
+                explains why instead of silently doing nothing. The server
+                enforces the same rules. */}
+            <Button
+              variant="outline"
+              size="sm"
+              aria-disabled={deleteBlocked !== null}
+              title={deleteBlocked ?? 'Permanently delete this workspace'}
+              onClick={handleDeleteClick}
+              className={
+                deleteBlocked
+                  ? 'h-7 cursor-not-allowed border-slate-200 bg-slate-100 px-2.5 text-xs font-medium text-slate-400 hover:bg-slate-100 hover:text-slate-400'
+                  : 'h-7 border-red-300 px-2.5 text-xs font-medium text-red-600 hover:bg-red-50 hover:text-red-700'
+              }
+            >
+              <Trash2 className="mr-1 h-3.5 w-3.5" /> Delete Account
             </Button>
           </div>
         </div>
@@ -684,6 +759,9 @@ export default function AccountDeepDivePage() {
               fetch and refresh — see whatsapp-connection-card.tsx. */}
           <WhatsAppConnectionCard accountId={id} config={whatsapp_config} />
 
+          {/* Claude / ChatGPT connections and the platform lock. */}
+          <AiConnectorsCard accountId={id} />
+
           {/* Module Bento */}
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -720,6 +798,20 @@ export default function AccountDeepDivePage() {
           </div>
         </div>
       </div>
+
+      <DeleteAccountDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        account={{
+          id: account.id,
+          name: account.name,
+          ownerEmail: owner?.email ?? null,
+          members: members.length,
+          contacts: stats.contact_count,
+          messages: stats.messages_total,
+        }}
+        onDeleted={() => router.replace('/super-admin/accounts')}
+      />
     </div>
   );
 }

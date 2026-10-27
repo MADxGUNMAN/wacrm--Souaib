@@ -7,6 +7,7 @@ import {
 import { createClient } from '@/lib/supabase/server';
 import { resolveSubscriptionState } from '@/lib/subscription/status';
 import { LandingNavbar } from '@/components/landing/LandingNavbar';
+import { resolveMarketingCopy } from '@/lib/cms/marketing-copy';
 import { LandingFooter } from '@/components/landing/LandingFooter';
 import { ContactSection } from '@/components/landing/ContactSection';
 import { UpgradeHeader } from '@/components/billing/upgrade-header';
@@ -93,6 +94,7 @@ export default async function ContactPage() {
           siteName={settings?.site_name}
           logoUrl={settings?.logo_url}
           links={settings?.header_links}
+          ctaLabels={resolveMarketingCopy(settings?.marketing_copy).navbar}
         />
       )}
 

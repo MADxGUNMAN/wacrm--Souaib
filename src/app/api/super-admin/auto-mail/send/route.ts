@@ -31,11 +31,13 @@ import {
 import { getEmailBranding } from '@/lib/email/branding';
 import { sendEmail } from '@/lib/email/send';
 import {
+  loadAutopayAccountIds,
   loadOperatorAccountIds,
   loadRule,
   sendReminder,
   type SendOutcome,
 } from '@/lib/auto-mail/reminders';
+import { getRazorpayConfig } from '@/lib/billing/razorpay/config';
 import {
   daysPhrase,
   renderReminderEmail,
@@ -176,6 +178,24 @@ export async function POST(request: Request) {
         {
           error:
             'This workspace is opted out of Auto Mail. Turn the opt-out off first if you want to email them.',
+        },
+        { status: 409 }
+      );
+    }
+
+    // Same rule as the cron (plan F5): an AutoPay renewal is automatic,
+    // so a "your plan ends, act now" email would be untrue.
+    const razorpayMode = getRazorpayConfig()?.mode ?? null;
+    if (
+      razorpayMode &&
+      (await loadAutopayAccountIds(admin, [accountId], razorpayMode)).has(
+        accountId
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'This workspace has AutoPay set up, so its renewal is charged automatically and a reminder would be misleading.',
         },
         { status: 409 }
       );

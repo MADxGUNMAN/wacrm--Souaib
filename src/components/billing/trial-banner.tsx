@@ -20,9 +20,13 @@
 // ============================================================
 
 import Link from 'next/link';
-import { Clock, AlertTriangle } from 'lucide-react';
+import { Clock, AlertTriangle, ShieldCheck } from 'lucide-react';
 
+import { renewHref } from '@/lib/billing/razorpay/links';
 import { useSubscription } from '@/hooks/use-subscription';
+import { formatBillingDate } from '@/lib/billing/razorpay/format';
+import { fromMinor } from '@/lib/billing/razorpay/money';
+import { formatPlanAmount } from '@/lib/billing/money-format';
 import { cn } from '@/lib/utils';
 
 export function TrialBanner() {
@@ -55,6 +59,50 @@ export function TrialBanner() {
     );
   }
 
+  // ---- AutoPay needs attention (plan section 4, rows 8 and 11) ----
+  //
+  // Shown on every page, ahead of everything below, because the customer
+  // is still in the CRM (grace or paid time remaining) and this is the
+  // moment acting is cheap. Members see the facts without the CTA.
+  const autopay = data?.autopay ?? null;
+  if (
+    data &&
+    autopay &&
+    !data.state.isBlocked &&
+    (autopay.display.key === 'payment_failed_retrying' ||
+      autopay.display.key === 'action_needed')
+  ) {
+    const stopped = autopay.display.key === 'action_needed';
+    const until = formatBillingDate(data.state.endsAt);
+    return (
+      <div
+        role="status"
+        className="border-destructive/25 bg-destructive/[0.06] mx-4 mt-3 flex shrink-0 flex-col gap-3 rounded-xl border px-4 py-2.5 sm:mx-6 sm:flex-row sm:items-center sm:justify-between"
+      >
+        <div className="flex items-start gap-2.5 sm:items-center">
+          <AlertTriangle className="text-destructive mt-0.5 size-4 shrink-0 sm:mt-0" />
+          <p className="text-foreground text-sm">
+            {stopped
+              ? `AutoPay stopped after failed payments.${until ? ` Renew before ${until} to keep access.` : ' Renew to keep access.'}`
+              : `AutoPay payment failed${autopay.lastFailure ? `: ${autopay.lastFailure}` : '.'} Razorpay will retry automatically.`}
+          </p>
+        </div>
+        {isOwner ? (
+          <Link
+            href={stopped ? renewHref(autopay) : '/settings?tab=billing'}
+            className="bg-destructive hover:bg-destructive/90 inline-flex shrink-0 items-center justify-center rounded-lg px-4 py-1.5 text-sm font-semibold text-white transition-colors"
+          >
+            {stopped ? 'Renew now' : 'Manage billing'}
+          </Link>
+        ) : (
+          <span className="text-muted-foreground shrink-0 text-xs">
+            Ask your workspace owner to check billing
+          </span>
+        )}
+      </div>
+    );
+  }
+
   // ---- A second window is already queued: NO BANNER ----
   //
   // This bar exists to create urgency and drive an upgrade. Once a
@@ -75,6 +123,37 @@ export function TrialBanner() {
 
   // ---- Standard trial banner (no queued window) ----
   if (!showTrialBanner || !data || daysLeft === null) return null;
+
+  // ---- Trial with AutoPay already authorised ----
+  // There is nothing to upgrade to: the first charge is booked for the
+  // trial's end. A countdown with an "Upgrade" button would suggest the
+  // set-up did not work. Calm, informational, no CTA.
+  if (autopay?.display.key === 'autopay_authorised') {
+    const ends = formatBillingDate(data.state.endsAt);
+    const first = formatBillingDate(
+      autopay.firstChargeAt ?? autopay.nextChargeAt
+    );
+    let amount = '';
+    try {
+      amount = formatPlanAmount(
+        fromMinor(autopay.amountMinor, autopay.currency),
+        autopay.currency
+      );
+    } catch {
+      amount = '';
+    }
+    return (
+      <div className="border-border bg-muted/40 mx-4 mt-3 flex shrink-0 items-start gap-2.5 rounded-xl border px-4 py-2.5 sm:mx-6 sm:items-center">
+        <ShieldCheck className="text-primary mt-0.5 size-4 shrink-0 sm:mt-0" />
+        <p className="text-foreground text-sm">
+          {ends ? `Trial ends ${ends}` : 'Free trial'} · AutoPay set up
+          {first
+            ? ` (${amount ? `${amount} on ` : 'first charge '}${first})`
+            : ''}
+        </p>
+      </div>
+    );
+  }
 
   // Escalate the styling as the deadline closes in. Three days is the
   // point where an owner realistically needs to act to avoid an

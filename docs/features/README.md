@@ -11,7 +11,8 @@ specifications and step-by-step runbooks belong in the topic docs under
 Update the file when a phase closes or a blocker changes. If it starts
 duplicating a plan document, cut it back.
 
-| Feature                                           | State                                         |
-| ------------------------------------------------- | --------------------------------------------- |
-| [Google Sheets add-on](./google-sheets-addon.md)  | Built; awaiting Google review                 |
-| [WhatsApp Coexistence](./whatsapp-coexistence.md) | Shipped; one manual Meta dashboard check left |
+| Feature                                                      | State                                                                  |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| [Google Sheets add-on](./google-sheets-addon.md)             | Built; awaiting Google review                                          |
+| [WhatsApp Coexistence](./whatsapp-coexistence.md)            | Shipped; one manual Meta dashboard check left                          |
+| [AI connector (Claude / ChatGPT)](../ai-connector/README.md) | Live; ChatGPT plugin published 24 Oct 2026, Claude directory in review |

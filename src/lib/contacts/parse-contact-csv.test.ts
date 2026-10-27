@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseContactCsv, parseTagCell } from './parse-contact-csv';
+import {
+  decodeCsvBytes,
+  parseContactCsv,
+  parseTagCell,
+} from './parse-contact-csv';
 
 describe('parseTagCell', () => {
   it('splits comma-separated tags and trims whitespace', () => {
@@ -34,9 +38,12 @@ describe('parseContactCsv', () => {
       hasTagsColumn: true,
       hasCompanyColumn: false,
       customFieldColumns: [],
+      emptyPhoneRows: 0,
+      invalidPhones: [],
       rows: [
         {
           phone: '+15551234567',
+          hasCountryCode: true,
           name: 'Alice',
           email: undefined,
           company: undefined,
@@ -45,6 +52,7 @@ describe('parseContactCsv', () => {
         },
         {
           phone: '+15559876543',
+          hasCountryCode: true,
           name: 'Bob',
           email: undefined,
           company: undefined,
@@ -63,9 +71,12 @@ describe('parseContactCsv', () => {
       hasTagsColumn: false,
       hasCompanyColumn: false,
       customFieldColumns: [],
+      emptyPhoneRows: 0,
+      invalidPhones: [],
       rows: [
         {
           phone: '+15551234567',
+          hasCountryCode: true,
           name: 'Alice',
           email: undefined,
           company: undefined,
@@ -94,5 +105,41 @@ describe('parseContactCsv', () => {
       'Order ID': 'ORD-9922',
       City: 'London',
     });
+  });
+
+  it('keeps every country code, strips extensions and reports unusable rows', () => {
+    // Shape of a real multi-country sheet: trailing empty columns, blank
+    // phones, extensions, local numbers and an Excel-mangled value.
+    const csv = [
+      'phone,name,email,company,tags,,,',
+      '+98 71 5372 5951,Iran Khodro Car Dealer,,,IRAN,,,',
+      '+211 92 246 6000,Global Link,,,SOUTH SUDAN,,,',
+      '+266 5141 2347 ext. 58429948,Toyota Lesotho,,,LESOTHO,,,',
+      '050 675 1025,Dubai Dealer,,,UAE,,,',
+      ',No Phone Motors,,,IRAQ,,,',
+      ',,,,,,,',
+      '2.14E+11,Broken Number,,,NIGERIA,,,',
+    ].join('\r\n');
+
+    const result = parseContactCsv(csv);
+    expect(result.rows.map((r) => [r.phone, r.hasCountryCode])).toEqual([
+      ['+987153725951', true],
+      ['+211922466000', true],
+      ['+26651412347', true],
+      ['050 675 1025', false],
+    ]);
+    expect(result.emptyPhoneRows).toBe(1);
+    expect(result.invalidPhones).toEqual(['2.14E+11']);
+    expect(result.customFieldColumns).toEqual([]);
+  });
+});
+
+describe('decodeCsvBytes', () => {
+  it('decodes UTF-8 and falls back to Windows-1252', () => {
+    expect(decodeCsvBytes(new TextEncoder().encode('Café'))).toBe('Café');
+    // "Café" + NBSP in Windows-1252 (invalid as UTF-8)
+    expect(decodeCsvBytes(new Uint8Array([0x43, 0x61, 0x66, 0xe9, 0xa0]))).toBe(
+      'Caf\u00e9\u00a0'
+    );
   });
 });

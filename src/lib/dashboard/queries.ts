@@ -6,9 +6,11 @@ import {
   localDayKey,
   mondayIndex,
   startOfLocalDay,
+  type DayOpts,
 } from './date-utils'
 import type {
   ActivityItem,
+  ActivityPage,
   ConversationsSeriesPoint,
   MetricsBundle,
   PipelineDonutData,
@@ -27,11 +29,15 @@ import type {
 
 type DB = SupabaseClient
 
+// Every loader takes optional DayOpts. The dashboard (browser) passes none
+// and gets the user's local day; the AI connector (server) passes the
+// workspace's timezone so both agree on what "today" means.
+
 // --- 1. Metric cards ---------------------------------------------------
 
-export async function loadMetrics(db: DB): Promise<MetricsBundle> {
-  const todayStart = startOfLocalDay().toISOString()
-  const yesterdayStart = daysAgoStart(1).toISOString()
+export async function loadMetrics(db: DB, opts: DayOpts = {}): Promise<MetricsBundle> {
+  const todayStart = startOfLocalDay(opts.now ?? new Date(), opts.timeZone).toISOString()
+  const yesterdayStart = daysAgoStart(1, opts).toISOString()
 
   const [
     openConvCur,
@@ -118,8 +124,9 @@ export async function loadMetrics(db: DB): Promise<MetricsBundle> {
 export async function loadConversationsSeries(
   db: DB,
   rangeDays: number,
+  opts: DayOpts = {},
 ): Promise<ConversationsSeriesPoint[]> {
-  const start = daysAgoStart(rangeDays - 1).toISOString()
+  const start = daysAgoStart(rangeDays - 1, opts).toISOString()
   const { data, error } = await db
     .from('messages')
     .select('created_at, sender_type')
@@ -127,12 +134,12 @@ export async function loadConversationsSeries(
     .order('created_at', { ascending: true })
   if (error) throw error
 
-  const keys = lastNDayKeys(rangeDays)
+  const keys = lastNDayKeys(rangeDays, opts)
   const buckets = new Map<string, { incoming: number; outgoing: number }>()
   for (const k of keys) buckets.set(k, { incoming: 0, outgoing: 0 })
 
   for (const row of (data ?? []) as { created_at: string; sender_type: string }[]) {
-    const key = localDayKey(row.created_at)
+    const key = localDayKey(row.created_at, opts.timeZone)
     const bucket = buckets.get(key)
     if (!bucket) continue
     if (row.sender_type === 'customer') bucket.incoming += 1
@@ -187,13 +194,13 @@ export async function loadPipelineDonut(db: DB): Promise<PipelineDonutData> {
 
 // --- 4. Response time by day of week ----------------------------------
 
-export async function loadResponseTime(db: DB): Promise<ResponseTimeSummary> {
+export async function loadResponseTime(db: DB, opts: DayOpts = {}): Promise<ResponseTimeSummary> {
   // Pull the last 14 days of messages in one shot, then walk per
   // conversation to find each "first inbound" → "first subsequent
   // outbound" pair. 14 days gives us both "this week" + "last week"
   // with enough overlap if the user opens the dashboard late on a
   // Monday.
-  const fourteenDaysAgo = daysAgoStart(13).toISOString()
+  const fourteenDaysAgo = daysAgoStart(13, opts).toISOString()
   const { data, error } = await db
     .from('messages')
     .select('conversation_id, sender_type, created_at')
@@ -234,9 +241,10 @@ export async function loadResponseTime(db: DB): Promise<ResponseTimeSummary> {
     }
   }
 
-  const now = new Date()
-  const thisWeekStart = daysAgoStart(mondayIndex(now))
-  const lastWeekStart = daysAgoStart(mondayIndex(now) + 7)
+  const now = opts.now ?? new Date()
+  const tz = opts.timeZone
+  const thisWeekStart = daysAgoStart(mondayIndex(now, tz), opts)
+  const lastWeekStart = daysAgoStart(mondayIndex(now, tz) + 7, opts)
 
   // Per-day-of-week buckets, averaged over both weeks' worth of data
   // so each bar has more samples to stand on. If a day has no samples
@@ -249,7 +257,7 @@ export async function loadResponseTime(db: DB): Promise<ResponseTimeSummary> {
   for (const s of samples) {
     const diffMin = (s.responseAt.getTime() - s.customerAt.getTime()) / 60_000
     if (diffMin < 0) continue
-    const dow = mondayIndex(s.customerAt)
+    const dow = mondayIndex(s.customerAt, tz)
     byDow.get(dow)!.push(diffMin)
     if (s.customerAt >= thisWeekStart) {
       thisWeekMins.push(diffMin)
@@ -283,38 +291,100 @@ export async function loadResponseTime(db: DB): Promise<ResponseTimeSummary> {
 
 // --- 5. Activity feed --------------------------------------------------
 
+/** Largest page the feed will ever ask for. Bounds every source query. */
+export const ACTIVITY_MAX_PAGE_SIZE = 50
+
+/**
+ * One page of the activity feed, newest first.
+ *
+ * Keyset (cursor) pagination over five sources. Each source is asked
+ * for at most `pageSize + 1` rows strictly older than `before`, so the
+ * merged, sorted result always contains the true newest `pageSize`
+ * events across all sources, plus one extra row that tells us whether
+ * an older page exists. Nothing is ever read in bulk: a page costs at
+ * most 5 x (pageSize + 1) rows however much history the account has,
+ * and no COUNT(*) is run over the large tables.
+ *
+ * `nextCursor` is the timestamp of the last row shown. Two events with
+ * the exact same microsecond timestamp straddling a page boundary could
+ * be skipped; with Postgres microsecond timestamps that is negligible.
+ */
+export async function loadActivityPage(
+  db: DB,
+  opts: { pageSize?: number; before?: string | null } = {}
+): Promise<ActivityPage> {
+  const pageSize = Math.min(
+    ACTIVITY_MAX_PAGE_SIZE,
+    Math.max(1, Math.floor(opts.pageSize ?? 10))
+  )
+  const before = opts.before ?? null
+  const items = await fetchActivitySources(db, pageSize + 1, before)
+  const page = items.slice(0, pageSize)
+  const hasMore = items.length > pageSize
+  return {
+    items: page,
+    hasMore,
+    nextCursor: hasMore && page.length > 0 ? page[page.length - 1].at : null,
+  }
+}
+
+/** Kept for existing callers: the newest `limit` events. */
 export async function loadActivity(db: DB, limit = 20): Promise<ActivityItem[]> {
-  // Pull ~10 from each source (plenty of headroom after merge-sort),
-  // then interleave by timestamp. The individual per-table limits
-  // keep the payload small; the final limit is enforced after sort.
+  return (await loadActivityPage(db, { pageSize: limit })).items
+}
+
+async function fetchActivitySources(
+  db: DB,
+  perSource: number,
+  before: string | null
+): Promise<ActivityItem[]> {
+  const older = <Q extends { lt: (col: string, v: string) => Q }>(
+    q: Q,
+    col: string
+  ): Q => (before ? q.lt(col, before) : q)
+
   const [msgs, contacts, deals, broadcasts, autoLogs] = await Promise.all([
-    db
-      .from('messages')
-      .select('id, content_text, sender_type, created_at, conversation_id, conversations(contact_id, contacts(name, phone))')
-      .eq('sender_type', 'customer')
+    older(
+      db
+        .from('messages')
+        // Name the FK: conversations.pinned_message_id also links the
+        // two tables, so a bare `conversations(...)` is ambiguous and
+        // PostgREST refuses it (PGRST201).
+        .select('id, content_text, sender_type, created_at, conversation_id, conversations!messages_conversation_id_fkey(contact_id, contacts(name, phone))')
+        .eq('sender_type', 'customer'),
+      'created_at'
+    )
       .order('created_at', { ascending: false })
-      .limit(10),
-    db
-      .from('contacts')
-      .select('id, name, phone, created_at')
+      .limit(perSource),
+    older(db.from('contacts').select('id, name, phone, created_at'), 'created_at')
       .order('created_at', { ascending: false })
-      .limit(10),
-    db
-      .from('deals')
-      .select('id, title, updated_at, stage:pipeline_stages(name)')
+      .limit(perSource),
+    older(
+      db.from('deals').select('id, title, updated_at, stage:pipeline_stages(name)'),
+      'updated_at'
+    )
       .order('updated_at', { ascending: false })
-      .limit(10),
-    db
-      .from('broadcasts')
-      .select('id, name, status, total_recipients, created_at')
+      .limit(perSource),
+    older(
+      db.from('broadcasts').select('id, name, status, total_recipients, created_at'),
+      'created_at'
+    )
       .order('created_at', { ascending: false })
-      .limit(5),
-    db
-      .from('automation_logs')
-      .select('id, trigger_event, status, created_at, automation:automations(name), contact:contacts(name, phone)')
+      .limit(perSource),
+    older(
+      db
+        .from('automation_logs')
+        .select('id, trigger_event, status, created_at, automation:automations(name), contact:contacts(name, phone)'),
+      'created_at'
+    )
       .order('created_at', { ascending: false })
-      .limit(10),
+      .limit(perSource),
   ])
+
+  // A failed source must not look like "no activity": surface it so the
+  // feed shows an error instead of silently dropping that source.
+  const failed = [msgs, contacts, deals, broadcasts, autoLogs].find((r) => r.error)
+  if (failed?.error) throw new Error(failed.error.message)
 
   const items: ActivityItem[] = []
 
@@ -410,7 +480,10 @@ export async function loadActivity(db: DB, limit = 20): Promise<ActivityItem[]> 
     })
   }
 
-  return items
-    .sort((a, b) => (a.at > b.at ? -1 : a.at < b.at ? 1 : 0))
-    .slice(0, limit)
+  // Sort by real instants, not strings: sources can format offsets
+  // differently, and a lexical compare would then misorder them.
+  return items.sort((a, b) => {
+    const d = Date.parse(b.at) - Date.parse(a.at)
+    return d !== 0 ? d : a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  })
 }

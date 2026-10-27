@@ -1,0 +1,18 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    {
+      "severity": "non-blocking",
+      "confidence": "likely",
+      "label": "Stale snapshot after a mid-session lapse",
+      "detail": "useSubscription loads once per page session. If the dashboard shell (trial banner) loaded it while the trial was active, a soft navigation that the proxy redirects to /upgrade-plan seeds from isBlocked=false and picks the default card instead of the stored one. Consider calling refresh() on mount of /upgrade-plan and waiting for it before seeding."
+    },
+    {
+      "severity": "non-blocking",
+      "confidence": "confirmed",
+      "label": "Unrelated working-tree changes",
+      "detail": "tsconfig.json gained .next-verify/types includes, auto-written by the verification build and not mentioned in the verification note. The signup label and docs/ai-connector edits belong to other requests. Keep the tsconfig change out of this change's commit or decide on it deliberately."
+    }
+  ],
+  "reviewDoc": "d:\\Junkies Coder\\whatsapp-crm-nextjs\\.agents\\tasks/trial-plan-review.md"
+}

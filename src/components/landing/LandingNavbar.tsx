@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { MARKETING_COPY_DEFAULTS } from '@/lib/cms/marketing-copy';
 import Link from 'next/link';
 import { Menu, X } from 'lucide-react';
 
@@ -17,6 +18,8 @@ interface LandingNavbarProps {
    * Transparent there would make the bar disappear into the page.
    */
   transparentUntilScrolled?: boolean;
+  /** Login / Get Started button text (site_settings.marketing_copy.navbar). */
+  ctaLabels?: { login_text: string; signup_text: string };
 }
 
 export function LandingNavbar({
@@ -24,6 +27,7 @@ export function LandingNavbar({
   logoUrl,
   links,
   transparentUntilScrolled = false,
+  ctaLabels = MARKETING_COPY_DEFAULTS.navbar,
 }: LandingNavbarProps) {
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -94,13 +98,13 @@ export function LandingNavbar({
             href="/login"
             className="px-4 py-2 font-medium text-slate-600 transition-colors hover:text-slate-900"
           >
-            Login
+            {ctaLabels.login_text}
           </Link>
           <Link
             href="/signup"
             className="rounded-full bg-[#25D366] px-5 py-2.5 font-bold text-white shadow-[0_0_15px_rgba(37,211,102,0.2)] transition-all duration-300 hover:bg-[#20b958] hover:shadow-[0_0_25px_rgba(37,211,102,0.4)] active:scale-95"
           >
-            Get Started
+            {ctaLabels.signup_text}
           </Link>
         </div>
 
@@ -135,13 +139,13 @@ export function LandingNavbar({
               href="/login"
               className="block rounded-xl border border-emerald-900/15 bg-white/70 py-2.5 text-center font-medium text-slate-700 transition-colors hover:bg-white"
             >
-              Login
+              {ctaLabels.login_text}
             </Link>
             <Link
               href="/signup"
               className="block rounded-full bg-[#25D366] py-2.5 text-center font-bold text-white shadow-md transition-all"
             >
-              Get Started
+              {ctaLabels.signup_text}
             </Link>
           </div>
         </div>

@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from "@/lib/auth/admin-client";
 import { revalidatePath } from "next/cache";
+import { requireSuperAdminAction } from "@/lib/super-admin/action-guard";
 
 export async function updateLandingSection(
   id: string,
@@ -21,6 +22,9 @@ export async function updateLandingSection(
     extra_data?: Record<string, unknown>;
   }
 ) {
+  const guard = await requireSuperAdminAction();
+  if (!guard.ok) return { error: guard.error };
+
   const admin = supabaseAdmin();
 
   const { error } = await admin

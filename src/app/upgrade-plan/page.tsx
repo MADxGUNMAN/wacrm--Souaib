@@ -31,6 +31,7 @@
 // ============================================================
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
@@ -44,14 +45,17 @@ import {
 
 import { UpgradeHeader } from '@/components/billing/upgrade-header';
 import { useSubscription } from '@/hooks/use-subscription';
+import { formatBillingDate } from '@/lib/billing/razorpay/format';
+import { autopayOptIn } from '@/lib/billing/razorpay/opt-in';
 import { createClient } from '@/lib/supabase/client';
-import { formatCurrency } from '@/lib/currency';
+import { formatPlanAmount } from '@/lib/billing/money-format';
 import {
   deriveDaySavings,
   findPrice,
   formatPriceEquals,
   normalisePlanFeatures,
   perDayAmount,
+  pickInitialCycleId,
   toAmount,
   visibleCycles,
 } from '@/lib/subscription/plans';
@@ -80,6 +84,26 @@ function formatCoverageDate(value: string | null): string | null {
     month: 'short',
     year: 'numeric',
   }).format(d);
+}
+
+/**
+ * Razorpay AutoPay: the IST date a new AutoPay's first charge would land
+ * on (the end of the access already held), or null when it would charge
+ * today. Same rule as `computeFirstCharge` on the server, minus its
+ * ten-minute margin; this only feeds small print; the payment page shows
+ * the server's exact answer before anything is created.
+ */
+function autopayFirstChargeDate(
+  subscription: ReturnType<typeof useSubscription>['data']
+): string | null {
+  if (!subscription) return null;
+  const { state } = subscription;
+  if (state.isBlocked || state.isExpired || state.billingDisabled) return null;
+  const ends = [state.endsAt, state.pendingWindow?.endsAt ?? null]
+    .map((v) => (v ? new Date(v).getTime() : NaN))
+    .filter((t) => Number.isFinite(t));
+  if (ends.length === 0) return null;
+  return formatBillingDate(new Date(Math.max(...ends))) || null;
 }
 
 /**
@@ -118,6 +142,11 @@ function CurrentCoverageNotice({
   const paidLabel =
     [plan?.planName, plan?.cycleLabel].filter(Boolean).join(' · ') ||
     'your plan';
+  const optIn = autopayOptIn({
+    paymentProvider: subscription.paymentProvider,
+    hasMandate: subscription.autopay?.hasMandate === true,
+    state,
+  });
 
   return (
     <div className="mx-auto mt-6 max-w-xl rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] px-4 py-3">
@@ -142,11 +171,25 @@ function CurrentCoverageNotice({
         </span>
       </p>
       {/* The point of the whole notice. Renewing early is safe, and
-          nobody should have to take that on faith. */}
-      <p className="text-muted-foreground mt-1.5 text-center text-xs">
-        Buying now does not replace it — the new term is added on top, starting{' '}
-        {accessUntil}.
-      </p>
+          nobody should have to take that on faith. A live AutoPay has
+          nothing to add on top, so it says nothing here (the bar below
+          shows its status). */}
+      {subscription.paymentProvider === 'razorpay' ? (
+        optIn.kind === 'none' ? null : (
+          // Phase 6 opt-in prompt: the same words as the Billing card.
+          <p className="text-muted-foreground mt-1.5 text-center text-xs">
+            <span className="text-foreground font-medium">
+              {optIn.headline}
+            </span>{' '}
+            {optIn.detail}
+          </p>
+        )
+      ) : (
+        <p className="text-muted-foreground mt-1.5 text-center text-xs">
+          Buying now does not replace it — the new term is added on top,
+          starting {accessUntil}.
+        </p>
+      )}
     </div>
   );
 }
@@ -156,7 +199,12 @@ export default function UpgradePlanPage() {
   // `refresh` matters on the trial path: the shell shares one snapshot,
   // and if it still says a plan choice is outstanding the dashboard will
   // bounce straight back here.
-  const { data: subscription, refresh } = useSubscription();
+  const {
+    data: subscription,
+    loading: subLoading,
+    error: subError,
+    refresh,
+  } = useSubscription();
 
   const [bundle, setBundle] = useState<PlansBundle | null>(null);
   const [loading, setLoading] = useState(true);
@@ -273,7 +321,22 @@ export default function UpgradePlanPage() {
     trialDays > 0 &&
     !subscription?.state.isBlocked &&
     !subscription?.state.billingDisabled &&
-    !hasPaidCoverage;
+    !hasPaidCoverage &&
+    // Someone who has set up AutoPay is past the trial decision.
+    subscription?.autopay?.hasMandate !== true;
+
+  // ---- Razorpay AutoPay (Phase 2) ----
+  // Which flow "Continue" leads to is the server's call; these only change
+  // the wording around it. A live mandate replaces "Continue" with a link
+  // to Billing, because there is nothing left to buy here.
+  const isAutopay = subscription?.paymentProvider === 'razorpay';
+  const liveAutopay =
+    isAutopay && subscription?.autopay?.hasMandate
+      ? subscription.autopay
+      : null;
+  const autopayFirstCharge = isAutopay
+    ? autopayFirstChargeDate(subscription)
+    : null;
 
   /**
    * Badge text, `{days}` filled from `trial_days`.
@@ -285,8 +348,7 @@ export default function UpgradePlanPage() {
     settings?.trial_badge_template ?? '{days} days free trial',
     trialDays
   );
-  const noCardLabel =
-    settings?.no_card_label ?? 'No card or payment required';
+  const noCardLabel = settings?.no_card_label ?? 'No card or payment required';
 
   /**
    * The escape hatch back into the CRM — or the deliberate absence of one.
@@ -385,16 +447,23 @@ export default function UpgradePlanPage() {
     }));
   }, [bundle, plan]);
 
-  // Seed the selection from the admin's configured default once offers
-  // are known, so the page opens on the term they want to sell.
+  // Seed the selection once, when offers are known. A lapsed account
+  // re-opens on the term it chose before (server-side `selectedPlan`);
+  // everyone else gets the admin's configured default.
+  //
+  // Waits for the subscription snapshot to settle: if plans arrived first
+  // the default would lock in and the stored choice would be ignored.
+  // `!subLoading` covers the 401 path, where data and error stay null.
   useEffect(() => {
     if (cycleId || offers.length === 0) return;
-    const preferred =
-      offers.find((o) => o.cycle.is_default) ??
-      offers.find((o) => o.cycle.is_recommended) ??
-      offers[0];
-    setCycleId(preferred.cycle.id);
-  }, [offers, cycleId]);
+    if (subscription === null && subError === null && subLoading) return;
+    const id = pickInitialCycleId(offers, {
+      isBlocked: subscription?.state.isBlocked === true,
+      planId: plan?.id ?? null,
+      selectedPlan: subscription?.selectedPlan ?? null,
+    });
+    if (id) setCycleId(id);
+  }, [offers, cycleId, plan, subscription, subError, subLoading]);
 
   const selected = useMemo(
     () => offers.find((o) => o.cycle.id === cycleId) ?? null,
@@ -409,7 +478,7 @@ export default function UpgradePlanPage() {
    * flow work:
    *
    *   - "Start with trial" needs it so that when the trial lapses we can
-   *     send them to the term they picked instead of a fresh price list.
+   *     re-open this page with the term they picked pre-selected.
    *   - "Continue to payment" needs it so an abandoned checkout is
    *     recoverable, and so Billing can show an unpaid upcoming plan.
    *
@@ -459,6 +528,10 @@ export default function UpgradePlanPage() {
       }
 
       if (intent === 'pay') {
+        // Refresh the shared snapshot in the background so "Back to
+        // plans" re-opens on the term just saved, not the one stored
+        // before. Not awaited: it must not delay the payment screen.
+        if (saved) void refresh();
         router.push(paymentHref);
         return;
       }
@@ -619,7 +692,7 @@ export default function UpgradePlanPage() {
                     <div className="mt-5">
                       <div className="flex items-baseline gap-1.5">
                         <span className="text-foreground text-4xl font-bold tracking-tight">
-                          {formatCurrency(offer.perDay, currency)}
+                          {formatPlanAmount(offer.perDay, currency)}
                         </span>
                         <span className="text-muted-foreground text-sm font-medium">
                           {settings?.per_day_label ?? '/ day'}
@@ -627,7 +700,7 @@ export default function UpgradePlanPage() {
                       </div>
                       <p className="text-muted-foreground mt-1.5 text-sm">
                         {formatPriceEquals(settings?.price_equals_template, {
-                          total: formatCurrency(offer.total, currency),
+                          total: formatPlanAmount(offer.total, currency),
                           days: offer.days,
                         })}
                       </p>
@@ -636,7 +709,7 @@ export default function UpgradePlanPage() {
                     {offer.savings ? (
                       <span className="mt-4 inline-flex w-fit items-center rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                         {settings?.save_label ?? 'Save'}{' '}
-                        {formatCurrency(offer.savings, currency)}
+                        {formatPlanAmount(offer.savings, currency)}
                       </span>
                     ) : (
                       <div className="mt-4 h-6" /> // spacer to keep cards aligned
@@ -805,7 +878,7 @@ export default function UpgradePlanPage() {
               {selected.savings ? (
                 <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                   {settings?.save_label ?? 'Save'}{' '}
-                  {formatCurrency(selected.savings, currency)}
+                  {formatPlanAmount(selected.savings, currency)}
                 </span>
               ) : null}
             </div>
@@ -816,12 +889,38 @@ export default function UpgradePlanPage() {
                   {settings?.total_label ?? 'Total'}
                 </p>
                 <p className="text-foreground text-xl font-bold tracking-tight">
-                  {formatCurrency(selected.total, currency)}
+                  {formatPlanAmount(selected.total, currency)}
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                {/* ---- Take the trial instead ----
+              {liveAutopay ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                    {liveAutopay.display.label}
+                  </span>
+                  {/* Settings is behind the access gate; a blocked owner
+                      sent there would bounce straight back here. */}
+                  {subscription?.state.isBlocked ? (
+                    <button
+                      type="button"
+                      onClick={() => void refresh()}
+                      className="border-border text-foreground hover:bg-muted inline-flex items-center gap-2 rounded-xl border px-5 py-3 text-sm font-semibold transition-colors"
+                    >
+                      Check status
+                    </button>
+                  ) : (
+                    <Link
+                      href="/settings?tab=billing"
+                      className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors"
+                    >
+                      Manage billing
+                      <ArrowRight className="size-4" />
+                    </Link>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* ---- Take the trial instead ----
                     Secondary styling on purpose: paying is the outcome the
                     business wants, and a filled button next to a filled
                     button makes neither the obvious next step.
@@ -830,36 +929,37 @@ export default function UpgradePlanPage() {
                     offered — see `showTrialOffer`. A button that starts a
                     trial the account is not eligible for would be worse
                     than no button. */}
-                {showTrialOffer ? (
+                  {showTrialOffer ? (
+                    <button
+                      type="button"
+                      disabled={saving !== null}
+                      onClick={() => void choosePlan('trial')}
+                      className="border-border text-foreground hover:bg-muted inline-flex items-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-60"
+                    >
+                      {saving === 'trial' ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="size-4 text-emerald-500" />
+                      )}
+                      {settings?.trial_cta_label ?? 'Start with trial'}
+                    </button>
+                  ) : null}
+
                   <button
                     type="button"
                     disabled={saving !== null}
-                    onClick={() => void choosePlan('trial')}
-                    className="border-border text-foreground hover:bg-muted inline-flex items-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-60"
+                    onClick={() => void choosePlan('pay')}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors disabled:opacity-60"
                   >
-                    {saving === 'trial' ? (
+                    {settings?.continue_label ?? 'Continue to payment'}
+                    {saving === 'pay' ? (
                       <Loader2 className="size-4 animate-spin" />
                     ) : (
-                      <Sparkles className="size-4 text-emerald-500" />
+                      <ArrowRight className="size-4" />
                     )}
-                    {settings?.trial_cta_label ?? 'Start with trial'}
                   </button>
-                ) : null}
-
-                <button
-                  type="button"
-                  disabled={saving !== null}
-                  onClick={() => void choosePlan('pay')}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors disabled:opacity-60"
-                >
-                  {settings?.continue_label ?? 'Continue to payment'}
-                  {saving === 'pay' ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <ArrowRight className="size-4" />
-                  )}
-                </button>
-              </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -870,6 +970,21 @@ export default function UpgradePlanPage() {
           {saveError ? (
             <div className="mx-auto max-w-6xl px-4 pb-3 sm:px-6">
               <p className="text-destructive text-xs">{saveError}</p>
+            </div>
+          ) : isAutopay ? (
+            // AutoPay small print: say exactly when money moves, before
+            // the customer presses anything. The payment page repeats it
+            // with the server's figures and asks for consent.
+            <div className="mx-auto max-w-6xl px-4 pb-3 sm:px-6">
+              <p className="text-muted-foreground text-xs">
+                {liveAutopay
+                  ? 'AutoPay is already set up for this workspace, so there is nothing to pay here.'
+                  : !autopayFirstCharge
+                    ? `You'll pay ${formatPlanAmount(selected.total, currency)} today, then every ${selected.days} days until you cancel.`
+                    : showTrialOffer
+                      ? `Start free with no payment method, or set up AutoPay now and pay nothing until ${autopayFirstCharge}.`
+                      : `You'll set up AutoPay now and won't be charged until ${autopayFirstCharge}.`}
+              </p>
             </div>
           ) : showTrialOffer && settings?.trial_cta_note ? (
             <div className="mx-auto max-w-6xl px-4 pb-3 sm:px-6">

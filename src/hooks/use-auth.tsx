@@ -21,6 +21,8 @@ import {
   type AccountRole,
 } from '@/lib/auth/roles';
 import { resetSubscriptionStore } from '@/hooks/use-subscription';
+import { useSessionHeartbeat } from '@/hooks/use-session-heartbeat';
+import { signOutWithAudit } from '@/lib/security/client';
 import type { MemberPermissions } from '@/types';
 
 interface Profile {
@@ -341,9 +343,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [fetchProfile]);
 
+  // Keep this device's row under Logged-in devices fresh, and sign this
+  // tab out if the session was revoked from another device.
+  useSessionHeartbeat(user?.id ?? null);
+
   const signOut = useCallback(async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
+    // Records the logout in Login activity, then ends the session.
+    await signOutWithAudit('local');
     setUser(null);
     setProfile(null);
     setAccount(null);

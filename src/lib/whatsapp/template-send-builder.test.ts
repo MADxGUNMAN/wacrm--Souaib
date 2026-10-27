@@ -130,7 +130,12 @@ describe('buildSendComponents — header', () => {
     expect(components[0]).toEqual({
       type: 'header',
       parameters: [
-        { type: 'document', document: { link: 'https://x.com/doc.pdf' } },
+        {
+          type: 'document',
+          // `filename` is derived from the link so the attachment does not
+          // arrive as "Untitled" — see template-document-filename.test.ts.
+          document: { link: 'https://x.com/doc.pdf', filename: 'doc.pdf' },
+        },
       ],
     });
   });

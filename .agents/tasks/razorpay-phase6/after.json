@@ -1,0 +1,18 @@
+{
+  "captured_via": "Supabase MCP execute_sql (read-only), project dknolotutfiesuhbhmze, after all Phase 6 code, the migration and the rolled-back live check",
+  "after_ts": "2026-10-22 11:07:51.248131+00",
+  "pr_count": 6,
+  "pr_md5": "6553080635e375d5543525cb10367c6f",
+  "pr_pending": 0,
+  "se_count": 94,
+  "se_md5": "299a80642dcbfc8a8bc369914dd6116f",
+  "se_max_created": "2026-10-22 09:54:32.124084+00",
+  "se_pre_count": 94,
+  "se_pre_md5": "299a80642dcbfc8a8bc369914dd6116f",
+  "demo_md5": "c5fd666db77009366a38bd13be923fdd",
+  "provider": "manual_upi",
+  "legal": "acceptable-use-policy:true, cookie-policy:true, data-processing-agreement:true, privacy-policy:true, refund-and-cancellation-policy:false, terms-of-service:true",
+  "refund_page_md5_db": "1b7ebd3af2b07fd5e8637dceb40bcd8c",
+  "refund_page_md5_file": "1b7ebd3af2b07fd5e8637dceb40bcd8c",
+  "refund_page_length": 2720
+}

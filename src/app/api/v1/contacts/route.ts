@@ -26,6 +26,7 @@ import {
   resolveAuditUserId,
   ContactError,
 } from '@/lib/api/v1/contacts';
+import { buildContactSearchFilter } from '@/lib/contacts/search';
 
 // PostgREST filter values are comma/paren-delimited; strip anything
 // that could break the `.or()` grammar before interpolating a search
@@ -58,7 +59,7 @@ export async function GET(request: Request) {
       .eq('account_id', ctx.accountId);
 
     if (search) {
-      query = query.or(`name.ilike.*${search}*,phone.ilike.*${search}*`);
+      query = query.or(buildContactSearchFilter(search, ['name', 'phone']));
     }
 
     if (tag) {

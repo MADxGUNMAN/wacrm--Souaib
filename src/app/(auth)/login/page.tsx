@@ -5,7 +5,10 @@ import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { createClient } from '@/lib/supabase/client';
+import { safeNextPath } from '@/lib/auth/next-path';
 import { useBranding } from '@/hooks/use-branding';
+import { AuthShowcase } from '@/components/auth/auth-showcase';
+import { reportFailedLogin } from '@/lib/security/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,9 +19,24 @@ import {
   AlertCircle,
   UsersRound,
   Check,
-  CheckCheck,
   Bot,
 } from 'lucide-react';
+
+/** True only when the server confirms there is no account for the email. */
+async function accountMissing(email: string): Promise<boolean> {
+  try {
+    const res = await fetch('/api/auth/account-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { exists?: boolean };
+    return data.exists === false;
+  } catch {
+    return false;
+  }
+}
 
 export default function LoginPage() {
   return (
@@ -31,19 +49,26 @@ export default function LoginPage() {
 function LoginPageInner() {
   const searchParams = useSearchParams();
   const inviteToken = searchParams.get('invite');
+  // Strict allowlist (AI connector consent only) — never an open redirect.
+  const nextPath = safeNextPath(searchParams.get('next'));
+  // Set by the session heartbeat when this device was signed out from
+  // Settings → Login & security on another device.
+  const sessionRevoked = searchParams.get('reason') === 'session_revoked';
   const t = useTranslations('LoginPage');
-  const { logoUrl, faviconUrl: iconUrl, siteName } = useBranding();
+  const { faviconUrl: iconUrl, siteName } = useBranding();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [noAccount, setNoAccount] = useState(false);
   const [loading, setLoading] = useState(false);
   const supabase = createClient();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setNoAccount(false);
     setLoading(true);
 
     const { error } = await supabase.auth.signInWithPassword({
@@ -52,6 +77,21 @@ function LoginPageInner() {
     });
 
     if (error) {
+      // Wrong email/password lands in that account's Login activity as a
+      // failed login. Other errors (rate limits, network) are not attempts.
+      const badCredentials =
+        error.status === 400 ||
+        /invalid login credentials/i.test(error.message);
+      if (badCredentials) {
+        reportFailedLogin(email);
+        // No account for this email (never created, or deleted by Replai):
+        // say so and point to sign-up, like any new visitor.
+        if (await accountMissing(email)) {
+          setNoAccount(true);
+          setLoading(false);
+          return;
+        }
+      }
       setError(error.message);
       setLoading(false);
       return;
@@ -59,124 +99,13 @@ function LoginPageInner() {
 
     const destination = inviteToken
       ? `/join/${encodeURIComponent(inviteToken)}`
-      : '/dashboard';
+      : (nextPath ?? '/dashboard');
     window.location.href = destination;
   };
 
   return (
     <div className="flex min-h-screen w-full bg-slate-50 selection:bg-[#25D366]/20 selection:text-emerald-900">
-      {/* Left Panel: Clean Brand Hero & Product Preview */}
-      <div className="relative hidden flex-col justify-between overflow-hidden border-r border-slate-200/80 bg-gradient-to-br from-emerald-50/50 via-slate-50 to-emerald-50/20 p-12 lg:flex lg:w-1/2 xl:p-16">
-        {/* Subtle Ambient Orbs */}
-        <div className="pointer-events-none absolute -top-32 -left-32 h-96 w-96 rounded-full bg-[#25D366]/10 blur-3xl" />
-        <div className="pointer-events-none absolute -right-32 -bottom-32 h-96 w-96 rounded-full bg-emerald-400/10 blur-3xl" />
-
-        {/* Brand Header */}
-        <div className="relative z-10">
-          <Link
-            href="/"
-            title="Go to home"
-            className="inline-block rounded-lg transition-transform hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-          >
-            {logoUrl ? (
-              <img
-                src={logoUrl}
-                alt={siteName}
-                suppressHydrationWarning
-                className="h-12 w-auto cursor-pointer object-contain"
-              />
-            ) : (
-              <span className="text-2xl font-bold tracking-tight text-slate-900">
-                {siteName}
-              </span>
-            )}
-          </Link>
-        </div>
-
-        {/* Center Hero Content + Realistic Chat Preview */}
-        <div className="relative z-10 my-auto max-w-lg py-8">
-          <h2 className="text-3xl leading-tight font-bold tracking-tight text-slate-900 xl:text-4xl">
-            Scale your customer communication
-          </h2>
-          <p className="mt-3.5 text-base leading-relaxed text-slate-600">
-            Join thousands of businesses using {siteName} to automate WhatsApp
-            support, sales, and marketing.
-          </p>
-
-          {/* Interactive-style WhatsApp CRM Card */}
-          <div className="mt-8 space-y-3 rounded-2xl border border-slate-200/90 bg-white/90 p-4 shadow-lg shadow-slate-200/40 backdrop-blur-sm">
-            {/* Conversation Header */}
-            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-1.5 shadow-2xs">
-                  {iconUrl ? (
-                    <img
-                      src={iconUrl}
-                      alt={siteName}
-                      suppressHydrationWarning
-                      className="h-full w-full object-contain"
-                    />
-                  ) : (
-                    <Bot className="h-5 w-5 text-[#25D366]" />
-                  )}
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-semibold text-slate-800">
-                      {siteName} Assistant
-                    </span>
-                    <span className="h-1.5 w-1.5 rounded-full bg-[#25D366]" />
-                  </div>
-                  <span className="text-[11px] text-slate-400">
-                    Automated Bot Flow
-                  </span>
-                </div>
-              </div>
-              <span className="rounded-full border border-emerald-200/60 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-                Active
-              </span>
-            </div>
-
-            {/* Messages */}
-            <div className="space-y-2 text-xs">
-              {/* Customer message */}
-              <div className="flex justify-start">
-                <div className="max-w-[85%] rounded-2xl rounded-tl-xs bg-slate-100 px-3.5 py-2 text-slate-800 shadow-2xs">
-                  <p>
-                    Can I automate WhatsApp notifications for customer
-                    inquiries?
-                  </p>
-                  <span className="mt-1 block text-[10px] text-slate-400">
-                    10:42 AM
-                  </span>
-                </div>
-              </div>
-
-              {/* Bot response */}
-              <div className="flex justify-end">
-                <div className="max-w-[88%] rounded-2xl rounded-tr-xs border border-emerald-500/20 bg-gradient-to-r from-emerald-100 to-[#25D366]/20 px-3.5 py-2 text-slate-900 shadow-2xs">
-                  <p className="font-medium text-emerald-950">
-                    Yes! Connect your WhatsApp Business API and trigger smart
-                    workflows in under 2 minutes. ⚡
-                  </p>
-                  <div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-emerald-800">
-                    <span>10:42 AM</span>
-                    <CheckCheck className="h-3 w-3 text-[#25D366]" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer Meta info */}
-        <div className="relative z-10 flex items-center justify-between border-t border-slate-200/60 pt-4 text-xs text-slate-500">
-          <span>Official WhatsApp Cloud API</span>
-          <span>
-            © {new Date().getFullYear()} {siteName}
-          </span>
-        </div>
-      </div>
+      <AuthShowcase variant="gradient" />
 
       {/* Right Panel: Clean Professional Login Form */}
       <div className="flex w-full items-center justify-center p-6 sm:p-10 lg:w-1/2">
@@ -213,6 +142,39 @@ function LoginPageInner() {
             </div>
 
             {/* Error Message */}
+            {sessionRevoked && !error && (
+              <div
+                role="status"
+                className="mb-6 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-50 p-3.5 text-sm text-amber-800"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  This device was signed out from another device. Sign in again
+                  to continue.
+                </span>
+              </div>
+            )}
+            {noAccount && (
+              <div
+                role="alert"
+                className="mb-5 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-50 p-3.5 text-sm text-amber-900"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <div className="flex-1 leading-snug">
+                  <p className="font-semibold">Account doesn&apos;t exist</p>
+                  <p className="mt-0.5">
+                    There is no account for this email. Create a new account to
+                    get started.
+                  </p>
+                  <Link
+                    href={`/signup?email=${encodeURIComponent(email.trim())}${inviteToken ? `&invite=${encodeURIComponent(inviteToken)}` : ''}`}
+                    className="mt-2 inline-block font-semibold text-emerald-700 underline underline-offset-2"
+                  >
+                    Create a new account
+                  </Link>
+                </div>
+              </div>
+            )}
             {error && (
               <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50/90 p-3 text-sm text-red-700 shadow-2xs">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />

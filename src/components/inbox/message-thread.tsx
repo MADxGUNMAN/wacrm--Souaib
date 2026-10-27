@@ -79,16 +79,27 @@ import {
   type LocationPayload,
 } from './location-picker-dialog';
 import { AiThreadBanner } from './ai-thread-banner';
-import { buildReplyPreview } from './reply-quote';
+import {
+  buildInboxQuote,
+  missingInboxQuote,
+  type QuotePreview,
+} from './reply-quote';
+import {
+  MESSAGE_FLASH_CLASS,
+  useJumpToMessage,
+} from '@/components/chat/use-jump-to-message';
 import { isOutboundSender } from '@/lib/messages/sender-type';
-import { buildAuthorDirectory } from '@/lib/messages/author-label';
+import {
+  buildAuthorDirectory,
+  resolveMessageAuthorLabel,
+} from '@/lib/messages/author-label';
+import { ImageViewer, type ViewerImage } from '@/components/chat/image-viewer';
 import { describeSendFailure } from '@/lib/whatsapp/meta-send-errors';
 import { toast } from 'sonner';
 
 interface ReplyDraft {
   id: string;
-  authorLabel: string;
-  preview: string;
+  quote: QuotePreview;
 }
 
 function renderTemplateBody(body: string, params: string[]): string {
@@ -250,6 +261,22 @@ export function MessageThread({
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
   const [starredIds, setStarredIds] = useState<Set<string>>(new Set());
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  const [viewerFor, setViewerFor] = useState<string | null>(null);
+  const [imageUrls, setImageUrls] = useState<Map<string, string>>(new Map());
+
+  const handleImageResolved = useCallback(
+    (messageId: string, url: string | null) => {
+      setImageUrls((prev) => {
+        const existing = prev.get(messageId);
+        if (url === (existing ?? null)) return prev;
+        const next = new Map(prev);
+        if (url) next.set(messageId, url);
+        else next.delete(messageId);
+        return next;
+      });
+    },
+    []
+  );
 
   /**
    * Template header / footer / buttons, keyed by template name.
@@ -634,10 +661,11 @@ export function MessageThread({
     };
   }, [conversationId]);
 
-  // Clear any in-progress reply draft when the active conversation changes —
+  // Clear any in-progress reply draft and image viewer when the active conversation changes —
   // a quote pulled from conversation A shouldn't bleed into conversation B.
   useEffect(() => {
     setReplyTo(null);
+    setViewerFor(null);
   }, [conversationId]);
 
   // Reset the server-side unread_count and send blue ticks (status: 'read')
@@ -1199,28 +1227,47 @@ export function MessageThread({
 
   const contactDisplayName = contact?.name || contact?.phone || 'Customer';
 
-  // Author label for a quoted message: "You" when we sent the parent,
-  // contact name when the customer sent it.
-  const authorLabelFor = useCallback(
-    (m: Message): string => {
-      // 'business_app' counts as "You": the business did send it, just
-      // from the phone rather than here. The bubble carries a "from
-      // phone" marker so the distinction is not lost.
-      return isOutboundSender(m.sender_type) ? 'You' : contactDisplayName;
+  /**
+   * The quote for `m`, used BOTH for the "replying to" chip in the composer
+   * and for the quote rendered inside a sent reply — one function so the
+   * two can never describe the same message differently.
+   *
+   * "You" when we sent it, the contact's name when they did. 'business_app'
+   * counts as "You": the business did send it, just from the phone. This is
+   * where the old "(me)" came from — the thread reused the assignee
+   * dropdown's `me` string, which is a suffix (" (me)"), not a label.
+   */
+  const quoteFor = useCallback(
+    (m: Message): QuotePreview => {
+      const isSelf = isOutboundSender(m.sender_type);
+      return buildInboxQuote(
+        m,
+        {
+          authorLabel: isSelf ? tQuote('you') : contactDisplayName,
+          isSelf,
+        },
+        tQuote
+      );
     },
-    [contactDisplayName]
+    [contactDisplayName, tQuote]
   );
 
   const handleStartReply = useCallback(
     (msg: Message) => {
-      setReplyTo({
-        id: msg.id,
-        authorLabel: authorLabelFor(msg),
-        preview: buildReplyPreview(msg, tQuote),
-      });
+      setReplyTo({ id: msg.id, quote: quoteFor(msg) });
     },
-    [authorLabelFor]
+    [quoteFor]
   );
+
+  // Click a quote → land on the message it quotes, flashed. Pages back
+  // through history when the original is older than the loaded page.
+  const messageIds = useMemo(() => messages.map((m) => m.id), [messages]);
+  const { highlightedId, jumpTo } = useJumpToMessage({
+    containerRef: scrollRef,
+    messageIds,
+    hasOlder,
+    loadOlder: loadOlderMessages,
+  });
 
   // Single reaction-set primitive. emoji === "" removes; otherwise adds/swaps.
   // The "toggle" semantic (pill click) is computed at the call site where the
@@ -1398,6 +1445,51 @@ export function MessageThread({
       messages.find((m) => m.id === conversation.pinned_message_id) ?? null
     );
   }, [conversation?.pinned_message_id, messages]);
+
+  const contactName = useMemo(
+    () =>
+      contact
+        ? primaryContactName(contact, contact.phone ?? 'Unknown')
+        : 'Customer',
+    [contact]
+  );
+
+  const viewerImages = useMemo(() => {
+    const list: ViewerImage[] = [];
+    for (const m of visibleMessages) {
+      if (m.content_type !== 'image' || m.deleted_at) continue;
+      const resolved =
+        imageUrls.get(m.id) ||
+        (m.media_url && !m.media_url.startsWith('/api/whatsapp/media/')
+          ? m.media_url
+          : null);
+      if (!resolved) continue;
+
+      let author = contactName;
+      if (isOutboundSender(m.sender_type)) {
+        const label = resolveMessageAuthorLabel(m, authorDirectory);
+        if (label?.kind === 'person') author = label.name;
+        else if (label?.kind === 'owner') author = 'Owner';
+        else if (label?.kind === 'ai') author = 'AI Agent';
+        else if (label?.kind === 'automation') author = 'Automation';
+        else if (label?.kind === 'phone') author = 'WhatsApp Business App';
+        else author = 'You';
+      }
+
+      const dateStr = format(new Date(m.created_at), 'd MMM, HH:mm');
+      list.push({
+        messageId: m.id,
+        url: resolved,
+        filename: m.media_filename || null,
+        caption: `${author} · ${dateStr}`,
+      });
+    }
+    return list;
+  }, [visibleMessages, imageUrls, contactName, authorDirectory]);
+
+  const viewerIndex = viewerFor
+    ? viewerImages.findIndex((i) => i.messageId === viewerFor)
+    : -1;
 
   // Empty state — same WhatsApp-style doodle background as the active
   // thread below, so swapping between empty/selected doesn't change the
@@ -1699,17 +1791,11 @@ export function MessageThread({
           <div className="bg-card/95 border-border sticky top-0 z-20 -mx-4 -mt-4 mb-4 flex items-center justify-between gap-3 border-b px-4 py-2 text-xs shadow-sm backdrop-blur">
             <button
               type="button"
-              onClick={() => {
-                const el = document.getElementById(`msg-${pinnedMessage.id}`);
-                if (el) {
-                  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  el.classList.add('ring-2', 'ring-primary', 'transition-all');
-                  setTimeout(
-                    () => el.classList.remove('ring-2', 'ring-primary'),
-                    2000
-                  );
-                }
-              }}
+              // Same jump as a reply quote. The previous version mutated
+              // classList directly, which React then overwrote on the next
+              // render, and silently did nothing for a pinned message older
+              // than the loaded page.
+              onClick={() => jumpTo(pinnedMessage.id)}
               className="flex min-w-0 flex-1 items-center gap-2 text-left transition-opacity hover:opacity-80"
             >
               <Pin className="text-primary fill-primary h-3.5 w-3.5 shrink-0" />
@@ -1782,16 +1868,16 @@ export function MessageThread({
                 {/* Messages */}
                 <div className="space-y-2">
                   {group.messages.map((msg) => {
-                    const parent = msg.reply_to_message_id
-                      ? messagesById.get(msg.reply_to_message_id)
-                      : null;
-                    const reply = parent
-                      ? {
-                          authorLabel: isOutboundSender(parent.sender_type)
-                            ? t('me')
-                            : contact?.name || contact?.phone || 'Unknown',
-                          preview: buildReplyPreview(parent, tQuote),
-                        }
+                    const parentId = msg.reply_to_message_id ?? null;
+                    const parent = parentId ? messagesById.get(parentId) : null;
+                    // A reply whose original is outside the loaded page used
+                    // to render no quote at all, which made it look like a
+                    // plain message. It now says there is an original, and
+                    // clicking it pages back to find it.
+                    const reply = parentId
+                      ? parent
+                        ? quoteFor(parent)
+                        : missingInboxQuote(tQuote)
                       : null;
                     const msgReactions = reactionsByMessageId.get(msg.id);
                     // Toggle is computed at the call site — `msgReactions`
@@ -1807,8 +1893,12 @@ export function MessageThread({
                     return (
                       <div
                         id={`msg-${msg.id}`}
+                        data-message-id={msg.id}
                         key={msg.id}
-                        className="rounded-lg transition-all"
+                        className={cn(
+                          'rounded-lg transition-all',
+                          highlightedId === msg.id && MESSAGE_FLASH_CLASS
+                        )}
                       >
                         <MessageActions
                           message={msg}
@@ -1836,12 +1926,17 @@ export function MessageThread({
                                 : null
                             }
                             reply={reply}
+                            onJumpToReply={
+                              parentId ? () => jumpTo(parentId) : undefined
+                            }
                             reactions={msgReactions}
                             currentUserId={user?.id}
                             isStarred={starredIds.has(msg.id)}
                             onToggleReaction={handlePillToggle}
                             authorDirectory={authorDirectory}
                             onRequestLocation={handleRequestLocationDefault}
+                            onOpenImage={setViewerFor}
+                            onImageResolved={handleImageResolved}
                           />
                         </MessageActions>
                       </div>
@@ -1891,6 +1986,14 @@ export function MessageThread({
         onOpenChange={setTemplateModalOpen}
         onSelect={handleSendTemplate}
       />
+
+      {viewerIndex >= 0 ? (
+        <ImageViewer
+          images={viewerImages}
+          startIndex={viewerIndex}
+          onClose={() => setViewerFor(null)}
+        />
+      ) : null}
     </div>
   );
 }

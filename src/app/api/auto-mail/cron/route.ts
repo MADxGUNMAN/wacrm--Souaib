@@ -40,6 +40,7 @@ import {
   loadRules,
   sendReminder,
 } from '@/lib/auto-mail/reminders';
+import { getRazorpayConfig } from '@/lib/billing/razorpay/config';
 import { getGateConfig } from '@/lib/subscription/queries';
 
 export const dynamic = 'force-dynamic';
@@ -72,6 +73,8 @@ export async function GET(request: Request) {
       rules,
       gateConfig,
       limit: MAX_REMINDERS_PER_RUN,
+      // AutoPay accounts renew automatically; skip them (plan F5).
+      autopayMode: getRazorpayConfig()?.mode ?? null,
     });
 
     if (due.length === 0) {

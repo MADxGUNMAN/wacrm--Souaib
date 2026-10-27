@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+
+import { signOutWithAudit } from '@/lib/security/client';
 import { createClient } from '@/lib/supabase/client';
 import { resetSubscriptionStore } from '@/hooks/use-subscription';
 import { ShieldBan, LogOut, Mail } from 'lucide-react';
@@ -72,8 +74,7 @@ export default function BannedPage() {
   }, []);
 
   const handleSignOut = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
+    await signOutWithAudit();
     resetSubscriptionStore();
     window.location.replace('/login');
   };

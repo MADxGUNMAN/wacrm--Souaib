@@ -1,35 +1,40 @@
 'use client';
 
 // ============================================================
-// Activity tab — the full subscription audit trail.
+// Activity & health › Activity log: the full billing audit trail.
 //
-// Answers the question the other two tabs could not: "what has actually
-// happened to this workspace's billing, and who did it?"
+// Every row answers four questions in words: what happened, HOW it
+// happened (the channel: Razorpay AutoPay, Manual UPI, Admin action,
+// Customer action or System), to which workspace, and who started it.
 //
-// Before this existed, approving a payment left a visible row in the
-// requests queue while granting a year of access by hand left no trace in
-// the UI at all — even though both were being written to
-// `subscription_events` the whole time. An admin action with no record is
-// indistinguishable from one that never happened, which is the one thing
-// a billing screen must never be ambiguous about.
+// The channel is classified on the server (src/lib/billing/event-
+// channel.ts). This screen used to show a binary "Paid / Manual" tag that
+// called every Razorpay AutoPay event "Manual", and a Source filter that
+// could not separate a manual UPI payment from an admin granting a free
+// month. Filters are applied server-side, so the per-channel tiles, the
+// row count and the pagination always agree with the table.
 //
-// Every row states, in words: what happened, to whom, by whom, and what
-// changed. No abbreviations that need a lookup table.
+// Amounts are formatted in the row's own currency (INR for platform
+// billing). On AutoPay status rows the stored amount is the plan price,
+// not money collected, so it is shown muted with "Plan price, no
+// payment"; only real payments and refunds are shown as money.
 // ============================================================
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowRight,
   Ban,
   CalendarClock,
   CheckCircle2,
-  ChevronLeft,
+  ChevronDown,
   ChevronRight,
   Clock,
   CreditCard,
+  ExternalLink,
   History,
   Loader2,
-  Search,
+  Repeat,
   ShieldOff,
   Sparkles,
   UserCog,
@@ -37,47 +42,61 @@ import {
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
-import { Input } from '@/components/ui/input';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { formatCurrency } from '@/lib/currency';
+import {
+  BILLING_CHANNELS,
+  EVENT_TYPES_BY_CHANNEL,
+  type BillingChannel,
+} from '@/lib/billing/event-channel';
+import { formatMoneyMajor } from '@/lib/billing/money-format';
 import { cn } from '@/lib/utils';
+import type { BillingEventView } from '@/types/super-admin';
+import {
+  accountStatusLabel,
+  amountCaption,
+  billingEventLabel,
+  CHANNEL_META,
+  EVENT_TYPE_GROUP_LABEL,
+} from './billing-labels';
+import { ChannelBadge } from './channel-badge';
+import { describeBillingEvent, type EventReference } from './event-description';
+import { useManualRequestOpener } from './manual-request-opener';
+import {
+  COMPACT_CELL,
+  errorMessage,
+  FilterSelect,
+  FilterToolbar,
+  formatIst,
+  IdCell,
+  InfoHint,
+  istTime,
+  ListFrame,
+  LIST_HEIGHT,
+  ListPagination,
+  ModeBadge,
+  razorpayDashboardHref,
+  razorpayPaymentHref,
+  SearchBox,
+  TableStateRow,
+  Th,
+  useDebounced,
+  WorkspaceCell,
+} from './razorpay-shared';
 
-interface BillingEvent {
-  id: string;
-  accountId: string;
-  accountName: string;
-  ownerEmail: string | null;
-  eventType: string;
-  source: 'payment' | 'manual';
-  fromStatus: string | null;
-  toStatus: string | null;
-  endsAt: string | null;
-  planName: string | null;
-  cycleLabel: string | null;
-  amount: number | null;
-  paymentRequestId: string | null;
-  actorName: string | null;
-  actorIsSuperAdmin: boolean;
-  note: string | null;
-  createdAt: string;
-  durationMonths: number | null;
-  durationDays: number | null;
-  previousEndsAt: string | null;
-  windowKind: 'paid' | 'trial' | null;
+interface EventsResponse {
+  events: BillingEventView[];
+  counts: { total: number; byChannel: Record<BillingChannel, number> };
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  truncated: boolean;
 }
 
 /**
@@ -88,7 +107,7 @@ interface BillingEvent {
  * while extending a lapsed one restarts from today, so the same "1 month"
  * can move the date by 30 days or by 400.
  */
-function formatGranted(e: BillingEvent): string | null {
+function formatGranted(e: BillingEventView): string | null {
   if (e.durationDays) {
     return `+${e.durationDays} day${e.durationDays === 1 ? '' : 's'}`;
   }
@@ -99,541 +118,816 @@ function formatGranted(e: BillingEvent): string | null {
 }
 
 /**
- * Plain-words label per event kind, plus the icon and tone.
- *
- * The stored `event_type` values are developer identifiers
- * (`subscription_extended`). Rendering them raw would make an operator
- * translate snake_case in their head on a screen about money.
+ * Icon and tone per event kind. The words come from the shared label
+ * table (billing-labels), so every billing screen names an event the
+ * same way.
  */
-const EVENT_META: Record<
-  string,
-  { label: string; icon: React.ElementType; tone: string }
-> = {
-  trial_started: {
-    label: 'Trial started',
-    icon: Sparkles,
-    tone: 'text-blue-600 bg-blue-50',
-  },
-  trial_extended: {
-    label: 'Trial extended',
-    icon: Clock,
-    tone: 'text-blue-600 bg-blue-50',
-  },
-  payment_submitted: {
-    label: 'Payment submitted',
-    icon: CreditCard,
-    tone: 'text-amber-600 bg-amber-50',
-  },
-  payment_approved: {
-    label: 'Payment approved',
-    icon: CheckCircle2,
-    tone: 'text-green-600 bg-green-50',
-  },
-  payment_rejected: {
-    label: 'Payment rejected',
-    icon: XCircle,
-    tone: 'text-red-600 bg-red-50',
-  },
+const EVENT_META: Record<string, { icon: React.ElementType; tone: string }> = {
+  trial_started: { icon: Sparkles, tone: 'text-blue-600 bg-blue-50' },
+  trial_extended: { icon: Clock, tone: 'text-blue-600 bg-blue-50' },
+  payment_submitted: { icon: CreditCard, tone: 'text-amber-600 bg-amber-50' },
+  payment_approved: { icon: CheckCircle2, tone: 'text-green-600 bg-green-50' },
+  payment_rejected: { icon: XCircle, tone: 'text-red-600 bg-red-50' },
   subscription_activated: {
-    label: 'Subscription activated',
     icon: CheckCircle2,
     tone: 'text-green-600 bg-green-50',
   },
   subscription_extended: {
-    label: 'Subscription extended',
     icon: CalendarClock,
     tone: 'text-green-600 bg-green-50',
   },
-  subscription_revoked: {
-    label: 'Access blocked',
-    icon: ShieldOff,
-    tone: 'text-red-600 bg-red-50',
-  },
-  subscription_expired: {
-    label: 'Expired',
-    icon: Ban,
+  subscription_revoked: { icon: ShieldOff, tone: 'text-red-600 bg-red-50' },
+  subscription_expired: { icon: Ban, tone: 'text-slate-600 bg-slate-100' },
+  autopay_checkout_created: {
+    icon: Repeat,
     tone: 'text-slate-600 bg-slate-100',
   },
+  autopay_authenticated: { icon: Repeat, tone: 'text-blue-600 bg-blue-50' },
+  autopay_activated: { icon: Repeat, tone: 'text-green-600 bg-green-50' },
+  payment_succeeded: { icon: CheckCircle2, tone: 'text-green-600 bg-green-50' },
+  payment_failed: { icon: XCircle, tone: 'text-red-600 bg-red-50' },
+  autopay_pending: { icon: Clock, tone: 'text-amber-600 bg-amber-50' },
+  autopay_halted: { icon: ShieldOff, tone: 'text-red-600 bg-red-50' },
+  autopay_paused: { icon: Clock, tone: 'text-slate-600 bg-slate-100' },
+  autopay_resumed: { icon: Repeat, tone: 'text-green-600 bg-green-50' },
+  autopay_cancelled: { icon: Ban, tone: 'text-slate-600 bg-slate-100' },
+  autopay_completed: {
+    icon: CheckCircle2,
+    tone: 'text-slate-600 bg-slate-100',
+  },
+  refund_processed: { icon: CreditCard, tone: 'text-slate-600 bg-slate-100' },
+  dispute_opened: { icon: AlertTriangle, tone: 'text-red-600 bg-red-50' },
+  dispute_closed: { icon: CheckCircle2, tone: 'text-slate-600 bg-slate-100' },
+  billing_anomaly: { icon: AlertTriangle, tone: 'text-amber-600 bg-amber-50' },
+  billing_admin_action: { icon: UserCog, tone: 'text-violet-600 bg-violet-50' },
 };
 
-const TYPE_FILTERS: Record<string, string> = {
-  all: 'All events',
-  payment_submitted: 'Payment submitted',
-  payment_approved: 'Payment approved',
-  payment_rejected: 'Payment rejected',
-  subscription_activated: 'Subscription activated',
-  subscription_extended: 'Subscription extended',
-  trial_extended: 'Trial extended',
-  subscription_revoked: 'Access blocked',
-  subscription_expired: 'Expired',
-};
+const TYPE_GROUPS = EVENT_TYPES_BY_CHANNEL.map((g) => ({
+  label: EVENT_TYPE_GROUP_LABEL[g.id],
+  options: g.types.map((t) => ({ value: t, label: billingEventLabel(t) })),
+}));
 
-const SOURCE_FILTERS: Record<string, string> = {
-  all: 'Payments & manual',
-  payment: 'From payments',
-  manual: 'Manual only',
-};
+const MODE_OPTIONS = [
+  { value: 'all', label: 'All modes' },
+  { value: 'live', label: 'Live only' },
+  { value: 'test', label: 'Test only' },
+];
 
-function formatDate(value: string | null): string {
-  if (!value) return '—';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '—';
-  return new Intl.DateTimeFormat(undefined, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  }).format(d);
-}
+const SINCE_OPTIONS = [
+  { value: 'all', label: 'Any time' },
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+  { value: '90d', label: 'Last 90 days' },
+];
 
-export function ActivityPanel({ accountId }: { accountId?: string }) {
-  const [events, setEvents] = useState<BillingEvent[]>([]);
-  const [counts, setCounts] = useState<{
-    total: number;
-    payment: number;
-    manual: number;
-  } | null>(null);
+export function ActivityPanel({
+  accountId,
+  onOpenSubscription,
+}: {
+  accountId?: string;
+  /** Opens the AutoPay drawer for a billing_subscriptions id. */
+  onOpenSubscription?: (id: string) => void;
+}) {
+  const [data, setData] = useState<EventsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
 
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [sourceFilter, setSourceFilter] = useState('all');
+  const [channel, setChannel] = useState('all');
+  const [type, setType] = useState('all');
+  const [mode, setMode] = useState('all');
+  const [since, setSince] = useState('all');
   const [search, setSearch] = useState('');
-  const [debounced, setDebounced] = useState('');
+  const debounced = useDebounced(search.trim());
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(search), 350);
-    return () => clearTimeout(t);
-  }, [search]);
-
-  // Any filter change invalidates the current page number — staying on
+  // Any filter change invalidates the current page number: staying on
   // page 4 of a now-single-page result shows an empty table.
-  useEffect(() => {
+  const filterKey = `${channel}|${type}|${mode}|${since}|${debounced}`;
+  const [seenKey, setSeenKey] = useState(filterKey);
+  if (seenKey !== filterKey) {
+    setSeenKey(filterKey);
     setPage(1);
-  }, [typeFilter, sourceFilter, debounced]);
+  }
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        type: typeFilter,
-        source: sourceFilter,
-        page: String(page),
-        pageSize: '25',
-      });
-      if (debounced) params.set('search', debounced);
-      if (accountId) params.set('accountId', accountId);
+  const manual = useManualRequestOpener(() => setNonce((n) => n + 1));
 
-      const res = await fetch(
-        `/api/super-admin/billing/events?${params.toString()}`
-      );
-      if (!res.ok) throw new Error('Failed to load the subscription history');
-      const data = await res.json();
+  const load = useCallback(
+    async (signal: AbortSignal) => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({
+          channel,
+          type,
+          mode,
+          since,
+          page: String(page),
+          pageSize: String(pageSize),
+        });
+        if (debounced) params.set('search', debounced);
+        if (accountId) params.set('accountId', accountId);
 
-      setEvents(data.events ?? []);
-      setCounts(data.counts ?? null);
-      setTotalPages(data.totalPages ?? 1);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load history');
-    } finally {
-      setLoading(false);
-    }
-  }, [typeFilter, sourceFilter, debounced, page, accountId]);
+        const res = await fetch(
+          `/api/super-admin/billing/events?${params.toString()}`,
+          { signal, cache: 'no-store' }
+        );
+        const body = await res.json().catch(() => ({}));
+        if (signal.aborted) return;
+        if (!res.ok) {
+          setError(errorMessage(res.status, body));
+          return;
+        }
+        setData(body as EventsResponse);
+        setError(null);
+      } catch (err) {
+        if (signal.aborted) return;
+        setError(
+          err instanceof Error
+            ? `Could not reach the server: ${err.message}`
+            : 'Could not reach the server.'
+        );
+      } finally {
+        if (!signal.aborted) setLoading(false);
+      }
+    },
+    // `nonce` re-runs the fetch after a manual review.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [channel, type, mode, since, debounced, page, pageSize, accountId, nonce]
+  );
 
   useEffect(() => {
-    void load();
+    const ctrl = new AbortController();
+    void load(ctrl.signal);
+    return () => ctrl.abort();
   }, [load]);
 
+  const events = data?.events ?? [];
+  const byChannel = data?.counts.byChannel;
+  const allCount = byChannel
+    ? BILLING_CHANNELS.reduce((sum, c) => sum + byChannel[c], 0)
+    : null;
+
+  const channelOptions = [
+    {
+      value: 'all',
+      label: 'All channels',
+      count: allCount,
+    },
+    ...BILLING_CHANNELS.map((c) => ({
+      value: c,
+      label: CHANNEL_META[c].label,
+      count: byChannel ? byChannel[c] : null,
+    })),
+  ];
+
+  const active =
+    search !== '' ||
+    channel !== 'all' ||
+    type !== 'all' ||
+    mode !== 'all' ||
+    since !== 'all';
+  const resetAll = () => {
+    setSearch('');
+    setChannel('all');
+    setType('all');
+    setMode('all');
+    setSince('all');
+  };
+
+  const cols = accountId ? 6 : 7;
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   return (
-    <div className="space-y-4">
-      {/* Hidden in the per-account view: three tiles restating a handful
-          of rows is noise next to the rows themselves. */}
-      {counts && !accountId ? (
-        <div className="grid grid-cols-3 gap-3">
-          <CountTile label="All events" value={counts.total} />
-          <CountTile
-            label="From payments"
-            value={counts.payment}
-            tone="green"
-            hint="A customer paid"
-          />
-          <CountTile
-            label="Manual"
-            value={counts.manual}
-            tone="blue"
-            hint="Granted by an admin"
-          />
-        </div>
+    <div className="space-y-2">
+      {data?.truncated ? (
+        <p
+          role="note"
+          className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          Showing the newest 10,000 events. Narrow the filters to see older
+          ones.
+        </p>
       ) : null}
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-slate-100 p-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="relative w-full lg:max-w-sm">
-            <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <Input
-              placeholder="Search workspace, admin, plan or note…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="border-slate-200 bg-white pl-9 text-slate-900 placeholder:text-slate-400"
+      <ListFrame
+        className={accountId ? undefined : LIST_HEIGHT}
+        toolbar={
+          <FilterToolbar
+            active={active}
+            onReset={resetAll}
+            search={
+              <SearchBox
+                label="Search activity"
+                placeholder="Workspace, email, admin, reference or note"
+                value={search}
+                onChange={setSearch}
+              />
+            }
+            filters={
+              <>
+                <FilterSelect
+                  label="Channel"
+                  value={channel}
+                  onChange={setChannel}
+                  options={channelOptions}
+                  width="w-[195px]"
+                />
+                <FilterSelect
+                  label="Event type"
+                  value={type}
+                  onChange={setType}
+                  options={[{ value: 'all', label: 'All event types' }]}
+                  groups={TYPE_GROUPS}
+                  width="w-[190px]"
+                />
+                <FilterSelect
+                  label="Razorpay mode"
+                  value={mode}
+                  onChange={setMode}
+                  options={MODE_OPTIONS}
+                  width="w-[125px]"
+                />
+                <FilterSelect
+                  label="Date"
+                  value={since}
+                  onChange={setSince}
+                  options={SINCE_OPTIONS}
+                  width="w-[130px]"
+                />
+              </>
+            }
+          />
+        }
+        footer={
+          <ListPagination
+            page={data?.page ?? page}
+            pageSize={pageSize}
+            total={data?.counts.total ?? 0}
+            totalPages={data?.totalPages ?? 1}
+            loading={loading}
+            noun="events"
+            onPage={setPage}
+            onPageSize={(n) => {
+              setPageSize(n);
+              setPage(1);
+            }}
+          />
+        }
+      >
+        {/* Fixed layout, two short lines per cell: no horizontal scroll.
+            The description, note, references and every stored field live
+            in the (i) popover and the Details row. */}
+        <Table className="table-fixed" containerClassName="overflow-visible">
+          <TableHeader className="sticky top-0 z-20 bg-slate-50 shadow-xs">
+            <TableRow className="border-b border-slate-200 hover:bg-transparent">
+              <Th className="w-[11%] px-2.5">When</Th>
+              <Th className={cn('px-2.5', accountId ? 'w-[30%]' : 'w-[24%]')}>
+                Event
+              </Th>
+              {!accountId ? (
+                <Th className="w-[17%] px-2.5">Workspace</Th>
+              ) : null}
+              <Th className="w-[17%] px-2.5">Channel</Th>
+              <Th className="w-[17%] px-2.5">Change</Th>
+              <Th className="w-[11%] px-2.5 text-right">Amount</Th>
+              <Th className="w-10 px-1">
+                <span className="sr-only">Details</span>
+              </Th>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableStateRow
+              colSpan={cols}
+              loading={loading}
+              error={error}
+              empty={events.length === 0}
+              emptyText={
+                active
+                  ? 'No events match these filters.'
+                  : 'Nothing recorded yet.'
+              }
+              emptyHint={
+                active
+                  ? undefined
+                  : 'Razorpay AutoPay events, manual UPI payments and admin changes all appear here.'
+              }
+              onReset={active ? resetAll : undefined}
             />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Select
-              value={sourceFilter}
-              onValueChange={(v) => {
-                if (v) setSourceFilter(v);
-              }}
-            >
-              <SelectTrigger className="w-[180px] border-slate-200 bg-white text-slate-900">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="border-slate-200 bg-white text-slate-900">
-                {Object.entries(SOURCE_FILTERS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
+            {error
+              ? null
+              : events.map((e) => (
+                  <EventRow
+                    key={e.id}
+                    e={e}
+                    cols={cols}
+                    showWorkspace={!accountId}
+                    open={expanded.has(e.id)}
+                    onToggle={() => toggle(e.id)}
+                    onOpenSubscription={onOpenSubscription}
+                    onOpenRequest={manual.open}
+                    requestLoading={manual.loadingId === e.paymentRequestId}
+                  />
                 ))}
-              </SelectContent>
-            </Select>
-            <Select
-              value={typeFilter}
-              onValueChange={(v) => {
-                if (v) setTypeFilter(v);
-              }}
-            >
-              <SelectTrigger className="w-[210px] border-slate-200 bg-white text-slate-900">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="border-slate-200 bg-white text-slate-900">
-                {Object.entries(TYPE_FILTERS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-slate-50/80">
-              <TableRow className="border-slate-200 hover:bg-transparent">
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  What happened
-                </TableHead>
-                {!accountId ? (
-                  <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                    Workspace
-                  </TableHead>
-                ) : null}
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  Time given
-                </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  End date
-                </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  Status
-                </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  Amount
-                </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  Done by
-                </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  When
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading && events.length === 0 ? (
-                <TableRow className="border-slate-200">
-                  <TableCell
-                    colSpan={accountId ? 7 : 8}
-                    className="h-28 text-center text-slate-400"
-                  >
-                    <span className="inline-flex items-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading history…
-                    </span>
-                  </TableCell>
-                </TableRow>
-              ) : error ? (
-                <TableRow className="border-slate-200">
-                  <TableCell
-                    colSpan={accountId ? 7 : 8}
-                    className="h-28 text-center text-red-500"
-                  >
-                    {error}
-                  </TableCell>
-                </TableRow>
-              ) : events.length === 0 ? (
-                <TableRow className="border-slate-200">
-                  <TableCell
-                    colSpan={accountId ? 7 : 8}
-                    className="h-28 text-center"
-                  >
-                    <div className="flex flex-col items-center gap-2 text-slate-400">
-                      <History className="h-9 w-9" />
-                      <p className="font-medium">Nothing recorded yet</p>
-                      <p className="text-xs">
-                        Payments and manual subscription changes both appear
-                        here.
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                events.map((e) => {
-                  const meta = EVENT_META[e.eventType] ?? {
-                    label: e.eventType,
-                    icon: History,
-                    tone: 'text-slate-600 bg-slate-100',
-                  };
-                  const Icon = meta.icon;
-                  const granted = formatGranted(e);
-
-                  return (
-                    <TableRow key={e.id} className="border-slate-200">
-                      <TableCell className="py-3.5">
-                        <div className="flex items-start gap-2">
-                          <span
-                            className={cn(
-                              'mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
-                              meta.tone
-                            )}
-                          >
-                            <Icon className="h-3.5 w-3.5" />
-                          </span>
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-slate-800">
-                              {meta.label}
-                            </p>
-                            <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                              {/* The distinction the old UI hid entirely:
-                                  whether money was involved. */}
-                              <span
-                                className={cn(
-                                  'rounded px-1.5 py-0.5 text-[10px] font-medium',
-                                  e.source === 'payment'
-                                    ? 'bg-green-50 text-green-700'
-                                    : 'bg-blue-50 text-blue-700'
-                                )}
-                              >
-                                {e.source === 'payment' ? 'Paid' : 'Manual'}
-                              </span>
-                              {e.planName ? (
-                                <span className="text-[11px] text-slate-500">
-                                  {e.planName}
-                                  {e.cycleLabel ? ` · ${e.cycleLabel}` : ''}
-                                </span>
-                              ) : null}
-                            </div>
-                            {e.note ? (
-                              <p className="mt-1 max-w-[280px] text-xs text-slate-500 italic">
-                                “{e.note}”
-                              </p>
-                            ) : null}
-                          </div>
-                        </div>
-                      </TableCell>
-
-                      {!accountId ? (
-                        <TableCell>
-                          <p className="max-w-[160px] truncate text-sm font-medium text-slate-800">
-                            {e.accountName}
-                          </p>
-                          <p className="max-w-[160px] truncate text-xs text-slate-400">
-                            {e.ownerEmail ?? ''}
-                          </p>
-                        </TableCell>
-                      ) : null}
-
-                      {/* HOW MUCH, and onto which window. The single most
-                          asked question about an extension, and the one the
-                          first version of this table could not answer. */}
-                      <TableCell>
-                        {granted ? (
-                          <span
-                            className={cn(
-                              'inline-flex items-center rounded px-1.5 py-0.5 text-xs font-semibold',
-                              e.windowKind === 'trial'
-                                ? 'bg-blue-50 text-blue-700'
-                                : 'bg-green-50 text-green-700'
-                            )}
-                          >
-                            {granted}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-slate-400">—</span>
-                        )}
-                        {e.windowKind ? (
-                          <p className="mt-0.5 text-[11px] text-slate-500">
-                            {e.windowKind === 'trial'
-                              ? 'trial days'
-                              : 'paid access'}
-                          </p>
-                        ) : null}
-                      </TableCell>
-
-                      {/* The date move, spelled out. "Sep 8 → Oct 8" is the
-                          sentence a human reads; a lone new date leaves them
-                          to remember what it used to be. */}
-                      <TableCell>
-                        {e.previousEndsAt && e.endsAt ? (
-                          <span className="inline-flex items-center gap-1 text-xs whitespace-nowrap text-slate-600">
-                            <span className="text-slate-400">
-                              {formatDate(e.previousEndsAt)}
-                            </span>
-                            <ArrowRight className="h-3 w-3 shrink-0 text-slate-400" />
-                            <span className="font-medium">
-                              {formatDate(e.endsAt)}
-                            </span>
-                          </span>
-                        ) : e.endsAt ? (
-                          <span className="text-xs font-medium text-slate-600">
-                            {formatDate(e.endsAt)}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-slate-400">—</span>
-                        )}
-                      </TableCell>
-
-                      <TableCell>
-                        {/* Only render an arrow when the status actually
-                            moved. Several event kinds change the DATE and
-                            not the status (expiring a paid window records
-                            "active" on both sides), and printing
-                            "active → active" reads as a bug in the log
-                            rather than as "the status was untouched". */}
-                        {e.fromStatus &&
-                        e.toStatus &&
-                        e.fromStatus !== e.toStatus ? (
-                          <span className="inline-flex items-center gap-1 text-xs whitespace-nowrap text-slate-600">
-                            <span className="capitalize">{e.fromStatus}</span>
-                            <ArrowRight className="h-3 w-3 shrink-0 text-slate-400" />
-                            <span className="font-medium capitalize">
-                              {e.toStatus}
-                            </span>
-                          </span>
-                        ) : e.toStatus || e.fromStatus ? (
-                          <span className="text-xs text-slate-500 capitalize">
-                            {e.toStatus ?? e.fromStatus}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-slate-400">—</span>
-                        )}
-                      </TableCell>
-
-                      <TableCell>
-                        {e.amount != null ? (
-                          <span className="text-sm font-medium text-slate-800">
-                            {formatCurrency(e.amount)}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-slate-400">—</span>
-                        )}
-                      </TableCell>
-
-                      <TableCell>
-                        {e.actorName ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            {e.actorIsSuperAdmin ? (
-                              <span title="Platform admin" className="shrink-0">
-                                <UserCog className="h-3.5 w-3.5 text-slate-400" />
-                              </span>
-                            ) : null}
-                            <span className="max-w-[130px] truncate text-xs text-slate-600">
-                              {e.actorName}
-                            </span>
-                          </span>
-                        ) : (
-                          // Not "unknown" — nobody triggered it. Trials
-                          // starting at signup are the usual case.
-                          <span className="text-xs text-slate-400">System</span>
-                        )}
-                      </TableCell>
-
-                      <TableCell>
-                        <p
-                          className="text-xs text-slate-500"
-                          title={new Date(e.createdAt).toLocaleString()}
-                        >
-                          {formatDistanceToNow(new Date(e.createdAt), {
-                            addSuffix: true,
-                          })}
-                        </p>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
-
-        {totalPages > 1 ? (
-          <div className="flex items-center justify-between border-t border-slate-100 p-3">
-            <p className="text-xs text-slate-500">
-              Page {page} of {totalPages}
-            </p>
-            <div className="flex gap-1">
-              <button
-                type="button"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 disabled:opacity-40"
-                aria-label="Previous page"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 disabled:opacity-40"
-                aria-label="Next page"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        ) : null}
-      </div>
+          </TableBody>
+        </Table>
+      </ListFrame>
+      {manual.drawer}
     </div>
   );
 }
 
-function CountTile({
-  label,
-  value,
-  tone = 'slate',
-  hint,
+const CELL = COMPACT_CELL;
+
+/** "+14 days" / "+1 month" plus the window, or the end-date move. */
+function changeLines(e: BillingEventView): {
+  primary: React.ReactNode;
+  secondary: React.ReactNode;
+} | null {
+  const granted = formatGranted(e);
+  const statusChanged =
+    !!e.fromStatus && !!e.toStatus && e.fromStatus !== e.toStatus;
+  const dates = e.endsAt ? (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      {e.previousEndsAt ? (
+        <>
+          <span className="text-slate-400">{formatIst(e.previousEndsAt)}</span>
+          <ArrowRight
+            className="h-3 w-3 shrink-0 text-slate-400"
+            aria-label="to"
+          />
+        </>
+      ) : (
+        <span className="text-slate-400">Ends</span>
+      )}
+      <span className="font-medium text-slate-700">{formatIst(e.endsAt)}</span>
+    </span>
+  ) : null;
+  const status = statusChanged ? (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <span>{accountStatusLabel(e.fromStatus)}</span>
+      <ArrowRight className="h-3 w-3 shrink-0 text-slate-400" aria-label="to" />
+      <span className="font-medium text-slate-700">
+        {accountStatusLabel(e.toStatus)}
+      </span>
+    </span>
+  ) : null;
+
+  if (granted) {
+    return {
+      primary: (
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            className={cn(
+              'rounded px-1.5 py-px text-[11px] font-semibold',
+              e.windowKind === 'trial'
+                ? 'bg-blue-50 text-blue-700'
+                : 'bg-emerald-50 text-emerald-700'
+            )}
+          >
+            {granted}
+          </span>
+          {e.windowKind ? (
+            <span className="text-[11px] text-slate-500">
+              {e.windowKind === 'trial' ? 'Trial' : 'Paid'}
+            </span>
+          ) : null}
+        </span>
+      ),
+      secondary: dates ?? status,
+    };
+  }
+  if (dates) return { primary: dates, secondary: status };
+  if (status) return { primary: status, secondary: null };
+  return null;
+}
+
+function EventRow({
+  e,
+  cols,
+  showWorkspace,
+  open,
+  onToggle,
+  onOpenSubscription,
+  onOpenRequest,
+  requestLoading,
 }: {
-  label: string;
-  value: number;
-  tone?: 'slate' | 'green' | 'blue';
-  hint?: string;
+  e: BillingEventView;
+  cols: number;
+  showWorkspace: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onOpenSubscription?: (id: string) => void;
+  onOpenRequest: (id: string) => void;
+  requestLoading: boolean;
 }) {
-  const toneClass = {
-    slate: 'text-slate-900',
-    green: 'text-green-600',
-    blue: 'text-blue-600',
-  }[tone];
+  const meta = EVENT_META[e.eventType] ?? {
+    icon: History,
+    tone: 'text-slate-600 bg-slate-100',
+  };
+  const Icon = meta.icon;
+  const description = describeBillingEvent(e);
+  const plan = [e.planName, e.cycleLabel].filter(Boolean).join(' · ');
+  const isMoney = e.amountKind === 'paid' || e.amountKind === 'refund';
+  const caption = amountCaption(e.amountKind, e.channel, e.moneyInvolved);
+  const change = changeLines(e);
+  const title = billingEventLabel(e.eventType);
+  const detailsId = `event-details-${e.id}`;
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-medium tracking-wider text-slate-400 uppercase">
-        {label}
-      </p>
-      <p className={cn('mt-1 text-2xl font-bold', toneClass)}>{value}</p>
-      {hint ? (
-        <p className="mt-0.5 text-[11px] text-slate-400">{hint}</p>
+    <>
+      <TableRow
+        className={cn(
+          'border-b border-slate-100 align-top',
+          e.mode === 'test' && 'bg-amber-50/20',
+          open && 'border-b-0 bg-slate-50/70'
+        )}
+      >
+        {/* When */}
+        <TableCell className={CELL}>
+          <p
+            className="truncate text-xs font-medium text-slate-800 tabular-nums"
+            title={formatDistanceToNow(new Date(e.createdAt), {
+              addSuffix: true,
+            })}
+          >
+            {formatIst(e.createdAt)}
+          </p>
+          <p className="truncate text-[11px] text-slate-500 tabular-nums">
+            {istTime(e.createdAt)}
+          </p>
+        </TableCell>
+
+        {/* Event: icon, name, (i) for the sentence and note */}
+        <TableCell className={CELL}>
+          <div className="flex min-w-0 items-start gap-2">
+            <span
+              className={cn(
+                'mt-px inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
+                meta.tone
+              )}
+            >
+              <Icon className="h-3 w-3" aria-hidden />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-1">
+                <p
+                  className="truncate text-xs font-semibold text-slate-900"
+                  title={title}
+                >
+                  {title}
+                </p>
+                <InfoHint title={title} label={`About this event: ${title}`}>
+                  <p>{description.text}</p>
+                  {description.note ? (
+                    <p>
+                      <span className="font-medium text-slate-700">Note:</span>{' '}
+                      {description.note}
+                    </p>
+                  ) : null}
+                </InfoHint>
+              </div>
+              <p
+                className="truncate text-[11px] text-slate-500"
+                title={plan || description.text}
+              >
+                {plan || description.text}
+              </p>
+            </div>
+          </div>
+        </TableCell>
+
+        {/* Workspace */}
+        {showWorkspace ? (
+          <TableCell className={CELL}>
+            <WorkspaceCell name={e.accountName} email={e.ownerEmail} />
+          </TableCell>
+        ) : null}
+
+        {/* Channel and who started it */}
+        <TableCell className={CELL}>
+          <div className="flex min-w-0 flex-wrap items-center gap-1">
+            <ChannelBadge
+              channel={e.channel}
+              size="sm"
+              label={CHANNEL_SHORT[e.channel]}
+            />
+            {e.mode ? <ModeBadge mode={e.mode} /> : null}
+          </div>
+          <p
+            className="mt-0.5 truncate text-[11px] text-slate-500"
+            title={
+              e.initiatedBy.detail &&
+              e.initiatedBy.detail !== e.initiatedBy.label
+                ? `${e.initiatedBy.label} (${e.initiatedBy.detail})`
+                : e.initiatedBy.label
+            }
+          >
+            <span className="text-slate-400">by </span>
+            {e.initiatedBy.label}
+          </p>
+        </TableCell>
+
+        {/* Access / status change */}
+        <TableCell className={CELL}>
+          {change ? (
+            <>
+              <div className="truncate text-xs text-slate-600">
+                {change.primary}
+              </div>
+              {change.secondary ? (
+                <div className="mt-0.5 truncate text-[11px] text-slate-500">
+                  {change.secondary}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <span className="text-xs text-slate-400">—</span>
+          )}
+        </TableCell>
+
+        {/* Amount */}
+        <TableCell className={cn(CELL, 'text-right')}>
+          {e.amount != null ? (
+            <>
+              <p
+                className={cn(
+                  'text-xs tabular-nums',
+                  isMoney ? 'font-semibold text-slate-900' : 'text-slate-400'
+                )}
+              >
+                {formatMoneyMajor(e.amount, e.currency)}
+              </p>
+              {caption ? (
+                <p
+                  className={cn(
+                    'truncate text-[10px]',
+                    isMoney ? 'text-emerald-700' : 'text-slate-400'
+                  )}
+                  title={caption}
+                >
+                  {caption}
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <span className="text-xs text-slate-400">—</span>
+          )}
+        </TableCell>
+
+        <TableCell className={cn(CELL, 'px-1 text-right')}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-expanded={open}
+            aria-controls={detailsId}
+            aria-label={`${open ? 'Hide' : 'Show'} details for ${title}`}
+            title={open ? 'Hide details' : 'Show details'}
+            onClick={onToggle}
+          >
+            {open ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
+          </Button>
+        </TableCell>
+      </TableRow>
+
+      {open ? (
+        <TableRow
+          id={detailsId}
+          className={cn(
+            'border-b border-slate-100 hover:bg-transparent',
+            e.mode === 'test' ? 'bg-amber-50/20' : 'bg-slate-50/70'
+          )}
+        >
+          <TableCell
+            colSpan={cols}
+            className="px-3 pt-0 pb-3 whitespace-normal"
+          >
+            <EventDetails
+              e={e}
+              description={description}
+              plan={plan}
+              caption={caption}
+              onOpenSubscription={onOpenSubscription}
+              onOpenRequest={onOpenRequest}
+              requestLoading={requestLoading}
+            />
+          </TableCell>
+        </TableRow>
       ) : null}
+    </>
+  );
+}
+
+/** Short channel words for the table; full names stay in the tooltip. */
+const CHANNEL_SHORT: Readonly<Record<BillingChannel, string>> = {
+  razorpay: 'AutoPay',
+  manual_upi: 'Manual UPI',
+  admin: 'Admin',
+  customer: 'Customer',
+  system: 'System',
+};
+
+const REFERENCE_LABEL: Readonly<Record<EventReference['kind'], string>> = {
+  subscription: 'AutoPay ID',
+  payment: 'Payment ID',
+  utr: 'UTR',
+  refund: 'Refund ID',
+  dispute: 'Dispute ID',
+};
+
+/** Everything stored on the event, in one compact grid. */
+function EventDetails({
+  e,
+  description,
+  plan,
+  caption,
+  onOpenSubscription,
+  onOpenRequest,
+  requestLoading,
+}: {
+  e: BillingEventView;
+  description: ReturnType<typeof describeBillingEvent>;
+  plan: string;
+  caption: string | null;
+  onOpenSubscription?: (id: string) => void;
+  onOpenRequest: (id: string) => void;
+  requestLoading: boolean;
+}) {
+  const granted = formatGranted(e);
+  const ref = description.reference;
+  const fields: { label: string; value: React.ReactNode }[] = [
+    { label: 'What happened', value: description.text },
+    ...(description.note ? [{ label: 'Note', value: description.note }] : []),
+    {
+      label: 'Recorded',
+      value: `${formatIst(e.createdAt, { time: true })} (${formatDistanceToNow(
+        new Date(e.createdAt),
+        { addSuffix: true }
+      )})`,
+    },
+    {
+      label: 'Initiated by',
+      value:
+        e.initiatedBy.detail && e.initiatedBy.detail !== e.initiatedBy.label
+          ? `${e.initiatedBy.label} · ${e.initiatedBy.detail}`
+          : e.initiatedBy.label,
+    },
+    { label: 'Channel', value: CHANNEL_META[e.channel].label },
+    ...(e.mode
+      ? [
+          {
+            label: 'Razorpay mode',
+            value: e.mode === 'test' ? 'Test (no real money)' : 'Live',
+          },
+        ]
+      : []),
+    ...(plan ? [{ label: 'Plan', value: plan }] : []),
+    ...(e.amount != null
+      ? [
+          {
+            label: 'Amount',
+            value: `${formatMoneyMajor(e.amount, e.currency)}${caption ? ` · ${caption}` : ''}`,
+          },
+        ]
+      : []),
+    ...(granted
+      ? [
+          {
+            label: 'Time given',
+            value: `${granted}${e.windowKind ? ` of ${e.windowKind === 'trial' ? 'trial' : 'paid access'}` : ''}`,
+          },
+        ]
+      : []),
+    ...(e.endsAt
+      ? [
+          {
+            label: 'Access ends',
+            value: e.previousEndsAt
+              ? `${formatIst(e.previousEndsAt)} → ${formatIst(e.endsAt)}`
+              : formatIst(e.endsAt),
+          },
+        ]
+      : []),
+    ...(e.fromStatus || e.toStatus
+      ? [
+          {
+            label: 'Workspace status',
+            value:
+              e.fromStatus && e.toStatus && e.fromStatus !== e.toStatus
+                ? `${accountStatusLabel(e.fromStatus)} → ${accountStatusLabel(e.toStatus)}`
+                : accountStatusLabel(e.toStatus ?? e.fromStatus),
+          },
+        ]
+      : []),
+  ];
+
+  const ids: {
+    label: string;
+    value: string;
+    what: string;
+    href?: string | null;
+  }[] = [];
+  const pushId = (
+    label: string,
+    value: string | null | undefined,
+    what: string,
+    href?: string | null
+  ) => {
+    if (value && !ids.some((i) => i.value === value))
+      ids.push({ label, value, what, href });
+  };
+  if (ref) {
+    pushId(
+      REFERENCE_LABEL[ref.kind],
+      ref.id,
+      REFERENCE_LABEL[ref.kind].toLowerCase(),
+      ref.kind === 'payment'
+        ? razorpayPaymentHref(ref.id)
+        : ref.kind === 'subscription'
+          ? razorpayDashboardHref('subscription', ref.id)
+          : null
+    );
+  }
+  pushId(
+    'AutoPay ID',
+    e.providerSubscriptionId,
+    'autopay id',
+    e.providerSubscriptionId
+      ? razorpayDashboardHref('subscription', e.providerSubscriptionId)
+      : null
+  );
+  pushId(
+    'Payment ID',
+    e.providerPaymentId,
+    'payment id',
+    razorpayPaymentHref(e.providerPaymentId)
+  );
+  pushId('UTR', e.utr, 'UTR');
+  pushId('Event ID', e.id, 'event id');
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-3">
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-xs sm:grid-cols-2 xl:grid-cols-3">
+        {fields.map((f) => (
+          <div key={f.label} className="min-w-0">
+            <dt className="text-[10px] font-semibold tracking-wide text-slate-400 uppercase">
+              {f.label}
+            </dt>
+            <dd className="mt-0.5 break-words text-slate-700">{f.value}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className="mt-3 flex flex-wrap items-end gap-x-6 gap-y-2 border-t border-slate-100 pt-3">
+        {ids.map((i) => (
+          <div key={i.label + i.value} className="w-[190px] min-w-0">
+            <IdCell
+              label={i.label}
+              value={i.value}
+              what={i.what}
+              href={i.href}
+              hrefTitle="Open in Razorpay"
+            />
+          </div>
+        ))}
+        <div className="ml-auto flex items-center gap-2">
+          {e.billingSubscriptionId && onOpenSubscription ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={() => onOpenSubscription(e.billingSubscriptionId!)}
+            >
+              <Repeat aria-hidden />
+              Open AutoPay
+            </Button>
+          ) : null}
+          {e.paymentRequestId ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              disabled={requestLoading}
+              onClick={() => onOpenRequest(e.paymentRequestId!)}
+            >
+              {requestLoading ? (
+                <Loader2 className="animate-spin" aria-hidden />
+              ) : (
+                <ExternalLink aria-hidden />
+              )}
+              Open request
+            </Button>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }

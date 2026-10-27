@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { cn } from '@/lib/utils';
+import { isPlatform, PLATFORM_LABELS } from '@/lib/ai-connector/platforms';
 import type { Message, MessageReaction } from '@/types';
 import {
   Clock,
@@ -23,18 +24,21 @@ import {
   ExternalLink,
   Forward,
   Star,
+  Expand,
   HelpCircle,
   EyeOff,
   AlertTriangle,
   Megaphone,
 } from 'lucide-react';
 import { format } from 'date-fns';
-import { ReplyQuote } from './reply-quote';
+import {
+  QuotedMessage,
+  type QuotePreview,
+} from '@/components/chat/quoted-message';
 import { MessageReactions } from './message-reactions';
 import { InteractivePreview } from '@/components/interactive/interactive-preview';
 import { TemplateMessage, type TemplateRenderData } from './template-message';
 import { useTranslations } from 'next-intl';
-import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import type { WhatsAppContactCard } from '@/lib/whatsapp/meta-api';
@@ -48,8 +52,10 @@ import {
 
 interface MessageBubbleProps {
   message: Message;
-  /** Pre-computed quote info for messages that reply to another. */
-  reply?: { authorLabel: string; preview: string } | null;
+  /** Pre-computed quote for messages that reply to another. */
+  reply?: QuotePreview | null;
+  /** Jump to the quoted message. Omitted = the quote is not clickable. */
+  onJumpToReply?: () => void;
   reactions?: MessageReaction[];
   currentUserId?: string;
   isStarred?: boolean;
@@ -93,6 +99,8 @@ interface MessageBubbleProps {
    * something honest rather than a dead button.
    */
   onRequestLocation?: () => void;
+  onImageResolved?: (messageId: string, url: string | null) => void;
+  onOpenImage?: (messageId: string) => void;
 }
 
 /**
@@ -204,6 +212,11 @@ function AuthorBadge({
   );
 }
 
+/** Display name for messages.via_ai.platform ("via Claude"). */
+function viaAiAppName(platform: string): string {
+  return isPlatform(platform) ? PLATFORM_LABELS[platform] : 'AI app';
+}
+
 function MediaUnavailable({
   label,
   t,
@@ -219,7 +232,19 @@ function MediaUnavailable({
   );
 }
 
-function MediaImage({ url, alt }: { url: string; alt: string }) {
+function MediaImage({
+  url,
+  alt,
+  onOpen,
+  onResolved,
+  messageId,
+}: {
+  url: string;
+  alt: string;
+  onOpen?: () => void;
+  onResolved?: (messageId: string, url: string | null) => void;
+  messageId?: string;
+}) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -256,6 +281,16 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadImage]);
 
+  const onResolvedRef = useRef(onResolved);
+  useEffect(() => {
+    onResolvedRef.current = onResolved;
+  });
+  useEffect(() => {
+    if (messageId && src) {
+      onResolvedRef.current?.(messageId, src);
+    }
+  }, [messageId, src]);
+
   if (error) {
     return (
       <div className="bg-muted flex h-40 w-60 items-center justify-center rounded-lg">
@@ -273,23 +308,27 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   }
 
   return (
-    <Dialog>
-      <DialogTrigger className="m-0 border-none bg-transparent p-0 focus:outline-none">
-        <img
-          src={src ?? ''}
-          alt={alt}
-          className="max-h-64 max-w-60 cursor-pointer rounded-lg object-cover transition-opacity hover:opacity-90"
-          onError={() => setError(true)}
-        />
-      </DialogTrigger>
-      <DialogContent className="flex max-w-4xl justify-center border-none bg-transparent p-0 shadow-none [&>button]:text-white">
-        <img
-          src={src ?? ''}
-          alt={alt}
-          className="max-h-[90vh] object-contain"
-        />
-      </DialogContent>
-    </Dialog>
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={`Open ${alt}`}
+      className="group/img relative m-0 block overflow-hidden rounded-lg border-none bg-transparent p-0 focus:outline-none"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src ?? ''}
+        alt={alt}
+        loading="lazy"
+        className="max-h-64 max-w-60 cursor-zoom-in rounded-lg object-cover transition-transform duration-200 group-hover/img:scale-[1.02]"
+        onError={() => setError(true)}
+      />
+      {/* An affordance matching WhatsApp & Live Chat */}
+      <span className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover/img:bg-black/20 group-hover/img:opacity-100">
+        <span className="rounded-full bg-black/60 p-2 text-white shadow-sm">
+          <Expand className="size-4" />
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -649,12 +688,16 @@ function MessageContent({
   template,
   broadcastOrigin,
   onRequestLocation,
+  onOpenImage,
+  onImageResolved,
 }: {
   message: Message;
   t: ReturnType<typeof useTranslations>;
   template?: TemplateRenderData | null;
   broadcastOrigin?: BroadcastOrigin | null;
   onRequestLocation?: () => void;
+  onOpenImage?: (messageId: string) => void;
+  onImageResolved?: (messageId: string, url: string | null) => void;
 }) {
   switch (message.content_type) {
     case 'text': {
@@ -687,7 +730,13 @@ function MessageContent({
       return (
         <div>
           {message.media_url ? (
-            <MediaImage url={message.media_url} alt="Shared image" />
+            <MediaImage
+              url={message.media_url}
+              alt="Shared image"
+              messageId={message.id}
+              onOpen={() => onOpenImage?.(message.id)}
+              onResolved={onImageResolved}
+            />
           ) : (
             <MediaUnavailable label={t('photo')} t={t} />
           )}
@@ -914,6 +963,7 @@ function MessageContent({
 export function MessageBubble({
   message,
   reply,
+  onJumpToReply,
   reactions,
   currentUserId,
   isStarred,
@@ -922,6 +972,8 @@ export function MessageBubble({
   broadcastOrigin,
   authorDirectory,
   onRequestLocation,
+  onOpenImage,
+  onImageResolved,
 }: MessageBubbleProps) {
   const t = useTranslations('Inbox.bubble');
 
@@ -962,13 +1014,7 @@ export function MessageBubble({
             <span>Forwarded</span>
           </div>
         )}
-        {reply && (
-          <ReplyQuote
-            authorLabel={reply.authorLabel}
-            preview={reply.preview}
-            onPrimary={false}
-          />
-        )}
+        {reply && <QuotedMessage preview={reply} onClick={onJumpToReply} />}
         {/* A deleted message must NOT render its content. The text is
             still in the column (the delete is soft, so the thread keeps
             its shape and replies pointing here do not dangle), but
@@ -987,6 +1033,8 @@ export function MessageBubble({
             t={t}
             template={template}
             onRequestLocation={onRequestLocation}
+            onOpenImage={onOpenImage}
+            onImageResolved={onImageResolved}
           />
         )}
         <div
@@ -1045,6 +1093,21 @@ export function MessageBubble({
                         ? t('automationBadgeTitle')
                         : t('phoneBadgeTitle')
               }
+            />
+          ) : null}
+          {/* Sent by a connected AI app on the member's behalf (AI
+              connector). Shown next to the member's own badge, since
+              the member is still the sender. */}
+          {message.via_ai?.platform ? (
+            <AuthorBadge
+              onFill={isAgent && !isBorderless}
+              icon={Sparkles}
+              label={t('viaAiBadge', {
+                app: viaAiAppName(message.via_ai.platform),
+              })}
+              title={t('viaAiBadgeTitle', {
+                app: viaAiAppName(message.via_ai.platform),
+              })}
             />
           ) : null}
           <span

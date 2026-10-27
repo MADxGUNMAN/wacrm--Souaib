@@ -62,14 +62,16 @@ export function AIHighlightSection({ section }: AIHighlightSectionProps) {
           </div>
 
           {/* Image/Mockup */}
-          <div className="group relative order-1 lg:order-2">
-            <div className="absolute inset-0 rounded-3xl bg-[#25D366]/20 opacity-50 blur-3xl transition-opacity duration-500 group-hover:opacity-70" />
-            <div className="relative overflow-hidden rounded-3xl border border-emerald-900/10 bg-white/80 shadow-2xl backdrop-blur-md">
+          <div className="group relative order-1 flex items-center justify-center lg:order-2">
+            {/* Ambient emerald floor glow */}
+            <div className="pointer-events-none absolute -bottom-6 left-1/2 h-48 w-4/5 -translate-x-1/2 rounded-full bg-[#25D366]/20 blur-3xl transition-opacity duration-500 group-hover:opacity-80" />
+
+            <div className="relative z-10 w-full transition-transform duration-700 group-hover:scale-[1.02]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={image}
                 alt="AI Highlight"
-                className="h-auto w-full object-cover transition-transform duration-700 group-hover:scale-105"
+                className="h-auto w-full object-contain drop-shadow-[0_20px_35px_rgba(18,140,126,0.12)]"
               />
             </div>
           </div>

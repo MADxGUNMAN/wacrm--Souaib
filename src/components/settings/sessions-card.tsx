@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { Loader2, LogOut } from 'lucide-react';
 
-import { createClient } from '@/lib/supabase/client';
+import { signOutWithAudit } from '@/lib/security/client';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -25,21 +25,16 @@ import { useTranslations } from 'next-intl';
 
 export function SessionsCard() {
   const t = useTranslations('Settings.profile');
-  const supabase = createClient();
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
 
   const onConfirm = async () => {
     setSigningOut(true);
     try {
-      // scope: 'global' revokes every refresh token for this user
-      // across all devices; the next auth-state change on this tab
-      // triggers the usual redirect.
-      const { error } = await supabase.auth.signOut({ scope: 'global' });
-      if (error) {
-        toast.error(t('signOutFailed', { message: error.message }));
-        return;
-      }
+      // The server revokes every session for this user (all devices,
+      // this one included) and records it in Login activity; the helper
+      // then clears this browser's copy.
+      await signOutWithAudit('global');
       window.location.href = '/login';
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -53,8 +48,8 @@ export function SessionsCard() {
     <>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-foreground">
-            <LogOut className="size-4 text-primary" />
+          <CardTitle className="text-foreground flex items-center gap-2">
+            <LogOut className="text-primary size-4" />
             {t('sessionsTitle')}
           </CardTitle>
           <CardDescription className="text-muted-foreground">
@@ -62,11 +57,7 @@ export function SessionsCard() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setOpen(true)}
-          >
+          <Button type="button" variant="outline" onClick={() => setOpen(true)}>
             <LogOut className="size-4" />
             {t('signOutAll')}
           </Button>
@@ -77,9 +68,7 @@ export function SessionsCard() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t('signOutConfirmTitle')}</DialogTitle>
-            <DialogDescription>
-              {t('signOutConfirmDesc')}
-            </DialogDescription>
+            <DialogDescription>{t('signOutConfirmDesc')}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button

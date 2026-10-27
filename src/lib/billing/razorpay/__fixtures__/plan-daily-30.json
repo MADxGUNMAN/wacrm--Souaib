@@ -1,0 +1,30 @@
+{
+  "id": "plan_TqQrS94ZhLiMLh",
+  "entity": "plan",
+  "interval": 30,
+  "period": "daily",
+  "item": {
+    "id": "item_TqQrS8iaRM6zZU",
+    "active": true,
+    "name": "[spike] Replai Monthly (30 days)",
+    "description": "Phase 0 spike",
+    "amount": 99000,
+    "unit_amount": 99000,
+    "currency": "INR",
+    "type": "plan",
+    "unit": null,
+    "tax_inclusive": false,
+    "hsn_code": null,
+    "sac_code": null,
+    "tax_rate": null,
+    "tax_id": null,
+    "tax_group_id": null,
+    "created_at": 1792558193,
+    "updated_at": 1792558193
+  },
+  "notes": {
+    "source": "phase0-spike",
+    "env": "dev"
+  },
+  "created_at": 1792558193
+}

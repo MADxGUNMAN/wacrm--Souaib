@@ -354,6 +354,13 @@ const messagesGroup: EndpointGroup = {
                     'Alternative to headerMediaUrl: an id from a prior Meta media upload. Takes precedence when both are given.',
                 },
                 {
+                  name: 'headerDocumentFilename',
+                  type: 'string',
+                  required: false,
+                  description:
+                    'The name the recipient sees on a DOCUMENT header, e.g. "ORD-5074.pdf". Usually unnecessary: when omitted it is derived from the last path segment of headerMediaUrl, so a link ending in /ORD-5074.pdf already arrives correctly named. Supply it when the URL is opaque (a hash or an id), or when sending by headerMediaId, which carries no filename to derive from. Include the extension — without one the file will not open by double-click. Ignored for image and video headers, which Meta does not accept a filename on.',
+                },
+                {
                   name: 'headerLocation',
                   type: 'object',
                   required: false,

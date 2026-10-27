@@ -6,6 +6,8 @@
 // so the row shapes here stay a faithful description of storage.
 // ============================================================
 
+import type { CustomerAutopayPayment } from '@/lib/billing/razorpay/history';
+
 /**
  * Lifecycle state stored on `accounts.subscription_status`.
  *
@@ -32,7 +34,27 @@ export type SubscriptionEventType =
   | 'subscription_activated'
   | 'subscription_extended'
   | 'subscription_revoked'
-  | 'subscription_expired';
+  | 'subscription_expired'
+  // Razorpay AutoPay (migration 20261021000000). Only some are shown to
+  // customers; see listCustomerPlanActivity.
+  | 'autopay_checkout_created'
+  | 'autopay_authenticated'
+  | 'autopay_activated'
+  | 'payment_succeeded'
+  | 'payment_failed'
+  | 'autopay_pending'
+  | 'autopay_halted'
+  | 'autopay_paused'
+  | 'autopay_resumed'
+  | 'autopay_cancelled'
+  | 'autopay_completed'
+  | 'refund_processed'
+  | 'dispute_opened'
+  | 'dispute_closed'
+  | 'billing_anomaly'
+  // A super admin's billing action (sync, cancel, webhook retry), with
+  // actor and reason (migration 20261024000000). Never shown to customers.
+  | 'billing_admin_action';
 
 // ============================================================
 // Catalogue
@@ -153,6 +175,24 @@ export interface SubscriptionSettings {
   /** When false, the owner's name/email are withheld from the screen. */
   member_blocked_show_owner_contact: boolean;
 
+  // ---- Razorpay Subscriptions (migration 20261021020000) ----
+  /**
+   * Which purchase flow the UI offers. 'manual_upi' is the legacy QR +
+   * UTR review; 'razorpay' is AutoPay checkout. Webhook processing runs
+   * regardless, so access always follows money already collected.
+   */
+  payment_provider: 'manual_upi' | 'razorpay';
+  /** D2: days of access kept past a due AutoPay charge (0 = strict). */
+  autopay_grace_days: number;
+  razorpay_checkout_name: string | null;
+  razorpay_checkout_description: string | null;
+  /** Supports {business} {amount} {days} {first_charge_date}. */
+  autopay_consent_template: string | null;
+  autopay_defer_summary_template: string | null;
+  autopay_immediate_summary_template: string | null;
+  /** Supports {access_until}. */
+  autopay_cancel_note: string | null;
+
   created_at: string;
   updated_at: string;
 }
@@ -184,10 +224,67 @@ export interface BillingCycle {
   is_recommended: boolean;
   /** Badge text when recommended, e.g. 'Recommended'. */
   recommended_label: string | null;
+  /**
+   * Customer visibility. For a Global cycle this is the stored
+   * `is_visible`; for a country cycle it is `is_visible_in_region`, because
+   * country cycles always store `is_visible = false` so code without region
+   * support never shows them (see the localized pricing migration).
+   */
   is_visible: boolean;
   position: number;
+  /**
+   * 'global' or an ISO alpha-2 country code. Optional so literals written
+   * before localized pricing still compile; absent means 'global'.
+   */
+  region?: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Why an account sees the pricing it sees. Successful country matches use
+ * `phone_match` or `live_mandate`; every other reason means Global.
+ */
+export type PricingRegionReason =
+  | 'phone_match'
+  | 'live_mandate'
+  | 'no_phone'
+  | 'unknown_dial_code'
+  | 'region_not_configured'
+  | 'region_disabled'
+  | 'region_incomplete'
+  | 'currency_not_chargeable'
+  | 'manual_upi_inr_only'
+  | 'lookup_failed'
+  | 'default';
+
+/**
+ * The pricing region resolved for one workspace. Decided on the server
+ * from the owner's phone and any live AutoPay mandate; never from input.
+ */
+export interface PricingRegionResolution {
+  /** 'global' or the ISO alpha-2 code of an enabled country plan. */
+  region: string;
+  /** ISO 4217 currency every price in this region is charged in. */
+  currency: string;
+  /** Country detected from the owner's phone, when one was detected. */
+  countryCode: string | null;
+  source: 'subscription' | 'phone' | 'fallback';
+  reason: PricingRegionReason;
+  /**
+   * Currency the live AutoPay mandate is charged in; set for reason
+   * 'live_mandate'. Can differ from `currency` after a Global currency
+   * change, because the mandate keeps the price it was bought with.
+   */
+  mandateCurrency?: string | null;
+}
+
+/** Region summary attached to a plans bundle for display. */
+export interface PlansBundleRegion {
+  code: string;
+  currency: string;
+  label: string;
+  isGlobal: boolean;
 }
 
 /**
@@ -367,6 +464,12 @@ export interface CustomerPlanActivity {
   /** Access end date after this change. */
   endsAt: string | null;
   createdAt: string;
+  /**
+   * True when a Razorpay payment caused this row (e.g. a refund removing
+   * the time that payment bought), so the label can say so instead of
+   * "Access blocked".
+   */
+  billingLinked?: boolean;
 }
 
 /** One page of results plus what the pager needs to render itself. */
@@ -383,6 +486,11 @@ export interface CustomerHistoryPage<T> {
 export interface BillingHistoryPayload {
   payments: CustomerHistoryPage<CustomerPaymentRecord>;
   activity: CustomerHistoryPage<CustomerPlanActivity>;
+  /**
+   * Razorpay AutoPay payments (charges, retries, the setup check), newest
+   * first. Absent or empty where Razorpay is not configured.
+   */
+  transactions?: CustomerHistoryPage<CustomerAutopayPayment>;
   /**
    * Computed over EVERY payment, never over the current page — a "total
    * paid" that changed when you clicked to page 2 would be a bug, and a
@@ -452,6 +560,14 @@ export interface AccountSubscriptionRow {
    * which is what keeps the new onboarding to new signups only.
    */
   plan_selection_required: boolean;
+
+  /**
+   * Razorpay AutoPay grace (migration 20261021000000). Written only by the
+   * `billing_refresh_account_grace` SQL function while a charge is being
+   * collected. Optional so callers that never select it (tests, older
+   * selects) still type-check; absent and null both mean "no grace".
+   */
+  billing_grace_ends_at?: string | null;
 }
 
 // ============================================================
@@ -475,6 +591,8 @@ export interface PlansBundle {
   cycles: BillingCycle[];
   plans: SubscriptionPlan[];
   prices: SubscriptionPlanPrice[];
+  /** Pricing region of this bundle. Absent on bundles built before regions. */
+  region?: PlansBundleRegion;
 }
 
 /**

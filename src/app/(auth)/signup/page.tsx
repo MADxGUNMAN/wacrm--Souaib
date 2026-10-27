@@ -4,6 +4,7 @@ import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useBranding } from '@/hooks/use-branding';
+import { AuthShowcase } from '@/components/auth/auth-showcase';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,7 +18,6 @@ import {
   Loader2,
   AlertCircle,
   Bot,
-  CheckCheck,
 } from 'lucide-react';
 
 export default function SignupPage() {
@@ -31,7 +31,7 @@ export default function SignupPage() {
 function SignupPageInner() {
   const searchParams = useSearchParams();
   const inviteToken = searchParams.get('invite');
-  const { logoUrl, faviconUrl: iconUrl, siteName } = useBranding();
+  const { faviconUrl: iconUrl, siteName } = useBranding();
 
   const [fullName, setFullName] = useState('');
   // Full E.164 (e.g. +919876543210) as emitted by PhoneInput, plus the
@@ -39,7 +39,10 @@ function SignupPageInner() {
   // string is what we submit, the flag is what gates the submit.
   const [phone, setPhone] = useState('');
   const [isPhoneValid, setIsPhoneValid] = useState(false);
-  const [email, setEmail] = useState('');
+  // Prefilled when the login page sends someone here with ?email=.
+  const [email, setEmail] = useState(() =>
+    (searchParams.get('email') ?? '').trim().slice(0, 254)
+  );
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -111,114 +114,7 @@ function SignupPageInner() {
     setLoading(false);
   };
 
-  const LeftHeroPanel = (
-    <div className="relative hidden flex-col justify-between overflow-hidden border-r border-slate-200/80 bg-gradient-to-br from-emerald-50/50 via-slate-50 to-emerald-50/20 p-12 lg:flex lg:w-1/2 xl:p-16">
-      {/* Subtle Ambient Orbs */}
-      <div className="pointer-events-none absolute -top-32 -left-32 h-96 w-96 rounded-full bg-[#25D366]/10 blur-3xl" />
-      <div className="pointer-events-none absolute -right-32 -bottom-32 h-96 w-96 rounded-full bg-emerald-400/10 blur-3xl" />
-
-      {/* Brand Header */}
-      <div className="relative z-10">
-        <Link
-          href="/"
-          title="Go to home"
-          className="inline-block rounded-lg transition-transform hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-        >
-          {logoUrl ? (
-            <img
-              src={logoUrl}
-              alt={siteName}
-              suppressHydrationWarning
-              className="h-12 w-auto cursor-pointer object-contain"
-            />
-          ) : (
-            <span className="text-2xl font-bold tracking-tight text-slate-900">
-              {siteName}
-            </span>
-          )}
-        </Link>
-      </div>
-
-      {/* Center Hero Content */}
-      <div className="relative z-10 my-auto max-w-lg py-8">
-        <h2 className="text-3xl leading-tight font-bold tracking-tight text-slate-900 xl:text-4xl">
-          Scale your customer communication
-        </h2>
-        <p className="mt-3.5 text-base leading-relaxed text-slate-600">
-          Join thousands of businesses using {siteName} to automate WhatsApp
-          support, sales, and marketing.
-        </p>
-
-        {/* WhatsApp CRM Preview Card */}
-        <div className="mt-8 space-y-3 rounded-2xl border border-slate-200/90 bg-white/90 p-4 shadow-lg shadow-slate-200/40 backdrop-blur-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-1.5 shadow-2xs">
-                {iconUrl ? (
-                  <img
-                    src={iconUrl}
-                    alt={siteName}
-                    suppressHydrationWarning
-                    className="h-full w-full object-contain"
-                  />
-                ) : (
-                  <Bot className="h-5 w-5 text-[#25D366]" />
-                )}
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-semibold text-slate-800">
-                    {siteName} Assistant
-                  </span>
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#25D366]" />
-                </div>
-                <span className="text-[11px] text-slate-400">
-                  Automated Bot Flow
-                </span>
-              </div>
-            </div>
-            <span className="rounded-full border border-emerald-200/60 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-              Active
-            </span>
-          </div>
-
-          <div className="space-y-2 text-xs">
-            <div className="flex justify-start">
-              <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-slate-100 px-3.5 py-2 text-slate-700 shadow-2xs">
-                <p>
-                  Can I automate WhatsApp notifications for customer inquiries?
-                </p>
-                <span className="mt-1 block text-right text-[10px] text-slate-400">
-                  10:42 AM
-                </span>
-              </div>
-            </div>
-
-            <div className="flex justify-end">
-              <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[#d9fdd3] px-3.5 py-2 text-slate-800 shadow-2xs">
-                <p>
-                  Yes! Connect your WhatsApp Business API and trigger smart
-                  workflows in under 2 minutes. ⚡
-                </p>
-                <div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-slate-500">
-                  <span>10:42 AM</span>
-                  <CheckCheck className="h-3.5 w-3.5 text-[#53bdeb]" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Footer Meta */}
-      <div className="relative z-10 flex items-center justify-between border-t border-slate-200/60 pt-4 text-xs text-slate-500">
-        <span>Official WhatsApp Cloud API</span>
-        <span>
-          © {new Date().getFullYear()} {siteName}
-        </span>
-      </div>
-    </div>
-  );
+  const LeftHeroPanel = <AuthShowcase variant="whatsapp" />;
 
   if (success) {
     return (
@@ -338,7 +234,7 @@ function SignupPageInner() {
                   htmlFor="phone"
                   className="text-sm font-medium text-slate-700"
                 >
-                  Phone Number <span className="text-red-500">*</span>
+                  Phone number
                 </Label>
                 {/* PhoneInput is built for the themed app shell: it styles
                     itself from the `--muted` / `--border` / `--foreground`

@@ -28,6 +28,22 @@ export function HeroSection({ section, backgroundVideoUrl }: HeroSectionProps) {
       ? section.extra_data.badge_text
       : 'Official WhatsApp Business API';
 
+  // Labels inside the default dashboard mockup (CMS -> Landing Sections ->
+  // hero -> Mockup Labels). Ignored when a custom hero image is set.
+  const extra = (section?.extra_data ?? {}) as Record<string, unknown>;
+  const pick = (key: string, fallback: string) => {
+    const v = extra[key];
+    return typeof v === 'string' && v.trim() ? v : fallback;
+  };
+  const mock = {
+    url: pick('mockup_url', 'replai.app/inbox'),
+    aiBadge: pick('mockup_ai_badge', 'AI Active'),
+    chip1Label: pick('mockup_chip1_label', 'AI Agent'),
+    chip1Value: pick('mockup_chip1_value', 'Reply drafted'),
+    chip2Label: pick('mockup_chip2_label', 'New Deal'),
+    chip2Value: pick('mockup_chip2_value', '+$4,500 closed'),
+  };
+
   return (
     <section className="relative overflow-hidden px-6 pt-32 pb-24 lg:pt-40 lg:pb-32">
       {backgroundVideoUrl ? (
@@ -154,7 +170,7 @@ export function HeroSection({ section, backgroundVideoUrl }: HeroSectionProps) {
                   <div className="h-3 w-3 rounded-full bg-green-500/80" />
                 </div>
                 <div className="mx-auto font-mono text-xs font-medium text-slate-400">
-                  replai.app/inbox
+                  {mock.url}
                 </div>
               </div>
 
@@ -192,7 +208,7 @@ export function HeroSection({ section, backgroundVideoUrl }: HeroSectionProps) {
                       <div className="h-3 w-24 rounded bg-slate-200" />
                       <div className="ml-auto flex gap-1.5">
                         <div className="rounded bg-[#25D366]/15 px-2 py-1 text-[8px] font-bold text-[#25D366]">
-                          AI Active
+                          {mock.aiBadge}
                         </div>
                       </div>
                     </div>
@@ -232,10 +248,10 @@ export function HeroSection({ section, backgroundVideoUrl }: HeroSectionProps) {
                   </div>
                   <div>
                     <p className="text-xs font-medium text-slate-500">
-                      AI Agent
+                      {mock.chip1Label}
                     </p>
                     <p className="text-sm font-semibold text-slate-900">
-                      Reply drafted
+                      {mock.chip1Value}
                     </p>
                   </div>
                 </div>
@@ -259,10 +275,10 @@ export function HeroSection({ section, backgroundVideoUrl }: HeroSectionProps) {
                   </div>
                   <div>
                     <p className="text-xs font-medium text-slate-500">
-                      New Deal
+                      {mock.chip2Label}
                     </p>
                     <p className="text-sm font-semibold text-slate-900">
-                      +$4,500 closed
+                      {mock.chip2Value}
                     </p>
                   </div>
                 </div>

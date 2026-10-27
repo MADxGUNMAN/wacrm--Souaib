@@ -20,9 +20,12 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit';
+import { supabaseAdmin } from '@/lib/auth/admin-client';
+import { recordSecurityEvent } from '@/lib/security/server';
+import { requestDeviceMeta } from '@/lib/security/device';
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -46,7 +49,7 @@ export async function DELETE(
       .eq('id', id)
       .eq('account_id', ctx.accountId)
       .is('revoked_at', null)
-      .select('id')
+      .select('id, name, key_prefix')
       .maybeSingle();
 
     if (error) {
@@ -63,6 +66,14 @@ export async function DELETE(
         { status: 404 }
       );
     }
+
+    await recordSecurityEvent(supabaseAdmin(), {
+      userId: ctx.userId,
+      accountId: ctx.accountId,
+      type: 'api_key_revoked',
+      meta: requestDeviceMeta(request.headers),
+      metadata: { key_id: data.id, name: data.name, prefix: data.key_prefix },
+    });
 
     return NextResponse.json({ success: true });
   } catch (err) {

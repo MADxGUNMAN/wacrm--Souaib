@@ -73,6 +73,7 @@ import {
   type ContactSource,
 } from '@/lib/contacts/contact-source';
 import { PhoneDisplay } from '@/components/ui/phone-display';
+import { buildContactSearchFilter } from '@/lib/contacts/search';
 
 const PAGE_SIZE = 25;
 
@@ -455,10 +456,7 @@ export default function ContactsPage() {
             .range(from, to);
 
           if (term) {
-            const like = `%${term}%`;
-            query = query.or(
-              `name.ilike.${like},phone.ilike.${like},email.ilike.${like}`
-            );
+            query = query.or(buildContactSearchFilter(term));
           }
 
           if (selectedSources.length > 0) {
@@ -478,10 +476,7 @@ export default function ContactsPage() {
         .range(from, to);
 
       if (term) {
-        const like = `%${term}%`;
-        query = query.or(
-          `name.ilike.${like},phone.ilike.${like},email.ilike.${like}`
-        );
+        query = query.or(buildContactSearchFilter(term));
       }
 
       if (selectedSources.length > 0) {
@@ -669,9 +664,7 @@ export default function ContactsPage() {
       } else {
         let query = supabase.from('contacts').select('id');
         if (term) {
-          query = query.or(
-            `name.ilike.%${term}%,phone.ilike.%${term}%,email.ilike.%${term}%`
-          );
+          query = query.or(buildContactSearchFilter(term));
         }
         if (selectedSources.length > 0) {
           query = query.in('source', selectedSources);

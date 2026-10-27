@@ -22,6 +22,14 @@
 import { NextResponse } from 'next/server';
 
 import { supabaseAdmin } from '@/lib/auth/admin-client';
+import {
+  deriveAccessVia,
+  GRANT_EVENT_TYPES,
+  type LatestGrant,
+} from '@/lib/billing/access-via';
+import { classifyBillingEvent } from '@/lib/billing/event-channel';
+import { fetchAllRows } from '@/lib/billing/fetch-all';
+import { CHARGING_STATUSES } from '@/lib/billing/razorpay/admin-status';
 import { requireSuperAdmin } from '@/lib/super-admin/guard';
 import {
   activateSubscription,
@@ -33,13 +41,234 @@ import {
   setTrialEndDate,
   SubscriptionMutationError,
 } from '@/lib/subscription/activate';
-import { getGateConfig } from '@/lib/subscription/queries';
+import {
+  describePricingReason,
+  resolvePricingRegion,
+  type PricingRegionRow,
+  type RegionCatalogue,
+} from '@/lib/billing/pricing/regions';
+import {
+  chargeContextOf,
+  loadPricingRegions,
+  loadRegionCatalogue,
+} from '@/lib/billing/pricing/region-store';
+import { getRazorpayConfig } from '@/lib/billing/razorpay/config';
+import { resolvePaymentProvider } from '@/lib/billing/razorpay/provider';
+import {
+  getGateConfig,
+  getSubscriptionSettings,
+} from '@/lib/subscription/queries';
 import { resolveSubscriptionState } from '@/lib/subscription/status';
 import {
   parseDurationOverride,
   ValidationError,
 } from '@/lib/subscription/validation';
 import type { SubscriptionStatus } from '@/lib/subscription/types';
+import type {
+  SubscriberAutopay,
+  SubscriberPricingRegion,
+} from '@/types/super-admin';
+
+/**
+ * Everything the pricing resolver needs, loaded once per request. Null
+ * when any read failed, so every row shows no pricing badge rather than a
+ * guessed "Global".
+ */
+async function loadPricingContext(): Promise<{
+  regions: Map<string, PricingRegionRow>;
+  catalogue: RegionCatalogue;
+  settingsProvider: string | null;
+  globalCurrency: string;
+} | null> {
+  try {
+    const [regions, catalogue, settings] = await Promise.all([
+      loadPricingRegions(),
+      loadRegionCatalogue(),
+      getSubscriptionSettings(),
+    ]);
+    return {
+      regions,
+      catalogue,
+      settingsProvider: settings.payment_provider ?? null,
+      globalCurrency: settings.currency || 'INR',
+    };
+  } catch (err) {
+    console.error(
+      '[super-admin/billing/subscriptions] pricing lookup failed:',
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
+/**
+ * Razorpay subscriptions that can still charge or be revived. The
+ * Subscribers tab shows one per workspace so an operator granting time by
+ * hand can see that Razorpay will still charge on its own schedule (F6).
+ */
+const AUTOPAY_STATUSES = [
+  'authenticated',
+  'active',
+  'pending',
+  'halted',
+  'paused',
+] as const;
+
+type AutopayDbRow = {
+  id: string;
+  account_id: string;
+  mode: 'test' | 'live';
+  status: string;
+  payment_method: string | null;
+  method_summary: Record<string, unknown> | null;
+  charge_at: string | null;
+  amount_minor: number;
+  currency: string;
+  provider_subscription_id: string | null;
+  cancel_at_cycle_end: boolean | null;
+  cycle_id?: string | null;
+  created_at: string;
+};
+
+/** Newest mandate per account in one mode (pins its pricing region). */
+function newestMandateByAccount(
+  rows: AutopayDbRow[],
+  mode: 'test' | 'live'
+): Map<string, AutopayDbRow> {
+  const out = new Map<string, AutopayDbRow>();
+  for (const row of rows) {
+    if (row.mode !== mode) continue;
+    const current = out.get(row.account_id);
+    if (!current || row.created_at > current.created_at) {
+      out.set(row.account_id, row);
+    }
+  }
+  return out;
+}
+
+/** One AutoPay per account: live before test, then the newest. */
+function pickAutopayByAccount(
+  rows: AutopayDbRow[]
+): Map<string, SubscriberAutopay> {
+  const best = new Map<string, AutopayDbRow>();
+  for (const row of rows) {
+    const current = best.get(row.account_id);
+    if (
+      !current ||
+      (row.mode === 'live' && current.mode !== 'live') ||
+      (row.mode === current.mode && row.created_at > current.created_at)
+    ) {
+      best.set(row.account_id, row);
+    }
+  }
+  const out = new Map<string, SubscriberAutopay>();
+  for (const [accountId, row] of best) {
+    out.set(accountId, {
+      id: row.id,
+      mode: row.mode,
+      status: row.status,
+      paymentMethod: row.payment_method,
+      methodSummary:
+        row.method_summary && typeof row.method_summary === 'object'
+          ? row.method_summary
+          : null,
+      chargeAt: row.charge_at,
+      amountMinor: row.amount_minor,
+      currency: row.currency,
+      providerSubscriptionId: row.provider_subscription_id,
+      charging:
+        CHARGING_STATUSES.has(row.status) && row.cancel_at_cycle_end !== true,
+    });
+  }
+  return out;
+}
+
+type GrantDbRow = {
+  account_id: string;
+  event_type: string;
+  source: string | null;
+  payment_request_id: string | null;
+  billing_subscription_id: string | null;
+  billing_payment_id: string | null;
+  actor_user_id: string | null;
+  created_at: string;
+};
+
+/**
+ * Newest grant event per account, classified by channel. Null when the
+ * lookup failed, so every row reads "Not recorded" instead of a guess.
+ */
+async function loadLatestGrants(
+  admin: ReturnType<typeof supabaseAdmin>
+): Promise<Map<string, LatestGrant> | null> {
+  try {
+    const { rows } = await fetchAllRows<GrantDbRow>(
+      (from, to) =>
+        admin
+          .from('subscription_events')
+          .select(
+            'account_id, event_type, source, payment_request_id, billing_subscription_id, billing_payment_id, actor_user_id, created_at'
+          )
+          .in('event_type', [...GRANT_EVENT_TYPES])
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(from, to) as unknown as PromiseLike<{
+          data: GrantDbRow[] | null;
+          error: { message: string } | null;
+        }>,
+      { cap: 20000 }
+    );
+    const newest = new Map<string, GrantDbRow>();
+    for (const r of rows) {
+      if (!newest.has(r.account_id)) newest.set(r.account_id, r);
+    }
+    const actorIds = [
+      ...new Set(
+        [...newest.values()]
+          .map((r) => r.actor_user_id)
+          .filter((v): v is string => Boolean(v))
+      ),
+    ];
+    const superAdmins = new Set<string>();
+    for (let i = 0; i < actorIds.length; i += 200) {
+      const { data, error } = await admin
+        .from('profiles')
+        .select('user_id, is_super_admin')
+        .in('user_id', actorIds.slice(i, i + 200));
+      if (error) throw new Error(error.message);
+      for (const p of data ?? []) {
+        if (p.is_super_admin === true) superAdmins.add(String(p.user_id));
+      }
+    }
+    const out = new Map<string, LatestGrant>();
+    for (const [accountId, r] of newest) {
+      const c = classifyBillingEvent({
+        eventType: r.event_type,
+        source: r.source,
+        paymentRequestId: r.payment_request_id,
+        billingSubscriptionId: r.billing_subscription_id,
+        billingPaymentId: r.billing_payment_id,
+        actorUserId: r.actor_user_id,
+        actorIsSuperAdmin: r.actor_user_id
+          ? superAdmins.has(r.actor_user_id)
+          : false,
+        actorName: null,
+        actorEmail: null,
+        ownerEmail: null,
+        subMode: null,
+        payMode: null,
+      });
+      out.set(accountId, { channel: c.channel, createdAt: r.created_at });
+    }
+    return out;
+  } catch (err) {
+    console.error(
+      '[super-admin/billing/subscriptions] access lookup failed:',
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
 
 const VALID_STATUSES: readonly SubscriptionStatus[] = [
   'trialing',
@@ -57,7 +286,7 @@ export async function GET(request: Request) {
     const stateFilter = searchParams.get('state') ?? 'all';
     const search = (searchParams.get('search') ?? '').trim();
 
-    const [accountsRes, config] = await Promise.all([
+    const [accountsRes, config, autopayRes, latestGrants] = await Promise.all([
       admin
         .from('accounts')
         .select(
@@ -65,7 +294,59 @@ export async function GET(request: Request) {
         )
         .order('created_at', { ascending: false }),
       getGateConfig(),
+      admin
+        .from('billing_subscriptions')
+        .select(
+          'id, account_id, mode, status, payment_method, method_summary, charge_at, amount_minor, currency, provider_subscription_id, cancel_at_cycle_end, cycle_id, created_at'
+        )
+        .in('status', [...AUTOPAY_STATUSES]),
+      loadLatestGrants(admin),
     ]);
+    const pricingCtx = await loadPricingContext();
+    const razorpayConfig = getRazorpayConfig();
+    const mandates =
+      razorpayConfig && !autopayRes.error
+        ? newestMandateByAccount(
+            (autopayRes.data ?? []) as AutopayDbRow[],
+            razorpayConfig.mode
+          )
+        : new Map<string, AutopayDbRow>();
+    const cycleRegionById = new Map(
+      (pricingCtx?.catalogue.cycles ?? []).map((c) => [c.id, c.region])
+    );
+
+    /** Same resolver the customer routes use, from the owner's phone. */
+    const pricingFor = (
+      accountId: string,
+      ownerPhone: string | null
+    ): SubscriberPricingRegion | undefined => {
+      if (!pricingCtx) return undefined;
+      const mandate = mandates.get(accountId);
+      const resolution = resolvePricingRegion({
+        ownerPhone,
+        regions: pricingCtx.regions,
+        catalogue: pricingCtx.catalogue,
+        provider: resolvePaymentProvider({
+          settingsProvider: pricingCtx.settingsProvider,
+          config: razorpayConfig,
+          accountId,
+        }),
+        ctx: chargeContextOf(razorpayConfig),
+        globalCurrency: pricingCtx.globalCurrency,
+        mandate: mandate
+          ? {
+              cycleRegion: mandate.cycle_id
+                ? (cycleRegionById.get(mandate.cycle_id) ?? null)
+                : null,
+              currency: mandate.currency,
+            }
+          : null,
+      });
+      return {
+        ...resolution,
+        reasonText: describePricingReason(resolution.reason),
+      };
+    };
 
     if (accountsRes.error) {
       return NextResponse.json(
@@ -73,6 +354,19 @@ export async function GET(request: Request) {
         { status: 500 }
       );
     }
+
+    // A failed AutoPay lookup must not hide the subscriber list, but it
+    // must not read as "no AutoPay" either: `autopay` stays undefined
+    // (unknown) rather than null (none) for every row.
+    if (autopayRes.error) {
+      console.error(
+        '[super-admin/billing/subscriptions] AutoPay lookup failed:',
+        autopayRes.error.message
+      );
+    }
+    const autopayByAccount = autopayRes.error
+      ? null
+      : pickAutopayByAccount((autopayRes.data ?? []) as AutopayDbRow[]);
 
     const allRows = accountsRes.data ?? [];
 
@@ -152,6 +446,23 @@ export async function GET(request: Request) {
               durationDays: state.pendingWindow.durationDays,
             }
           : null,
+        autopay: autopayByAccount
+          ? (autopayByAccount.get(row.id) ?? null)
+          : undefined,
+        // How the workspace has access. Undefined when the event lookup
+        // failed, which the UI shows as "Not recorded".
+        accessVia: latestGrants
+          ? deriveAccessVia({
+              liveStatus: state.status,
+              autopay: autopayByAccount?.get(row.id) ?? null,
+              latestGrant: latestGrants.get(row.id) ?? null,
+              hadPaidWindow: Boolean(row.subscription_ends_at),
+            })
+          : undefined,
+        pricingRegion: pricingFor(
+          row.id,
+          (owner?.phone as string | null | undefined) ?? null
+        ),
       };
     });
 

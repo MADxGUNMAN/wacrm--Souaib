@@ -33,6 +33,7 @@ import {
   requireBillingOwner,
   toBillingErrorResponse,
 } from '@/lib/subscription/guard';
+import { getAccountPricingRegion } from '@/lib/billing/pricing/region-store';
 import { setSelectedPlan } from '@/lib/subscription/queries';
 
 interface SelectPlanBody {
@@ -65,7 +66,14 @@ export async function POST(request: Request) {
       );
     }
 
-    const selected = await setSelectedPlan(ctx.accountId, planId, cycleId);
+    // Only a term of the workspace's own pricing region can be chosen.
+    const pricing = await getAccountPricingRegion(ctx.accountId);
+    const selected = await setSelectedPlan(
+      ctx.accountId,
+      planId,
+      cycleId,
+      pricing
+    );
 
     return NextResponse.json({ selectedPlan: selected });
   } catch (err) {

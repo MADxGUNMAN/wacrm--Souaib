@@ -25,10 +25,12 @@ import {
   Sparkles,
 } from 'lucide-react';
 
+import { AutopayCard } from '@/components/settings/autopay-card';
 import { BillingHistory } from '@/components/settings/billing-history';
 import { SettingsPanelHead } from '@/components/settings/settings-panel-head';
 import { useSubscription } from '@/hooks/use-subscription';
-import { formatCurrency } from '@/lib/currency';
+import { formatBillingDate } from '@/lib/billing/razorpay/format';
+import { formatPlanAmount } from '@/lib/billing/money-format';
 import { cn } from '@/lib/utils';
 
 function formatDate(value: string | null): string {
@@ -101,6 +103,19 @@ export function BillingSettings() {
   const isPaid = state.isActive && !state.billingDisabled;
   const queued = state.pendingWindow;
 
+  /**
+   * A working Razorpay AutoPay. With one, "renews" stops being a promise
+   * this page cannot keep (see below), there is nothing to buy, and the
+   * unpaid "Upcoming plan" card would be false: the AutoPay card below
+   * says exactly when the charge happens.
+   */
+  const autopay = data.autopay ?? null;
+  const liveAutopay = autopay?.hasMandate ? autopay : null;
+  const renewsOn =
+    liveAutopay && liveAutopay.display.key === 'subscription_active'
+      ? formatBillingDate(liveAutopay.nextChargeAt)
+      : '';
+
   /** Title + subtitle for the window running right now. */
   const nowTitle = state.billingDisabled
     ? copy.freePlanLabel
@@ -112,18 +127,20 @@ export function BillingSettings() {
 
   const nowSubtitle = state.billingDisabled
     ? 'Billing is not enabled on this platform'
-    : isPaid
-      ? subscription?.cycleLabel
-        ? // "renews" is a promise this app cannot keep — there is no
-          // recurring billing, every period is a manual UPI transfer. Say
-          // what is actually true.
-          `${subscription.cycleLabel} · runs until ${formatDate(state.endsAt)}`
-        : `Active until ${formatDate(state.endsAt)}`
-      : state.isTrialing
-        ? `Free trial · ends ${formatDate(state.endsAt)}`
-        : state.isExpired
-          ? (copy.expiredHeading ?? 'Your access has ended')
-          : copy.freePlanSubtitle;
+    : isPaid && renewsOn
+      ? // AutoPay is the one case where "renews" is true.
+        `${subscription?.cycleLabel ?? liveAutopay?.cycleLabel ?? 'Plan'} · renews automatically on ${renewsOn}`
+      : isPaid
+        ? subscription?.cycleLabel
+          ? // "renews" is a promise this app cannot keep without AutoPay —
+            // every period is a manual UPI transfer. Say what is true.
+            `${subscription.cycleLabel} · runs until ${formatDate(state.endsAt)}`
+          : `Active until ${formatDate(state.endsAt)}`
+        : state.isTrialing
+          ? `Free trial · ends ${formatDate(state.endsAt)}`
+          : state.isExpired
+            ? (copy.expiredHeading ?? 'Your access has ended')
+            : copy.freePlanSubtitle;
 
   /**
    * The last date this workspace has access, across BOTH windows.
@@ -322,7 +339,7 @@ export function BillingSettings() {
                 <div className="flex justify-between gap-4 sm:block">
                   <dt className="text-muted-foreground">Amount paid</dt>
                   <dd className="text-foreground font-medium">
-                    {formatCurrency(
+                    {formatPlanAmount(
                       pendingPayment.paidAmount,
                       pendingPayment.currency
                     )}
@@ -350,6 +367,14 @@ export function BillingSettings() {
                 Refresh status
               </button>
             </div>
+          ) : liveAutopay ? (
+            // Nothing to buy: AutoPay renews this plan. Its actions live
+            // in the AutoPay card below.
+            <p className="text-muted-foreground flex items-start gap-2 text-sm">
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+              AutoPay is set up, so this plan renews automatically. Manage it in
+              the AutoPay section below.
+            </p>
           ) : isOwner ? (
             <div className="flex flex-wrap items-center gap-3">
               <Link
@@ -435,7 +460,17 @@ export function BillingSettings() {
 
           The amount is shown because "Not paid" without a figure is a
           worry, not information. */}
-      {isOwner && selectedPlan && !hasPaidCoverage && !pendingPayment ? (
+      {/* ---- AutoPay (Razorpay) ----
+          Renders nothing where AutoPay is not offered and there is no
+          AutoPay history, so the page is unchanged for manual-UPI
+          workspaces. */}
+      <AutopayCard />
+
+      {isOwner &&
+      selectedPlan &&
+      !hasPaidCoverage &&
+      !pendingPayment &&
+      !liveAutopay ? (
         <div className="border-border bg-card overflow-hidden rounded-xl border">
           <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
             <div className="flex min-w-0 items-start gap-3">
@@ -452,7 +487,7 @@ export function BillingSettings() {
                     .join(' · ')}
                 </p>
                 <p className="text-muted-foreground mt-0.5 text-sm">
-                  {formatCurrency(selectedPlan.amount, selectedPlan.currency)}
+                  {formatPlanAmount(selectedPlan.amount, selectedPlan.currency)}
                   {accessUntil ? (
                     <> · due by {formatDate(accessUntil)}</>
                   ) : null}

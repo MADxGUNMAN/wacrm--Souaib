@@ -18,7 +18,11 @@
 import {
   S3Client,
   PutObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -162,6 +166,96 @@ export async function createPresignedUploadUrl(params: {
 }
 
 /**
+ * How long a presigned DOWNLOAD URL stays valid.
+ *
+ * Five minutes: long enough for a browser to fetch the object (and for a
+ * user to click a download link they were just handed), short enough that
+ * a URL copied out of devtools or leaked through a Referer header is dead
+ * before it is useful. Deliberately far shorter than the upload expiry —
+ * an upload URL can only write one predetermined key, whereas a download
+ * URL hands over the bytes.
+ */
+export const PRESIGNED_DOWNLOAD_EXPIRY_SECONDS = 5 * 60;
+
+/**
+ * Mint a presigned GET URL for one object.
+ *
+ * Used by the in-app support chat, whose attachments must NOT be served
+ * from the bucket's public-read path: a support screenshot routinely
+ * contains an API key, a customer list, or a third party's data.
+ *
+ * ─── What the response overrides are for ──────────────────────────
+ *
+ * `contentType` and `contentDisposition` are sent as
+ * ResponseContentType / ResponseContentDisposition, which make S3 answer
+ * with those headers instead of whatever was stored. Two reasons:
+ *
+ *   1. The stored Content-Type came from the uploading browser. Pinning
+ *      the type we validated and recorded means a mislabelled object
+ *      cannot be served as something scriptable.
+ *   2. A document should download under its real filename. The object key
+ *      is a random segment plus a flattened name, so without this the
+ *      user saves `a3f9c2...-invoice.pdf`.
+ *
+ * Both are signed, so a caller cannot edit them in the URL.
+ */
+export async function createPresignedDownloadUrl(params: {
+  key: string;
+  expiresIn?: number;
+  contentType?: string;
+  /** e.g. `attachment; filename="invoice.pdf"` */
+  contentDisposition?: string;
+}): Promise<string> {
+  const { key, expiresIn, contentType, contentDisposition } = params;
+  const client = getClient();
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      ResponseContentType: contentType,
+      ResponseContentDisposition: contentDisposition,
+    }),
+    { expiresIn: expiresIn ?? PRESIGNED_DOWNLOAD_EXPIRY_SECONDS }
+  );
+}
+
+/**
+ * Read an object's stored metadata without downloading it.
+ *
+ * The support-chat send route uses this to take the attachment's REAL
+ * byte length and content type from S3 rather than from the request body.
+ * The client's claim was already pinned into the upload signature, but a
+ * second source of truth costs one HEAD and removes the question
+ * entirely. Returns null when the object is not there, which is also how
+ * "you are attaching a key you never uploaded" is detected.
+ */
+export async function headS3Object(key: string): Promise<{
+  contentLength: number;
+  contentType: string | null;
+} | null> {
+  const client = getClient();
+  try {
+    const res = await client.send(
+      new HeadObjectCommand({ Bucket: BUCKET, Key: key })
+    );
+    return {
+      contentLength: res.ContentLength ?? 0,
+      contentType: res.ContentType ?? null,
+    };
+  } catch (err) {
+    // NotFound / NoSuchKey both surface as a 404 here. Anything else is a
+    // real failure worth seeing in the logs rather than reporting to the
+    // caller as a missing file.
+    const status = (err as { $metadata?: { httpStatusCode?: number } })
+      .$metadata?.httpStatusCode;
+    if (status === 404) return null;
+    console.error('[s3-client] HeadObject failed:', err);
+    throw err;
+  }
+}
+
+/**
  * Delete an object from S3.
  *
  * @param key  Full object key.
@@ -174,6 +268,51 @@ export async function deleteFromS3(key: string): Promise<void> {
       Key: key,
     })
   );
+}
+
+/**
+ * Delete every object under a prefix (e.g. `chat-media/account-<id>/`).
+ * Pages through ListObjectsV2 and removes in DeleteObjects batches of
+ * 1 000. Returns how many objects were deleted. The prefix must end in
+ * `/` and be at least two segments deep, so a typo can never empty a
+ * whole top-level folder.
+ */
+export async function deleteS3Prefix(prefix: string): Promise<number> {
+  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/$/.test(prefix)) {
+    throw new Error(`Refusing to delete unsafe S3 prefix "${prefix}"`);
+  }
+  const client = getClient();
+  let deleted = 0;
+  let token: string | undefined;
+  do {
+    const page = await client.send(
+      new ListObjectsV2Command({
+        Bucket: BUCKET,
+        Prefix: prefix,
+        ContinuationToken: token,
+        MaxKeys: 1000,
+      })
+    );
+    const keys = (page.Contents ?? [])
+      .map((o) => o.Key)
+      .filter((k): k is string => !!k && k.startsWith(prefix));
+    if (keys.length > 0) {
+      const res = await client.send(
+        new DeleteObjectsCommand({
+          Bucket: BUCKET,
+          Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true },
+        })
+      );
+      if (res.Errors?.length) {
+        throw new Error(
+          `S3 refused to delete ${res.Errors.length} object(s) under ${prefix}: ${res.Errors[0]?.Code ?? 'unknown'}`
+        );
+      }
+      deleted += keys.length;
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token);
+  return deleted;
 }
 
 /**

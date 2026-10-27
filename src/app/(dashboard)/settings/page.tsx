@@ -2,6 +2,8 @@
 
 import { Suspense, useEffect, useMemo, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+
+import { replaceSearchParams } from '@/lib/url-state';
 import { useTranslations } from 'next-intl';
 
 import { useAuth } from '@/hooks/use-auth';
@@ -23,6 +25,9 @@ import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import { AppIntegrations } from '@/components/settings/app-integrations';
 import { UsageAlertsPanel } from '@/components/settings/usage-alerts-panel';
 import { OptInOutPanel } from '@/components/settings/opt-in-out-panel';
+import { LiveChatPanel } from '@/components/settings/live-chat-panel';
+import { AiConnectorsPanel } from '@/components/settings/ai-connectors-panel';
+import { useSupportUnreadForAccount } from '@/hooks/use-support-unread';
 import {
   RELOCATED_SECTIONS,
   SECTION_META,
@@ -95,7 +100,10 @@ function SettingsPageInner() {
     // `mode` belongs to the WhatsApp section's guided/manual tab. Leaving it
     // behind would pin a stale sub-tab onto the next section you open.
     params.delete('mode');
-    router.replace(`/settings?${params.toString()}`, { scroll: false });
+    // Same for iew, the Login & security sub-view.
+    params.delete('view');
+    // Client-only section switch: no server navigation (see lib/url-state).
+    replaceSearchParams(params);
   };
 
   useEffect(() => {
@@ -113,11 +121,26 @@ function SettingsPageInner() {
     }
   }, [loading, profile, canAccessSettings, rawSection]);
 
-  // Cheap, fetch-free rail hints. The Overview landing carries the
-  // full live status/counts; the rail just surfaces the two that are
-  // already in context.
+  // Live chat is the one hint that is NOT fetch-free — it is a real
+  // unread count off a realtime subscription. Worth the exception: a
+  // reply from support that the rail does not surface is a reply the
+  // customer only finds by guessing they should look.
+  const supportUnread = useSupportUnreadForAccount();
+
+  // The rest are cheap and fetch-free. The Overview landing carries the
+  // full live status/counts; the rail just surfaces what is already in
+  // context.
   const hints: Partial<Record<SettingsSection, ReactNode>> = useMemo(
     () => ({
+      ...(supportUnread > 0
+        ? {
+            'live-chat': (
+              <span className="bg-primary text-primary-foreground flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-semibold">
+                {supportUnread > 9 ? '9+' : supportUnread}
+              </span>
+            ),
+          }
+        : {}),
       whatsapp: (
         <span className="flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium tracking-wide text-emerald-600 shadow-sm dark:text-emerald-400">
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
@@ -143,7 +166,7 @@ function SettingsPageInner() {
         </span>
       ),
     }),
-    []
+    [supportUnread]
   );
 
   const panel: Record<SettingsSection, ReactNode> = {
@@ -161,6 +184,8 @@ function SettingsPageInner() {
     integrations: <AppIntegrations />,
     alerts: <UsageAlertsPanel />,
     'opt-out': <OptInOutPanel />,
+    'live-chat': <LiveChatPanel />,
+    'ai-connectors': <AiConnectorsPanel />,
   };
 
   return (

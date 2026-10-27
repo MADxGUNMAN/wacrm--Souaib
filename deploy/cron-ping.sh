@@ -21,6 +21,9 @@
 #                           minutes: each (period, threshold) is claimed
 #                           by a UNIQUE insert, so it notifies once.
 #
+# The authoritative list is the `for ep in ...` loop below, not this
+# comment — see the note above it before adding anything.
+#
 # ─── Why this is a script and not an inline crontab command ───
 # The original crontab inlined the curl and wrapped the secret lookup in
 # SINGLE QUOTES:
@@ -73,7 +76,28 @@ fi
 #              it. Without that claim the failure would not be a
 #              duplicate email but the same paid marketing message
 #              arriving twice on a customer's phone.
-for ep in automations flows alerts auto-mail broadcasts; do
+#   support-chat
+#              emails a workspace when we have replied in the in-app
+#              support chat and nobody there has been back since. Safe at
+#              this interval: each reply is claimed by UNIQUE(message_id)
+#              on support_reply_emails, so overlapping ticks send once.
+#              Without this the whole Live Chat feature only works for
+#              customers who happen to still have the tab open.
+#   ai-connectors
+#              deletes expired AI connector OAuth codes/tokens and revokes
+#              connections idle past their window. Safe at this interval:
+#              deletes are by expiry and revokes are conditional updates.
+#              Answers {"skipped":"disabled"} while the connector is off.
+#   billing    Razorpay AutoPay reconciliation and the billing email
+#              outbox: retries failed webhook events, refetches overdue
+#              and stale subscriptions, closes abandoned checkouts, sends
+#              due billing emails. Safe at this interval: every unit of
+#              work is claimed with FOR UPDATE SKIP LOCKED, access only
+#              moves forward (greatest()), and each email has a unique
+#              dedupe key. Answers {"skipped":"not_configured"} where
+#              Razorpay is not set up. Without it a missed webhook is
+#              never recovered and a failed billing email never retried.
+for ep in automations flows alerts auto-mail broadcasts support-chat ai-connectors billing; do
   # Capture body and status together so the log records what the app
   # actually said, not just that something happened.
   out=$(curl -s --max-time 60 -w '\n%{http_code}' \

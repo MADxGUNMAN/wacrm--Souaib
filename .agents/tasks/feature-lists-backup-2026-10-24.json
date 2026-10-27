@@ -1,0 +1,28 @@
+{
+  "note": "Backup taken 24-10-2026 before adding new features (Claude/ChatGPT connectors, Google Sheets add-on, Coexistence, usage alerts, 2FA, live chat) to the dynamic feature lists. Restore by writing these values back. landing_features / landing_integrations / landing_faqs had 6 / 8 / 4 rows; new rows were only appended (positions 7+, 9+, 5+).",
+  "subscription_plans.features (id aaa689df-4c95-44b5-b52b-605239d41edd)": [
+    { "label": "Unlimited marketing messages", "emphasis": false },
+    { "label": "WhatsApp bulk broadcasts", "emphasis": false },
+    { "label": "Campaign scheduler", "emphasis": false },
+    { "label": "Retargeting campaigns", "emphasis": false },
+    { "label": "Opt-in / opt-out management", "emphasis": false },
+    { "label": "URL click tracking", "emphasis": false },
+    { "label": "Advanced analytics dashboard", "emphasis": false },
+    { "label": "Shared team inbox", "emphasis": false },
+    { "label": "Unlimited agent logins", "emphasis": false },
+    { "label": "Contacts, pipelines and deals", "emphasis": false },
+    { "label": "Custom fields and tags", "emphasis": false },
+    { "label": "Unlimited chatbot flows", "emphasis": false },
+    { "label": "WhatsApp Flows and forms", "emphasis": false },
+    { "label": "AI auto-reply agents", "emphasis": false },
+    { "label": "Meta Lead Ads to WhatsApp", "emphasis": false },
+    { "label": "Message templates and quick replies", "emphasis": false },
+    { "label": "Public API and MCP access", "emphasis": false },
+    { "label": "Dedicated onboarding", "emphasis": false },
+    { "label": "Priority support", "emphasis": false }
+  ],
+  "landing_sections.extra_data.features (features section)": "6 items f1-f6: Shared Team Inbox, AI Reply Assistant, Visual Automations, Broadcast Campaigns, Sales Pipelines, Contact Management (unchanged, new items f7-f9 appended)",
+  "landing_sections.extra_data.integrations (integrations section)": "8 items i1-i8: WhatsApp Business API, Supabase, OpenAI, Anthropic, Google Gemini, Webhooks, REST API, MCP Protocol (unchanged, new items i9-i12 appended)",
+  "landing_sections.extra_data.faqs (faq section)": "4 items (unchanged, 3 new appended)",
+  "restore_sql": "update subscription_plans set features = '<array above>'::jsonb where id = 'aaa689df-4c95-44b5-b52b-605239d41edd'; update landing_sections set extra_data = jsonb_set(extra_data, '{features}', (extra_data->'features') - 8 - 7 - 6) where section_key='features'; update landing_sections set extra_data = jsonb_set(extra_data, '{integrations}', (extra_data->'integrations') - 11 - 10 - 9 - 8) where section_key='integrations'; update landing_sections set extra_data = jsonb_set(extra_data, '{faqs}', (extra_data->'faqs') - 6 - 5 - 4) where section_key='faq'; delete from landing_features where position >= 7; delete from landing_integrations where position >= 9; delete from landing_faqs where position >= 5;"
+}

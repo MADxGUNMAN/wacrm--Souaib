@@ -11,6 +11,7 @@ import {
 } from '@/lib/whatsapp/template-send-inputs';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import { isMarketingCategory } from '@/lib/whatsapp/marketing-opt-out';
+import { stampRecipientSent } from '@/lib/whatsapp/broadcast-recipient-status';
 
 export type CustomFieldOperator = 'is' | 'is_not' | 'contains';
 
@@ -689,6 +690,9 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
               // id is already known here — the send endpoint is phone-based
               // and would otherwise have no way to identify the recipient.
               contact_id: r.contact!.id as string,
+              // Lets the server stamp the wamid onto this exact recipient
+              // row at send time, before any status webhook can arrive.
+              recipient_id: r.id as string,
               params: values,
               ...(Object.keys(perRecipient).length > 0
                 ? { messageParams: perRecipient }
@@ -727,6 +731,11 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
             const phone = recipient.contact?.phone;
             const result = phone ? resultsByPhone.get(phone) : undefined;
 
+            // Every write below is guarded by `status = 'pending'`: the
+            // server now stamps sent rows at send time and status webhooks
+            // advance them from there, so by the time this batch returns
+            // a row may already be delivered/read/failed. An unguarded
+            // write here would drag it backwards.
             if (!result) {
               failedCount++;
               await supabase
@@ -735,20 +744,33 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
                   status: 'failed',
                   error_message: 'No phone number on contact',
                 })
-                .eq('id', recipient.id);
+                .eq('id', recipient.id)
+                .eq('status', 'pending');
               continue;
             }
 
             if (result.status === 'sent') {
-              await supabase
-                .from('broadcast_recipients')
-                .update({
-                  status: 'sent',
-                  sent_at: new Date().toISOString(),
-                  whatsapp_message_id: result.whatsapp_message_id ?? null,
-                  error_message: null,
-                })
-                .eq('id', recipient.id);
+              if (result.whatsapp_message_id) {
+                // Normally a no-op: the server already stamped this row.
+                // Kept as a forward-only backstop (same helper, same
+                // predicates) in case that best-effort write failed.
+                await stampRecipientSent(supabase, {
+                  recipientId: recipient.id,
+                  broadcastId: broadcast.id,
+                  contactId: recipient.contact?.id ?? null,
+                  waMessageId: result.whatsapp_message_id,
+                });
+              } else {
+                await supabase
+                  .from('broadcast_recipients')
+                  .update({
+                    status: 'sent',
+                    sent_at: new Date().toISOString(),
+                    error_message: null,
+                  })
+                  .eq('id', recipient.id)
+                  .eq('status', 'pending');
+              }
             } else if (result.status === 'skipped') {
               // Suppressed server-side (marketing opt-out). NOT counted as
               // a failure — the aggregate trigger ignores 'skipped', so a
@@ -760,7 +782,8 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
                   error_message:
                     result.error ?? 'Recipient opted out of marketing messages',
                 })
-                .eq('id', recipient.id);
+                .eq('id', recipient.id)
+                .eq('status', 'pending');
             } else {
               failedCount++;
               await supabase
@@ -769,10 +792,15 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
                   status: 'failed',
                   error_message: result.error ?? 'Unknown error',
                 })
-                .eq('id', recipient.id);
+                .eq('id', recipient.id)
+                .eq('status', 'pending');
             }
           }
         } catch (err) {
+          // The guard is load-bearing here: if fetch / res.json() throws
+          // AFTER the server already sent and stamped (timeout, parse
+          // error), an unguarded write would flip sent or delivered rows
+          // to 'failed'.
           for (const recipient of batch) {
             failedCount++;
             await supabase
@@ -782,7 +810,8 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
                 error_message:
                   err instanceof Error ? err.message : 'Unknown error',
               })
-              .eq('id', recipient.id);
+              .eq('id', recipient.id)
+              .eq('status', 'pending');
           }
         }
 

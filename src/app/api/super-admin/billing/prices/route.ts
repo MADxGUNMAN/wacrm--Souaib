@@ -20,6 +20,8 @@
 import { NextResponse } from 'next/server';
 
 import { supabaseAdmin } from '@/lib/auth/admin-client';
+import { GLOBAL_REGION } from '@/lib/billing/pricing/regions';
+import { toMinor } from '@/lib/billing/razorpay/money';
 import { requireSuperAdmin } from '@/lib/super-admin/guard';
 import { toAmount } from '@/lib/subscription/plans';
 import { ValidationError } from '@/lib/subscription/validation';
@@ -53,6 +55,51 @@ function parseAmount(value: unknown, field: string, label: string): number {
   return Math.round(n * 100) / 100;
 }
 
+async function assertRepresentableInCycleCurrency(
+  admin: ReturnType<typeof supabaseAdmin>,
+  cycleId: string,
+  values: [field: string, value: number | null][]
+): Promise<void> {
+  const { data: cycle } = await admin
+    .from('billing_cycles')
+    .select('region')
+    .eq('id', cycleId)
+    .maybeSingle();
+  const region = (cycle as { region?: string | null } | null)?.region;
+  if (!region) return;
+  // Global is priced in subscription_settings.currency, which can be a
+  // currency without minor units (report §12). For INR every 2-decimal
+  // value passes, exactly as before.
+  const { data: row } =
+    region === GLOBAL_REGION
+      ? await admin
+          .from('subscription_settings')
+          .select('currency')
+          .limit(1)
+          .maybeSingle()
+      : await admin
+          .from('pricing_regions')
+          .select('currency')
+          .eq('code', region)
+          .maybeSingle();
+  const currency = (row as { currency?: string | null } | null)?.currency
+    ?.trim()
+    .toUpperCase();
+  // No currency yet: checked again when the country is enabled.
+  if (!currency) return;
+  for (const [field, value] of values) {
+    if (value === null) continue;
+    try {
+      toMinor(value, currency);
+    } catch {
+      throw new ValidationError(
+        `${value} is not a valid amount in ${currency}. Use whole ${currency} minor units.`,
+        field
+      );
+    }
+  }
+}
+
 export async function PUT(request: Request) {
   try {
     await requireSuperAdmin(request);
@@ -65,7 +112,7 @@ export async function PUT(request: Request) {
     if (!planId || !cycleId) {
       return NextResponse.json(
         { error: 'plan_id and cycle_id are required' },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -78,19 +125,27 @@ export async function PUT(request: Request) {
     if (amount === 0) {
       throw new ValidationError(
         'A price must be greater than zero. To make this plan unavailable on this cycle, delete the price instead.',
-        'amount',
+        'amount'
       );
     }
 
     let compareAt: number | null = null;
-    if (body.compare_at_amount !== undefined && body.compare_at_amount !== null && body.compare_at_amount !== '') {
-      compareAt = parseAmount(body.compare_at_amount, 'compare_at_amount', 'Compare-at price');
+    if (
+      body.compare_at_amount !== undefined &&
+      body.compare_at_amount !== null &&
+      body.compare_at_amount !== ''
+    ) {
+      compareAt = parseAmount(
+        body.compare_at_amount,
+        'compare_at_amount',
+        'Compare-at price'
+      );
       if (compareAt <= amount) {
         // A compare-at at or below the price would render a negative or
         // zero "Save X", which reads as broken rather than persuasive.
         throw new ValidationError(
           'The compare-at price must be higher than the actual price, or leave it blank to calculate the saving automatically.',
-          'compare_at_amount',
+          'compare_at_amount'
         );
       }
     }
@@ -106,11 +161,15 @@ export async function PUT(request: Request) {
       body.per_day_amount !== null &&
       body.per_day_amount !== ''
     ) {
-      perDay = parseAmount(body.per_day_amount, 'per_day_amount', 'Per-day price');
+      perDay = parseAmount(
+        body.per_day_amount,
+        'per_day_amount',
+        'Per-day price'
+      );
       if (perDay <= 0) {
         throw new ValidationError(
           'The per-day price must be greater than zero, or leave it blank to calculate it automatically.',
-          'per_day_amount',
+          'per_day_amount'
         );
       }
       if (perDay > amount) {
@@ -118,12 +177,21 @@ export async function PUT(request: Request) {
         // it would advertise a number higher than the customer pays.
         throw new ValidationError(
           'The per-day price cannot exceed the total price for the term.',
-          'per_day_amount',
+          'per_day_amount'
         );
       }
     }
 
-    const isVisible = body.is_visible === undefined ? true : Boolean(body.is_visible);
+    const isVisible =
+      body.is_visible === undefined ? true : Boolean(body.is_visible);
+
+    // Localized pricing: a country price must be chargeable in that
+    // country's currency (e.g. no fractions in JPY). The cycle row decides
+    // the region, never the request.
+    await assertRepresentableInCycleCurrency(admin, cycleId, [
+      ['amount', amount],
+      ['per_day_amount', perDay],
+    ]);
 
     const { data, error } = await admin
       .from('subscription_plan_prices')
@@ -137,7 +205,7 @@ export async function PUT(request: Request) {
           is_visible: isVisible,
           updated_at: new Date().toISOString(),
         },
-        { onConflict: 'plan_id,cycle_id' },
+        { onConflict: 'plan_id,cycle_id' }
       )
       .select('*')
       .single();
@@ -147,8 +215,11 @@ export async function PUT(request: Request) {
       // editor tab left open while the other was deleted elsewhere.
       if (error.code === '23503') {
         return NextResponse.json(
-          { error: 'That plan or billing cycle no longer exists. Reload and try again.' },
-          { status: 409 },
+          {
+            error:
+              'That plan or billing cycle no longer exists. Reload and try again.',
+          },
+          { status: 409 }
         );
       }
       return NextResponse.json({ error: error.message }, { status: 500 });
@@ -160,10 +231,16 @@ export async function PUT(request: Request) {
   } catch (err) {
     if (err instanceof NextResponse) return err;
     if (err instanceof ValidationError) {
-      return NextResponse.json({ error: err.message, field: err.field }, { status: 400 });
+      return NextResponse.json(
+        { error: err.message, field: err.field },
+        { status: 400 }
+      );
     }
     console.error('[super-admin/billing/prices] PUT failed:', err);
-    return NextResponse.json({ error: 'Failed to save price' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to save price' },
+      { status: 500 }
+    );
   }
 }
 
@@ -179,7 +256,7 @@ export async function DELETE(request: Request) {
     if (!planId || !cycleId) {
       return NextResponse.json(
         { error: 'planId and cycleId are required' },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -200,6 +277,9 @@ export async function DELETE(request: Request) {
   } catch (err) {
     if (err instanceof NextResponse) return err;
     console.error('[super-admin/billing/prices] DELETE failed:', err);
-    return NextResponse.json({ error: 'Failed to delete price' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to delete price' },
+      { status: 500 }
+    );
   }
 }

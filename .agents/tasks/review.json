@@ -1,0 +1,24 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    {
+      "severity": "non-blocking",
+      "confidence": "confirmed",
+      "label": "Residual drop is not persisted",
+      "detail": "The [webhook][contact-resolution-failed] JSON line is the only trace of a dropped message, and it is lost when the container is recreated. The plan chose this deliberately. Follow up with report recommendation 5 (log retention across deploys)."
+    },
+    {
+      "severity": "non-blocking",
+      "confidence": "likely",
+      "label": "Stale client bundles during rollout",
+      "detail": "A tab still running the old hook does an unconditional status:'sent' write after its batch returns. That write can now regress rows that webhooks advanced after the new server-side stamp correlated them. This is temporary: ask active senders to hard-refresh, or deploy outside an active campaign."
+    },
+    {
+      "severity": "non-blocking",
+      "confidence": "likely",
+      "label": "Duplicate (broadcast_id, contact_id) rows under the contact-id key",
+      "detail": "Without recipient_id (legacy or old-bundle callers), statement A could put one wamid on two rows. The unique wamid index rejects that, so the stamp fails and is logged, and the webhook fallback reports 'ambiguous'. It fails safe. No change needed unless such duplicates turn out to be real."
+    }
+  ],
+  "reviewDoc": "d:\\Junkies Coder\\whatsapp-crm-nextjs\\.agents\\tasks\\review.md"
+}

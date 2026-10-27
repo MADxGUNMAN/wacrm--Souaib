@@ -15,13 +15,27 @@ import { NextResponse } from 'next/server';
 
 import { supabaseAdmin } from '@/lib/auth/admin-client';
 import { requireSuperAdmin } from '@/lib/super-admin/guard';
+import {
+  assessRegion,
+  isGlobalRegion,
+  parseRegionParam,
+} from '@/lib/billing/pricing/regions';
+import {
+  chargeContextOf,
+  loadPricingRegions,
+  loadRegionCatalogue,
+} from '@/lib/billing/pricing/region-store';
+import { getRazorpayConfig } from '@/lib/billing/razorpay/config';
 import { getPlansBundle } from '@/lib/subscription/queries';
-import { normalisePlanFeatures, serialisePlanFeatures } from '@/lib/subscription/plans';
+import {
+  normalisePlanFeatures,
+  serialisePlanFeatures,
+} from '@/lib/subscription/plans';
 import { ValidationError } from '@/lib/subscription/validation';
 
 function buildPlanPatch(
   body: Record<string, unknown>,
-  { requireName }: { requireName: boolean },
+  { requireName }: { requireName: boolean }
 ): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
 
@@ -31,17 +45,29 @@ function buildPlanPatch(
       throw new ValidationError('Plan name is required', 'name');
     }
     if (name.length > 60) {
-      throw new ValidationError('Plan name must be 60 characters or fewer', 'name');
+      throw new ValidationError(
+        'Plan name must be 60 characters or fewer',
+        'name'
+      );
     }
     patch.name = name;
   }
 
-  for (const field of ['tagline', 'description', 'features_heading', 'cta_text', 'highlight_label'] as const) {
+  for (const field of [
+    'tagline',
+    'description',
+    'features_heading',
+    'cta_text',
+    'highlight_label',
+  ] as const) {
     if (!(field in body)) continue;
     const raw = body[field];
     const value = raw === null ? null : String(raw).trim();
     if (value && value.length > 500) {
-      throw new ValidationError('That text is too long (max 500 characters)', field);
+      throw new ValidationError(
+        'That text is too long (max 500 characters)',
+        field
+      );
     }
     patch[field] = value || null;
   }
@@ -51,9 +77,14 @@ function buildPlanPatch(
     // objects, and junk all converge on one stored shape. Without this
     // the reader would have to defend against every historical shape
     // forever.
-    const features = serialisePlanFeatures(normalisePlanFeatures(body.features));
+    const features = serialisePlanFeatures(
+      normalisePlanFeatures(body.features)
+    );
     if (features.length > 40) {
-      throw new ValidationError('A plan can list at most 40 features', 'features');
+      throw new ValidationError(
+        'A plan can list at most 40 features',
+        'features'
+      );
     }
     patch.features = features;
   }
@@ -65,7 +96,10 @@ function buildPlanPatch(
   if ('position' in body) {
     const n = Number(body.position);
     if (!Number.isInteger(n) || n < 0 || n > 999) {
-      throw new ValidationError('Position must be a whole number between 0 and 999', 'position');
+      throw new ValidationError(
+        'Position must be a whole number between 0 and 999',
+        'position'
+      );
     }
     patch.position = n;
   }
@@ -76,12 +110,37 @@ function buildPlanPatch(
 export async function GET(request: Request) {
   try {
     await requireSuperAdmin(request);
+    const region = parseRegionParam(
+      new URL(request.url).searchParams.get('region')
+    );
+    if (!region) {
+      return NextResponse.json(
+        { error: 'Unknown pricing region', field: 'region' },
+        { status: 400 }
+      );
+    }
     // includeHidden: the editor must see what customers cannot.
-    const bundle = await getPlansBundle({ includeHidden: true });
-    return NextResponse.json(bundle);
+    const bundle = await getPlansBundle({ includeHidden: true, region });
+    if (isGlobalRegion(region)) return NextResponse.json(bundle);
+
+    // A country also gets its readiness, computed the same way the
+    // customer-side resolver decides whether to show it.
+    const [regions, catalogue] = await Promise.all([
+      loadPricingRegions(),
+      loadRegionCatalogue(),
+    ]);
+    const regionStatus = assessRegion(
+      regions.get(region) ?? null,
+      catalogue,
+      chargeContextOf(getRazorpayConfig())
+    );
+    return NextResponse.json({ ...bundle, regionStatus });
   } catch (err) {
     if (err instanceof NextResponse) return err;
-    return NextResponse.json({ error: 'Failed to load plans' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to load plans' },
+      { status: 500 }
+    );
   }
 }
 
@@ -119,10 +178,16 @@ export async function POST(request: Request) {
   } catch (err) {
     if (err instanceof NextResponse) return err;
     if (err instanceof ValidationError) {
-      return NextResponse.json({ error: err.message, field: err.field }, { status: 400 });
+      return NextResponse.json(
+        { error: err.message, field: err.field },
+        { status: 400 }
+      );
     }
     console.error('[super-admin/billing/plans] POST failed:', err);
-    return NextResponse.json({ error: 'Failed to create plan' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to create plan' },
+      { status: 500 }
+    );
   }
 }
 
@@ -134,12 +199,18 @@ export async function PUT(request: Request) {
     const body = (await request.json()) as Record<string, unknown>;
     const id = typeof body.id === 'string' ? body.id : '';
     if (!id) {
-      return NextResponse.json({ error: 'Plan id is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Plan id is required' },
+        { status: 400 }
+      );
     }
 
     const patch = buildPlanPatch(body, { requireName: false });
     if (Object.keys(patch).length === 0) {
-      return NextResponse.json({ error: 'No editable fields were supplied' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'No editable fields were supplied' },
+        { status: 400 }
+      );
     }
 
     const { data, error } = await admin
@@ -157,10 +228,16 @@ export async function PUT(request: Request) {
   } catch (err) {
     if (err instanceof NextResponse) return err;
     if (err instanceof ValidationError) {
-      return NextResponse.json({ error: err.message, field: err.field }, { status: 400 });
+      return NextResponse.json(
+        { error: err.message, field: err.field },
+        { status: 400 }
+      );
     }
     console.error('[super-admin/billing/plans] PUT failed:', err);
-    return NextResponse.json({ error: 'Failed to update plan' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to update plan' },
+      { status: 500 }
+    );
   }
 }
 
@@ -172,7 +249,10 @@ export async function DELETE(request: Request) {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     if (!id) {
-      return NextResponse.json({ error: 'Plan id is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Plan id is required' },
+        { status: 400 }
+      );
     }
 
     // Warn (don't block) when accounts are still on this plan. The FK is
@@ -193,11 +273,14 @@ export async function DELETE(request: Request) {
           code: 'plan_in_use',
           affectedAccounts: count,
         },
-        { status: 409 },
+        { status: 409 }
       );
     }
 
-    const { error } = await admin.from('subscription_plans').delete().eq('id', id);
+    const { error } = await admin
+      .from('subscription_plans')
+      .delete()
+      .eq('id', id);
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
@@ -206,6 +289,9 @@ export async function DELETE(request: Request) {
   } catch (err) {
     if (err instanceof NextResponse) return err;
     console.error('[super-admin/billing/plans] DELETE failed:', err);
-    return NextResponse.json({ error: 'Failed to delete plan' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to delete plan' },
+      { status: 500 }
+    );
   }
 }

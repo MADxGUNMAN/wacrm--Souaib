@@ -1018,7 +1018,503 @@ export const COUNTRIES: Country[] = [
     format: '71 234 5678',
     lengths: [9],
   },
+  // Remaining ITU calling codes — without these, "+CC" numbers from
+  // unlisted countries fell back to the default (+91) when displayed.
+  // Africa
+  {
+    name: 'Burkina Faso',
+    code: 'BF',
+    dialCode: '+226',
+    flag: '🇧🇫',
+    lengths: [8],
+  },
+  { name: 'Burundi', code: 'BI', dialCode: '+257', flag: '🇧🇮', lengths: [8] },
+  {
+    name: 'Cape Verde',
+    code: 'CV',
+    dialCode: '+238',
+    flag: '🇨🇻',
+    lengths: [7],
+  },
+  {
+    name: 'Central African Republic',
+    code: 'CF',
+    dialCode: '+236',
+    flag: '🇨🇫',
+    lengths: [8],
+  },
+  { name: 'Chad', code: 'TD', dialCode: '+235', flag: '🇹🇩', lengths: [8] },
+  { name: 'Comoros', code: 'KM', dialCode: '+269', flag: '🇰🇲', lengths: [7] },
+  { name: 'Congo', code: 'CG', dialCode: '+242', flag: '🇨🇬', lengths: [9] },
+  {
+    name: 'Congo (DRC)',
+    code: 'CD',
+    dialCode: '+243',
+    flag: '🇨🇩',
+    lengths: [7, 8, 9],
+  },
+  { name: 'Djibouti', code: 'DJ', dialCode: '+253', flag: '🇩🇯', lengths: [8] },
+  {
+    name: 'Equatorial Guinea',
+    code: 'GQ',
+    dialCode: '+240',
+    flag: '🇬🇶',
+    lengths: [9],
+  },
+  { name: 'Eritrea', code: 'ER', dialCode: '+291', flag: '🇪🇷', lengths: [7] },
+  { name: 'Eswatini', code: 'SZ', dialCode: '+268', flag: '🇸🇿', lengths: [8] },
+  { name: 'Gabon', code: 'GA', dialCode: '+241', flag: '🇬🇦', lengths: [7, 8] },
+  { name: 'Gambia', code: 'GM', dialCode: '+220', flag: '🇬🇲', lengths: [7] },
+  { name: 'Guinea', code: 'GN', dialCode: '+224', flag: '🇬🇳', lengths: [8, 9] },
+  {
+    name: 'Guinea-Bissau',
+    code: 'GW',
+    dialCode: '+245',
+    flag: '🇬🇼',
+    lengths: [7, 9],
+  },
+  { name: 'Lesotho', code: 'LS', dialCode: '+266', flag: '🇱🇸', lengths: [8] },
+  {
+    name: 'Liberia',
+    code: 'LR',
+    dialCode: '+231',
+    flag: '🇱🇷',
+    lengths: [7, 8, 9],
+  },
+  { name: 'Libya', code: 'LY', dialCode: '+218', flag: '🇱🇾', lengths: [8, 9] },
+  {
+    name: 'Madagascar',
+    code: 'MG',
+    dialCode: '+261',
+    flag: '🇲🇬',
+    lengths: [9],
+  },
+  { name: 'Malawi', code: 'MW', dialCode: '+265', flag: '🇲🇼', lengths: [7, 9] },
+  { name: 'Mali', code: 'ML', dialCode: '+223', flag: '🇲🇱', lengths: [8] },
+  {
+    name: 'Mauritania',
+    code: 'MR',
+    dialCode: '+222',
+    flag: '🇲🇷',
+    lengths: [8],
+  },
+  {
+    name: 'Mozambique',
+    code: 'MZ',
+    dialCode: '+258',
+    flag: '🇲🇿',
+    lengths: [8, 9],
+  },
+  {
+    name: 'Namibia',
+    code: 'NA',
+    dialCode: '+264',
+    flag: '🇳🇦',
+    lengths: [8, 9],
+  },
+  { name: 'Niger', code: 'NE', dialCode: '+227', flag: '🇳🇪', lengths: [8] },
+  { name: 'Réunion', code: 'RE', dialCode: '+262', flag: '🇷🇪', lengths: [9] },
+  {
+    name: 'Saint Helena',
+    code: 'SH',
+    dialCode: '+290',
+    flag: '🇸🇭',
+    lengths: [4, 5],
+  },
+  {
+    name: 'São Tomé and Príncipe',
+    code: 'ST',
+    dialCode: '+239',
+    flag: '🇸🇹',
+    lengths: [7],
+  },
+  {
+    name: 'Seychelles',
+    code: 'SC',
+    dialCode: '+248',
+    flag: '🇸🇨',
+    lengths: [7],
+  },
+  {
+    name: 'Sierra Leone',
+    code: 'SL',
+    dialCode: '+232',
+    flag: '🇸🇱',
+    lengths: [8],
+  },
+  {
+    name: 'Somalia',
+    code: 'SO',
+    dialCode: '+252',
+    flag: '🇸🇴',
+    lengths: [7, 8, 9],
+  },
+  {
+    name: 'South Sudan',
+    code: 'SS',
+    dialCode: '+211',
+    flag: '🇸🇸',
+    lengths: [9],
+  },
+  { name: 'Sudan', code: 'SD', dialCode: '+249', flag: '🇸🇩', lengths: [9] },
+  { name: 'Togo', code: 'TG', dialCode: '+228', flag: '🇹🇬', lengths: [8] },
+  // Middle East & Asia
+  {
+    name: 'Iran',
+    code: 'IR',
+    dialCode: '+98',
+    flag: '🇮🇷',
+    format: '912 345 6789',
+    lengths: [10],
+  },
+  { name: 'Syria', code: 'SY', dialCode: '+963', flag: '🇸🇾', lengths: [8, 9] },
+  {
+    name: 'Yemen',
+    code: 'YE',
+    dialCode: '+967',
+    flag: '🇾🇪',
+    lengths: [7, 8, 9],
+  },
+  {
+    name: 'Palestine',
+    code: 'PS',
+    dialCode: '+970',
+    flag: '🇵🇸',
+    lengths: [8, 9],
+  },
+  {
+    name: 'Kyrgyzstan',
+    code: 'KG',
+    dialCode: '+996',
+    flag: '🇰🇬',
+    lengths: [9],
+  },
+  {
+    name: 'Tajikistan',
+    code: 'TJ',
+    dialCode: '+992',
+    flag: '🇹🇯',
+    lengths: [9],
+  },
+  {
+    name: 'Turkmenistan',
+    code: 'TM',
+    dialCode: '+993',
+    flag: '🇹🇲',
+    lengths: [8],
+  },
+  {
+    name: 'Laos',
+    code: 'LA',
+    dialCode: '+856',
+    flag: '🇱🇦',
+    lengths: [8, 9, 10],
+  },
+  {
+    name: 'Myanmar',
+    code: 'MM',
+    dialCode: '+95',
+    flag: '🇲🇲',
+    lengths: [7, 8, 9, 10],
+  },
+  { name: 'Macau', code: 'MO', dialCode: '+853', flag: '🇲🇴', lengths: [8] },
+  {
+    name: 'North Korea',
+    code: 'KP',
+    dialCode: '+850',
+    flag: '🇰🇵',
+    lengths: [8, 10],
+  },
+  {
+    name: 'Timor-Leste',
+    code: 'TL',
+    dialCode: '+670',
+    flag: '🇹🇱',
+    lengths: [7, 8],
+  },
+  // Europe
+  { name: 'Moldova', code: 'MD', dialCode: '+373', flag: '🇲🇩', lengths: [8] },
+  {
+    name: 'Montenegro',
+    code: 'ME',
+    dialCode: '+382',
+    flag: '🇲🇪',
+    lengths: [8],
+  },
+  {
+    name: 'North Macedonia',
+    code: 'MK',
+    dialCode: '+389',
+    flag: '🇲🇰',
+    lengths: [8],
+  },
+  {
+    name: 'Liechtenstein',
+    code: 'LI',
+    dialCode: '+423',
+    flag: '🇱🇮',
+    lengths: [7, 9],
+  },
+  {
+    name: 'San Marino',
+    code: 'SM',
+    dialCode: '+378',
+    flag: '🇸🇲',
+    lengths: [6, 8, 10],
+  },
+  { name: 'Kosovo', code: 'XK', dialCode: '+383', flag: '🇽🇰', lengths: [8, 9] },
+  { name: 'Gibraltar', code: 'GI', dialCode: '+350', flag: '🇬🇮', lengths: [8] },
+  {
+    name: 'Faroe Islands',
+    code: 'FO',
+    dialCode: '+298',
+    flag: '🇫🇴',
+    lengths: [6],
+  },
+  { name: 'Greenland', code: 'GL', dialCode: '+299', flag: '🇬🇱', lengths: [6] },
+  // Americas
+  { name: 'Guyana', code: 'GY', dialCode: '+592', flag: '🇬🇾', lengths: [7] },
+  {
+    name: 'Suriname',
+    code: 'SR',
+    dialCode: '+597',
+    flag: '🇸🇷',
+    lengths: [6, 7],
+  },
+  { name: 'Nicaragua', code: 'NI', dialCode: '+505', flag: '🇳🇮', lengths: [8] },
+  { name: 'Haiti', code: 'HT', dialCode: '+509', flag: '🇭🇹', lengths: [8] },
+  { name: 'Cuba', code: 'CU', dialCode: '+53', flag: '🇨🇺', lengths: [8] },
+  {
+    name: 'French Guiana',
+    code: 'GF',
+    dialCode: '+594',
+    flag: '🇬🇫',
+    lengths: [9],
+  },
+  {
+    name: 'Guadeloupe',
+    code: 'GP',
+    dialCode: '+590',
+    flag: '🇬🇵',
+    lengths: [9],
+  },
+  {
+    name: 'Martinique',
+    code: 'MQ',
+    dialCode: '+596',
+    flag: '🇲🇶',
+    lengths: [9],
+  },
+  { name: 'Aruba', code: 'AW', dialCode: '+297', flag: '🇦🇼', lengths: [7] },
+  {
+    name: 'Curaçao',
+    code: 'CW',
+    dialCode: '+599',
+    flag: '🇨🇼',
+    lengths: [7, 8],
+  },
+  {
+    name: 'Falkland Islands',
+    code: 'FK',
+    dialCode: '+500',
+    flag: '🇫🇰',
+    lengths: [5],
+  },
+  // North American Numbering Plan territories (+1 + 3-digit area code)
+  {
+    name: 'Puerto Rico',
+    code: 'PR',
+    dialCode: '+1787',
+    flag: '🇵🇷',
+    lengths: [7],
+  },
+  {
+    name: 'Trinidad and Tobago',
+    code: 'TT',
+    dialCode: '+1868',
+    flag: '🇹🇹',
+    lengths: [7],
+  },
+  {
+    name: 'Antigua and Barbuda',
+    code: 'AG',
+    dialCode: '+1268',
+    flag: '🇦🇬',
+    lengths: [7],
+  },
+  { name: 'Dominica', code: 'DM', dialCode: '+1767', flag: '🇩🇲', lengths: [7] },
+  { name: 'Grenada', code: 'GD', dialCode: '+1473', flag: '🇬🇩', lengths: [7] },
+  {
+    name: 'Saint Kitts and Nevis',
+    code: 'KN',
+    dialCode: '+1869',
+    flag: '🇰🇳',
+    lengths: [7],
+  },
+  {
+    name: 'Saint Lucia',
+    code: 'LC',
+    dialCode: '+1758',
+    flag: '🇱🇨',
+    lengths: [7],
+  },
+  {
+    name: 'Saint Vincent and the Grenadines',
+    code: 'VC',
+    dialCode: '+1784',
+    flag: '🇻🇨',
+    lengths: [7],
+  },
+  { name: 'Bermuda', code: 'BM', dialCode: '+1441', flag: '🇧🇲', lengths: [7] },
+  {
+    name: 'Cayman Islands',
+    code: 'KY',
+    dialCode: '+1345',
+    flag: '🇰🇾',
+    lengths: [7],
+  },
+  {
+    name: 'Turks and Caicos Islands',
+    code: 'TC',
+    dialCode: '+1649',
+    flag: '🇹🇨',
+    lengths: [7],
+  },
+  {
+    name: 'British Virgin Islands',
+    code: 'VG',
+    dialCode: '+1284',
+    flag: '🇻🇬',
+    lengths: [7],
+  },
+  {
+    name: 'U.S. Virgin Islands',
+    code: 'VI',
+    dialCode: '+1340',
+    flag: '🇻🇮',
+    lengths: [7],
+  },
+  { name: 'Anguilla', code: 'AI', dialCode: '+1264', flag: '🇦🇮', lengths: [7] },
+  {
+    name: 'Montserrat',
+    code: 'MS',
+    dialCode: '+1664',
+    flag: '🇲🇸',
+    lengths: [7],
+  },
+  {
+    name: 'Sint Maarten',
+    code: 'SX',
+    dialCode: '+1721',
+    flag: '🇸🇽',
+    lengths: [7],
+  },
+  { name: 'Guam', code: 'GU', dialCode: '+1671', flag: '🇬🇺', lengths: [7] },
+  {
+    name: 'Northern Mariana Islands',
+    code: 'MP',
+    dialCode: '+1670',
+    flag: '🇲🇵',
+    lengths: [7],
+  },
+  {
+    name: 'American Samoa',
+    code: 'AS',
+    dialCode: '+1684',
+    flag: '🇦🇸',
+    lengths: [7],
+  },
+  // Oceania
+  {
+    name: 'Papua New Guinea',
+    code: 'PG',
+    dialCode: '+675',
+    flag: '🇵🇬',
+    lengths: [7, 8],
+  },
+  {
+    name: 'Solomon Islands',
+    code: 'SB',
+    dialCode: '+677',
+    flag: '🇸🇧',
+    lengths: [5, 7],
+  },
+  {
+    name: 'Vanuatu',
+    code: 'VU',
+    dialCode: '+678',
+    flag: '🇻🇺',
+    lengths: [5, 7],
+  },
+  {
+    name: 'Samoa',
+    code: 'WS',
+    dialCode: '+685',
+    flag: '🇼🇸',
+    lengths: [5, 6, 7],
+  },
+  { name: 'Tonga', code: 'TO', dialCode: '+676', flag: '🇹🇴', lengths: [5, 7] },
+  {
+    name: 'Kiribati',
+    code: 'KI',
+    dialCode: '+686',
+    flag: '🇰🇮',
+    lengths: [5, 8],
+  },
+  {
+    name: 'Micronesia',
+    code: 'FM',
+    dialCode: '+691',
+    flag: '🇫🇲',
+    lengths: [7],
+  },
+  {
+    name: 'Marshall Islands',
+    code: 'MH',
+    dialCode: '+692',
+    flag: '🇲🇭',
+    lengths: [7],
+  },
+  { name: 'Palau', code: 'PW', dialCode: '+680', flag: '🇵🇼', lengths: [7] },
+  { name: 'Nauru', code: 'NR', dialCode: '+674', flag: '🇳🇷', lengths: [7] },
+  { name: 'Tuvalu', code: 'TV', dialCode: '+688', flag: '🇹🇻', lengths: [5, 6] },
+  {
+    name: 'New Caledonia',
+    code: 'NC',
+    dialCode: '+687',
+    flag: '🇳🇨',
+    lengths: [6],
+  },
+  {
+    name: 'French Polynesia',
+    code: 'PF',
+    dialCode: '+689',
+    flag: '🇵🇫',
+    lengths: [6, 8],
+  },
+  {
+    name: 'Cook Islands',
+    code: 'CK',
+    dialCode: '+682',
+    flag: '🇨🇰',
+    lengths: [5],
+  },
 ];
+
+/** Countries sorted by dial-code length, longest first (+1809 before +1). */
+const COUNTRIES_BY_DIAL_LENGTH = [...COUNTRIES].sort(
+  (a, b) => b.dialCode.length - a.dialCode.length
+);
+
+/**
+ * Country whose dial code prefixes `digits` (longest code wins), or
+ * undefined when no known calling code matches.
+ */
+export function findCountryByDialPrefix(digits: string): Country | undefined {
+  return COUNTRIES_BY_DIAL_LENGTH.find((c) =>
+    digits.startsWith(c.dialCode.slice(1))
+  );
+}
 
 export const DEFAULT_COUNTRY =
   COUNTRIES.find((c) => c.code === 'IN') || COUNTRIES[0];
@@ -1055,51 +1551,60 @@ export function findCountryByCode(code: string): Country | undefined {
 export function parsePhoneToCountryAndNational(
   phone: string,
   defaultCountryCode = 'IN'
-): { country: Country; nationalNumber: string } {
+): { country: Country; nationalNumber: string; matched: boolean } {
   const fallback = findCountryByCode(defaultCountryCode) || DEFAULT_COUNTRY;
   if (!phone) {
-    return { country: fallback, nationalNumber: '' };
+    return { country: fallback, nationalNumber: '', matched: false };
   }
 
   const cleaned = phone.replace(/[^\d+]/g, '');
   const digits = cleaned.replace(/\D/g, '');
 
   if (!digits) {
-    return { country: fallback, nationalNumber: '' };
+    return { country: fallback, nationalNumber: '', matched: false };
   }
-
-  // Sort dial codes by length descending (e.g. +1809 before +1)
-  const sortedCountries = [...COUNTRIES].sort(
-    (a, b) => b.dialCode.length - a.dialCode.length
-  );
 
   if (cleaned.startsWith('+')) {
-    for (const c of sortedCountries) {
-      const dialDigits = c.dialCode.replace(/\D/g, '');
-      if (digits.startsWith(dialDigits)) {
-        const national = digits.slice(dialDigits.length);
-        return { country: c, nationalNumber: national };
-      }
+    // An explicit "+CC" is authoritative — never swap in the default.
+    const c = findCountryByDialPrefix(digits);
+    if (c) {
+      return {
+        country: c,
+        nationalNumber: digits.slice(c.dialCode.length - 1),
+        matched: true,
+      };
     }
-  } else {
-    // If no leading +, test if it matches dial codes
-    for (const c of sortedCountries) {
-      const dialDigits = c.dialCode.replace(/\D/g, '');
-      if (digits.startsWith(dialDigits)) {
-        const national = digits.slice(dialDigits.length);
-        // Ensure the national part matches expected length for that country
-        if (
-          c.lengths.includes(national.length) ||
-          (national.length >= 6 && national.length <= 14)
-        ) {
-          return { country: c, nationalNumber: national };
-        }
-      }
-    }
+    return { country: fallback, nationalNumber: digits, matched: false };
   }
 
-  // If already at default country length, use default
-  return { country: fallback, nationalNumber: digits };
+  // No "+": the digits may or may not carry a country code (WhatsApp
+  // wa_ids do, bare national numbers don't). Prefer, in order:
+  //   1. a dial code whose remaining digits are an exact national length
+  //   2. the default country, when the digits fit its national length
+  //   3. a dial code with a plausible (6–14 digit) remainder
+  const national = (c: Country) => digits.slice(c.dialCode.length - 1);
+  const candidates = COUNTRIES_BY_DIAL_LENGTH.filter((c) =>
+    digits.startsWith(c.dialCode.slice(1))
+  );
+
+  const exact = candidates.find((c) => c.lengths.includes(national(c).length));
+  if (exact) {
+    return { country: exact, nationalNumber: national(exact), matched: true };
+  }
+
+  if (fallback.lengths.includes(digits.length)) {
+    return { country: fallback, nationalNumber: digits, matched: true };
+  }
+
+  const loose = candidates.find((c) => {
+    const len = national(c).length;
+    return len >= 6 && len <= 14;
+  });
+  if (loose) {
+    return { country: loose, nationalNumber: national(loose), matched: true };
+  }
+
+  return { country: fallback, nationalNumber: digits, matched: false };
 }
 
 export interface ValidationResult {
@@ -1245,10 +1750,30 @@ export function formatPhoneNumberParts(
     };
   }
 
-  const { country, nationalNumber } = parsePhoneToCountryAndNational(
+  const hasPlus = raw.startsWith('+');
+
+  // A local number with a domestic trunk 0 (e.g. "050 675 1025") has no
+  // country code — show it as entered rather than inventing one.
+  if (!hasPlus && digits.startsWith('0')) {
+    return { dialCode: '', nationalNumber: raw, country: null, formatted: raw };
+  }
+
+  const { country, nationalNumber, matched } = parsePhoneToCountryAndNational(
     raw,
     defaultCountryCode
   );
+
+  if (!matched) {
+    // Unknown "+CC" or an unrecognisable bare number: keep the digits we
+    // have instead of prefixing the default country's code.
+    const shown = hasPlus ? `+${digits}` : raw;
+    return {
+      dialCode: '',
+      nationalNumber: shown,
+      country: null,
+      formatted: shown,
+    };
+  }
 
   if (!nationalNumber) {
     const withPlus = raw.startsWith('+') ? raw : `+${raw}`;

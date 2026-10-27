@@ -28,7 +28,7 @@ import { FeatureRows } from '@/components/super-admin/billing/feature-rows';
 
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { formatCurrency } from '@/lib/currency';
+import { formatPlanAmount } from '@/lib/billing/money-format';
 import {
   CUSTOM_CARD_SETTING_KEYS,
   deriveDaySavings,
@@ -48,7 +48,15 @@ import type {
 } from '@/lib/subscription/types';
 import { cn } from '@/lib/utils';
 
-export function PlansPanel() {
+/**
+ * `region` is 'global' (default, exactly today's editor) or a country
+ * code: then only that country's cycles and prices are shown, priced in
+ * the country's own currency. The plan itself and its feature list are
+ * shared and edited under Global.
+ */
+export function PlansPanel({ region = 'global' }: { region?: string } = {}) {
+  const isGlobal = region === 'global';
+  const query = isGlobal ? '' : `?region=${encodeURIComponent(region)}`;
   const [bundle, setBundle] = useState<PlansBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +64,7 @@ export function PlansPanel() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/super-admin/billing/plans');
+      const res = await fetch(`/api/super-admin/billing/plans${query}`);
       if (!res.ok) throw new Error('Failed to load plans');
       setBundle((await res.json()) as PlansBundle);
       setError(null);
@@ -65,7 +73,13 @@ export function PlansPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [query]);
+
+  // A country is priced in its own currency, never Global's. Blank until
+  // the admin sets one in the country header.
+  const currency = isGlobal
+    ? (bundle?.settings.currency ?? 'INR')
+    : (bundle?.region?.currency ?? '');
 
   useEffect(() => {
     void load();
@@ -100,7 +114,7 @@ export function PlansPanel() {
   const baselinePerDay = allCycles.reduce<number | null>((max, cycle) => {
     if (!plan || !cycle.is_visible) return max;
     const price = bundle?.prices.find(
-      (p) => p.plan_id === plan.id && p.cycle_id === cycle.id,
+      (p) => p.plan_id === plan.id && p.cycle_id === cycle.id
     );
     if (!price || !price.is_visible) return max;
     const perDay = perDayAmount({
@@ -115,10 +129,20 @@ export function PlansPanel() {
   return (
     <div className="space-y-5">
       <p className="text-sm text-slate-500">
-        {cycles.length} card{cycles.length === 1 ? '' : 's'} on the pricing page.
-        The shared feature list is edited under{' '}
-        <strong className="text-slate-600">Page &amp; UPI settings</strong>.
+        {cycles.length} card{cycles.length === 1 ? '' : 's'} on the pricing
+        page. The shared feature list is edited under{' '}
+        <strong className="text-slate-600">Page &amp; UPI settings</strong>
+        {isGlobal ? '' : ' in Global'}.
       </p>
+
+      {!isGlobal && !currency ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm text-amber-800">
+            Set this country&apos;s currency in the header above before entering
+            prices. Amounts are always entered in that currency.
+          </p>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
@@ -137,9 +161,19 @@ export function PlansPanel() {
       {allCycles.length === 0 ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
           <p className="text-sm text-amber-800">
-            No billing cycles exist yet. Add at least one on the{' '}
-            <strong>Billing cycles</strong> tab — without one there is nothing to
-            price and customers cannot buy anything.
+            {isGlobal ? (
+              <>
+                No billing cycles exist yet. Add at least one on the{' '}
+                <strong>Billing cycles</strong> tab — without one there is
+                nothing to price and customers cannot buy anything.
+              </>
+            ) : (
+              <>
+                This country has no billing cycles yet. Add them on the{' '}
+                <strong>Billing cycles</strong> tab, or use Copy from Global
+                above, then enter prices here.
+              </>
+            )}
           </p>
         </div>
       ) : null}
@@ -167,10 +201,11 @@ export function PlansPanel() {
                   plan={plan}
                   cycle={cycle}
                   settings={bundle?.settings ?? null}
+                  currency={currency}
                   baselinePerDay={baselinePerDay}
                   price={
                     bundle?.prices.find(
-                      (p) => p.plan_id === plan.id && p.cycle_id === cycle.id,
+                      (p) => p.plan_id === plan.id && p.cycle_id === cycle.id
                     ) ?? null
                   }
                   onSaved={load}
@@ -182,7 +217,15 @@ export function PlansPanel() {
 
         {/* The last card on the pricing page. It belongs to the settings
             singleton rather than to a plan, so it has its own save. */}
-        <CustomCardEditor settings={bundle?.settings ?? null} />
+        {isGlobal ? (
+          <CustomCardEditor settings={bundle?.settings ?? null} />
+        ) : (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
+            The Custom card for this country uses the Global card unless you
+            override its wording under{' '}
+            <strong className="text-slate-600">Page &amp; UPI settings</strong>.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -205,6 +248,7 @@ function CycleCard({
   cycle,
   price,
   settings,
+  currency,
   baselinePerDay,
   onSaved,
 }: {
@@ -212,18 +256,22 @@ function CycleCard({
   cycle: BillingCycle;
   price: SubscriptionPlanPrice | null;
   settings: PublicSubscriptionSettings | null;
+  /** The region's currency; '' for a country with none set yet. */
+  currency: string;
   /** Dearest daily rate across this plan's terms, for the savings pill. */
   baselinePerDay: number | null;
   onSaved: () => void | Promise<void>;
 }) {
-  const currency = settings?.currency ?? 'INR';
+  const isInr = currency === 'INR';
   const initial = price ? String(toAmount(price.amount)) : '';
   const initialPerDay =
     price?.per_day_amount != null ? String(price.per_day_amount) : '';
 
   const [value, setValue] = useState(initial);
   const [perDay, setPerDay] = useState(initialPerDay);
-  const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>(
+    'idle'
+  );
   const [message, setMessage] = useState<string | null>(null);
 
   // Re-sync when the parent reloads (another cell's save refetches all).
@@ -253,10 +301,7 @@ function CycleCard({
   const commit = async () => {
     const trimmed = value.trim();
     const trimmedPerDay = perDay.trim();
-    if (
-      trimmed === initial.trim() &&
-      trimmedPerDay === initialPerDay.trim()
-    ) {
+    if (trimmed === initial.trim() && trimmedPerDay === initialPerDay.trim()) {
       return;
     }
 
@@ -273,7 +318,7 @@ function CycleCard({
         }
         const res = await fetch(
           `/api/super-admin/billing/prices?planId=${plan.id}&cycleId=${cycle.id}`,
-          { method: 'DELETE' },
+          { method: 'DELETE' }
         );
         if (!res.ok) throw new Error('Could not remove the price');
       } else {
@@ -325,7 +370,7 @@ function CycleCard({
         'flex flex-col rounded-xl border bg-white shadow-sm',
         cycle.is_visible
           ? 'border-slate-200'
-          : 'border-dashed border-slate-300 bg-slate-50/60',
+          : 'border-dashed border-slate-300 bg-slate-50/60'
       )}
     >
       {/* ---- Header: what the card is called on the page ---- */}
@@ -375,7 +420,7 @@ function CycleCard({
           <>
             <div className="flex items-baseline gap-1.5">
               <span className="text-3xl font-bold tracking-tight text-slate-900">
-                {formatCurrency(derivedPerDay, currency)}
+                {formatPlanAmount(derivedPerDay, currency)}
               </span>
               <span className="text-sm font-medium text-slate-500">
                 {settings?.per_day_label ?? '/ day'}
@@ -383,20 +428,20 @@ function CycleCard({
             </div>
             <p className="mt-1 text-sm text-slate-500">
               {formatPriceEquals(settings?.price_equals_template, {
-                total: formatCurrency(total, currency),
+                total: formatPlanAmount(total, currency),
                 days: cycle.duration_days ?? 0,
               })}
             </p>
             {savings ? (
               <span className="mt-2.5 inline-flex items-center rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-700">
                 {settings?.save_label ?? 'Save'}{' '}
-                {formatCurrency(savings, currency)}
+                {formatPlanAmount(savings, currency)}
               </span>
             ) : null}
             {perDay.trim() ? (
               <p className="mt-2 text-[11px] text-amber-600">
                 Daily rate is overridden. The customer is still charged{' '}
-                {formatCurrency(total, currency)}.
+                {formatPlanAmount(total, currency)}.
               </p>
             ) : null}
           </>
@@ -405,9 +450,9 @@ function CycleCard({
           // /upgrade-plan skips such a card entirely. Say so rather than
           // rendering a preview the page will never draw.
           <p className="text-sm text-amber-700">
-            {formatCurrency(total, currency)} total. This term has no day count,
-            so the pricing page cannot show a daily rate and will skip this
-            card. Set its duration in days on{' '}
+            {formatPlanAmount(total, currency)} total. This term has no day
+            count, so the pricing page cannot show a daily rate and will skip
+            this card. Set its duration in days on{' '}
             <strong>Billing cycles</strong>.
           </p>
         ) : (
@@ -421,11 +466,12 @@ function CycleCard({
       <div className="space-y-3 px-5 py-4">
         <div>
           <p className="mb-1.5 text-xs font-medium text-slate-600">
-            Total charged ({currency})
+            Total charged ({currency || 'currency not set'})
           </p>
           <Input
             inputMode="decimal"
             value={value}
+            disabled={!currency}
             placeholder="Not sold"
             onChange={(e) => setValue(e.target.value)}
             onBlur={() => void commit()}
@@ -435,7 +481,9 @@ function CycleCard({
             className="h-9 border-slate-200 bg-white text-sm text-slate-900"
           />
           <p className="mt-1 text-[11px] text-slate-400">
-            What the UPI QR asks for. Clear it to stop selling this term.
+            {isInr
+              ? 'What the UPI QR asks for. Clear it to stop selling this term.'
+              : 'What AutoPay charges by card. Clear it to stop selling this term.'}
           </p>
         </div>
 
@@ -449,9 +497,9 @@ function CycleCard({
             <Input
               inputMode="decimal"
               value={perDay}
-              placeholder={`auto — ${
+              placeholder={`auto: ${
                 hasTotal && derivedPerDay !== null
-                  ? formatCurrency(derivedPerDay, currency)
+                  ? formatPlanAmount(derivedPerDay, currency)
                   : 'calculated'
               }`}
               onChange={(e) => setPerDay(e.target.value)}
@@ -502,12 +550,14 @@ function CustomCardEditor({
 }) {
   const [show, setShow] = useState(settings?.show_custom_plan ?? false);
   const [label, setLabel] = useState(settings?.custom_plan_label ?? '');
-  const [priceText, setPriceText] = useState(settings?.custom_plan_price_text ?? '');
+  const [priceText, setPriceText] = useState(
+    settings?.custom_plan_price_text ?? ''
+  );
   const [body, setBody] = useState(settings?.custom_plan_body ?? '');
   const [ctaText, setCtaText] = useState(settings?.custom_plan_cta_text ?? '');
   const [ctaLink, setCtaLink] = useState(settings?.custom_plan_cta_link ?? '');
   const [features, setFeatures] = useState<PlanFeature[]>(() =>
-    normalisePlanFeatures(settings?.custom_plan_features),
+    normalisePlanFeatures(settings?.custom_plan_features)
   );
 
   const [state, setState] = useState<'idle' | 'saving' | 'saved'>('idle');

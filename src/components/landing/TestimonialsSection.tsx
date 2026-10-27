@@ -1,4 +1,8 @@
 import type { LandingSection, LandingTestimonial } from '@/types/super-admin';
+import { boldSegments } from '@/lib/cms/content-helpers';
+
+/** Desktop overlay default. A new line breaks the heading; **text** is green. */
+const DEFAULT_OVERLAY_HEADING = 'Trusted by businesses\n**across** the globe.';
 
 interface TestimonialsSectionProps {
   section: LandingSection | null;
@@ -11,6 +15,12 @@ export function TestimonialsSection({
 }: TestimonialsSectionProps) {
   const title = section?.title || 'Trusted by businesses across the globe.';
   const subtitle = section?.subtitle || '';
+  const overlayRaw = (section?.extra_data as Record<string, unknown>)
+    ?.overlay_heading;
+  const overlayHeading =
+    typeof overlayRaw === 'string' && overlayRaw.trim()
+      ? overlayRaw
+      : DEFAULT_OVERLAY_HEADING;
   const displayTestimonials =
     ((section?.extra_data as Record<string, unknown>)
       ?.testimonials as LandingTestimonial[]) || testimonials;
@@ -85,9 +95,20 @@ export function TestimonialsSection({
         {/* The Exact Center Text Overlay - No background blur to match design exactly */}
         <div className="pointer-events-none absolute top-[38%] left-1/2 z-20 flex w-[120%] max-w-[55rem] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center text-center">
           <h2 className="text-4xl leading-[1.1] font-bold tracking-tight text-[#0F172A] lg:text-5xl xl:text-6xl">
-            Trusted by businesses
-            <br />
-            <span className="text-[#25D366]">across </span>the globe.
+            {overlayHeading.split('\n').map((line, li) => (
+              <span key={li}>
+                {li > 0 && <br />}
+                {boldSegments(line).map((seg, si) =>
+                  seg.bold ? (
+                    <span key={si} className="text-[#25D366]">
+                      {seg.text}
+                    </span>
+                  ) : (
+                    seg.text
+                  )
+                )}
+              </span>
+            ))}
           </h2>
           {subtitle && (
             <p className="mt-6 text-lg font-medium text-slate-600 xl:text-xl">

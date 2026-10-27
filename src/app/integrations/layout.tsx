@@ -1,6 +1,7 @@
 import { getSiteSettings, getLegalPagesList } from '@/lib/cms/queries';
 import { createClient } from '@/lib/supabase/server';
 import { LandingNavbar } from '@/components/landing/LandingNavbar';
+import { resolveMarketingCopy } from '@/lib/cms/marketing-copy';
 import { LandingFooter } from '@/components/landing/LandingFooter';
 import { UpgradeHeader } from '@/components/billing/upgrade-header';
 
@@ -32,6 +33,7 @@ export default async function IntegrationsLayout({
           siteName={settings?.site_name}
           logoUrl={settings?.logo_url}
           links={settings?.header_links}
+          ctaLabels={resolveMarketingCopy(settings?.marketing_copy).navbar}
         />
       )}
       <main className={user ? 'px-4 py-8' : 'pt-24 pb-16'}>{children}</main>

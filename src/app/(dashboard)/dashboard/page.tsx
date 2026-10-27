@@ -7,14 +7,12 @@ import { formatCurrency } from '@/lib/currency';
 import { MessageSquare, UserPlus, DollarSign, Send } from 'lucide-react';
 
 import {
-  loadActivity,
   loadConversationsSeries,
   loadMetrics,
   loadPipelineDonut,
   loadResponseTime,
 } from '@/lib/dashboard/queries';
 import type {
-  ActivityItem,
   ConversationsSeriesPoint,
   MetricsBundle,
   PipelineDonutData,
@@ -62,8 +60,6 @@ export default function DashboardPage() {
   );
   const [responseTimeLoading, setResponseTimeLoading] = useState(true);
 
-  const [activity, setActivity] = useState<ActivityItem[] | null>(null);
-  const [activityLoading, setActivityLoading] = useState(true);
 
   const loadAll = useCallback(() => {
     const db = createClient();
@@ -91,13 +87,8 @@ export default function DashboardPage() {
       .catch((err) => console.error('[dashboard] response time failed:', err))
       .finally(() => setResponseTimeLoading(false));
 
-    // Fetch up to 50 so the biggest page-size option in the feed
-    // (50 rows) is already in memory — switching sizes then becomes
-    // a pure client-side slice with no extra round trip.
-    void loadActivity(db, 50)
-      .then((a) => setActivity(a))
-      .catch((err) => console.error('[dashboard] activity failed:', err))
-      .finally(() => setActivityLoading(false));
+    // The activity feed loads its own pages (cursor pagination), so
+    // only the page it is showing is ever fetched.
   }, []);
 
   useEffect(() => {
@@ -223,7 +214,7 @@ export default function DashboardPage() {
       <ResponseTimeChart data={responseTime} loading={responseTimeLoading} />
 
       {/* Activity feed */}
-      <ActivityFeed items={activity} loading={activityLoading} />
+      <ActivityFeed />
 
       {/* Members Analytics (owner only) */}
       <MembersAnalyticsCard />

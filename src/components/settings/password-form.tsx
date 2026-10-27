@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+
+import { reportPasswordChanged } from '@/lib/security/client';
 import { toast } from 'sonner';
 import {
   Loader2,
@@ -123,6 +125,7 @@ export function PasswordForm() {
       setShowNext(false);
       setShowConfirm(false);
       toast.success(t('passwordUpdated'));
+      reportPasswordChanged();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       toast.error(msg);

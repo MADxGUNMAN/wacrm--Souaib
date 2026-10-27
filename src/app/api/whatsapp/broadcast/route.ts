@@ -21,6 +21,7 @@ import {
   recordOptOutFromSendError,
 } from '@/lib/whatsapp/marketing-opt-out';
 import { persistBroadcastMessage } from '@/lib/whatsapp/broadcast-inbox';
+import { stampRecipientSent } from '@/lib/whatsapp/broadcast-recipient-status';
 
 interface BroadcastResult {
   phone: string;
@@ -80,6 +81,13 @@ interface NewRecipient {
    * just gets no inbox thread.
    */
   contact_id?: string;
+  /**
+   * The `broadcast_recipients` row this send belongs to, when the caller
+   * knows it. Lets the route stamp the wamid onto that exact row the
+   * moment Meta returns it, so a status webhook arriving seconds later
+   * can find the recipient. Falls back to (broadcast_id, contact_id).
+   */
+  recipient_id?: string;
 }
 
 export async function POST(request: Request) {
@@ -224,6 +232,29 @@ export async function POST(request: Request) {
         ).suppressed
       : new Set<string>();
 
+    // The campaign whose recipient rows this call may stamp. `broadcast_id`
+    // is client-supplied, so confirm it belongs to the caller's account
+    // before writing anything against it. RLS on broadcast_recipients
+    // enforces the same thing; this makes the tenancy explicit and skips
+    // pointless per-recipient writes for a foreign or unknown id.
+    let stampBroadcastId: string | null = null;
+    if (typeof broadcast_id === 'string') {
+      const { data: ownBroadcast, error: ownErr } = await supabase
+        .from('broadcasts')
+        .select('id')
+        .eq('id', broadcast_id)
+        .eq('account_id', accountId)
+        .maybeSingle();
+      if (ownBroadcast) {
+        stampBroadcastId = broadcast_id;
+      } else {
+        console.warn(
+          '[broadcast] broadcast_id not found in caller account; recipient rows will not be stamped',
+          { accountId, broadcastId: broadcast_id, error: ownErr?.message }
+        );
+      }
+    }
+
     const results: BroadcastResult[] = [];
     let sentCount = 0;
     let failedCount = 0;
@@ -299,6 +330,25 @@ export async function POST(request: Request) {
           whatsapp_message_id: sentMessageId,
         });
         sentCount++;
+
+        // Correlate the recipient row with its wamid NOW, before the
+        // message row is written and before this batch returns. The
+        // browser used to do it only after the whole batch came back
+        // (2–26 s later), and every status webhook inside that gap was
+        // lost. Forward-only: never regresses a row a webhook already
+        // advanced. Best-effort, like the inbox write below.
+        const recipientId =
+          typeof recipient.recipient_id === 'string'
+            ? recipient.recipient_id
+            : null;
+        if (stampBroadcastId && (recipientId || recipient.contact_id)) {
+          await stampRecipientSent(supabase, {
+            recipientId,
+            broadcastId: stampBroadcastId,
+            contactId: recipient.contact_id ?? null,
+            waMessageId: sentMessageId,
+          });
+        }
 
         // Record the send in the recipient's Inbox thread, so a campaign
         // message and the customer's reply sit in one conversation instead

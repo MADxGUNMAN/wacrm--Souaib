@@ -52,6 +52,50 @@ const SECTION_FIELD_CONFIG: Record<string, {
   cta_banner: { subtitle: true, body_text: true, cta_primary: true, cta_secondary: true },
 };
 
+/**
+ * Small text labels stored on a section's extra_data, edited with a plain
+ * input each. The public components fall back to the placeholder value
+ * when a field is empty, so the placeholders here must match those
+ * defaults (HeroSection, TestimonialsSection, PricingSection).
+ */
+const SECTION_EXTRA_TEXT_FIELDS: Record<
+  string,
+  { key: string; label: string; placeholder: string; multiline?: boolean; hint?: string }[]
+> = {
+  hero: [
+    {
+      key: "mockup_url",
+      label: "Mockup Address Bar",
+      placeholder: "replai.app/inbox",
+      hint: "The mockup labels only show when no hero image is uploaded above.",
+    },
+    { key: "mockup_ai_badge", label: "Mockup AI Badge", placeholder: "AI Active" },
+    { key: "mockup_chip1_label", label: "Floating Card 1 Label", placeholder: "AI Agent" },
+    { key: "mockup_chip1_value", label: "Floating Card 1 Value", placeholder: "Reply drafted" },
+    { key: "mockup_chip2_label", label: "Floating Card 2 Label", placeholder: "New Deal" },
+    { key: "mockup_chip2_value", label: "Floating Card 2 Value", placeholder: "+$4,500 closed" },
+  ],
+  testimonials: [
+    {
+      key: "overlay_heading",
+      label: "Desktop Overlay Heading",
+      placeholder: "Trusted by businesses\n**across** the globe.",
+      multiline: true,
+      hint: "Shown over the floating cards on desktop. A new line starts a new line; wrap words in **double asterisks** to make them green. The Title above is used on mobile.",
+    },
+  ],
+  pricing: [
+    { key: "cta_text", label: "Plan Card Button Text", placeholder: "Start Free Trial" },
+    { key: "cta_link", label: "Plan Card Button Link", placeholder: "/signup" },
+    {
+      key: "empty_message",
+      label: "No Plans Message",
+      placeholder: "No plans are available right now. Please check back later.",
+      multiline: true,
+    },
+  ],
+};
+
 // Using any to skip full type generation for this specific client wrapper,
 // since it perfectly matches the supabase row type.
 export function SectionsClient({ initialSections }: { initialSections: any[] }) {
@@ -237,6 +281,49 @@ export function SectionsClient({ initialSections }: { initialSections: any[] }) 
               </div>
             )}
             
+            {(SECTION_EXTRA_TEXT_FIELDS[editingSection.section_key] || []).length > 0 && (
+              <div className="pt-4 border-t border-slate-100">
+                <h4 className="text-sm font-semibold text-slate-900 mb-1">
+                  {editingSection.section_key === "hero" ? "Mockup Labels" : "Extra Labels"}
+                </h4>
+                <p className="text-xs text-slate-500 mb-4">
+                  Leave a field empty to use the default shown as its placeholder.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {SECTION_EXTRA_TEXT_FIELDS[editingSection.section_key].map((field) => {
+                    const value = (editingSection.extra_data?.[field.key] as string | undefined) ?? "";
+                    const update = (v: string) =>
+                      setEditingSection({
+                        ...editingSection,
+                        extra_data: { ...(editingSection.extra_data || {}), [field.key]: v },
+                      });
+                    return (
+                      <div key={field.key} className={`space-y-2 ${field.multiline ? "md:col-span-2" : ""}`}>
+                        <Label htmlFor={`extra-${field.key}`}>{field.label}</Label>
+                        {field.multiline ? (
+                          <Textarea
+                            id={`extra-${field.key}`}
+                            value={value}
+                            rows={3}
+                            placeholder={field.placeholder}
+                            onChange={(e) => update(e.target.value)}
+                          />
+                        ) : (
+                          <Input
+                            id={`extra-${field.key}`}
+                            value={value}
+                            placeholder={field.placeholder}
+                            onChange={(e) => update(e.target.value)}
+                          />
+                        )}
+                        {field.hint && <p className="text-xs text-slate-500">{field.hint}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {currentConfig.cta_primary && (
               <div className="pt-4 border-t border-slate-100">
                 <h4 className="text-sm font-semibold text-slate-900 mb-4">Call to Action (Primary)</h4>

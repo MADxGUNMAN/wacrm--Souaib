@@ -55,6 +55,38 @@ describe('sendMessageToConversation — param validation (pre-DB)', () => {
       400,
       /content_text is required/
     );
+    await expectSendError(
+      { ...base, messageType: 'text', contentText: '   ' },
+      400,
+      /content_text is required/
+    );
+  });
+
+  it('rejects an over-long text message (> 4096 characters)', async () => {
+    await expectSendError(
+      {
+        ...base,
+        messageType: 'text',
+        contentText: 'a'.repeat(4097),
+      },
+      400,
+      /4096-character limit/
+    );
+  });
+
+  it('allows text messages up to 4096 characters', async () => {
+    const spy = vi.fn(() => {
+      throw new Error('reached DB');
+    });
+    const db = { from: spy } as unknown as SupabaseClient;
+    await expect(
+      sendMessageToConversation(db, 'acct-1', {
+        ...base,
+        messageType: 'text',
+        contentText: 'a'.repeat(4096),
+      })
+    ).rejects.toThrow('reached DB');
+    expect(spy).toHaveBeenCalledWith('conversations');
   });
 
   it('requires template_name for template messages', async () => {

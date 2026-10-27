@@ -26,6 +26,12 @@ export type ContentType = (typeof CONTENT_TYPES)[number];
 
 export const CONTENT_TYPE_SET = new Set<string>(CONTENT_TYPES);
 
+/** Meta WhatsApp Cloud API limit for text message body length (param text.body). */
+export const TEXT_MESSAGE_MAX = 4096;
+
+/** Meta WhatsApp Cloud API limit for media message caption length. */
+export const MEDIA_CAPTION_MAX = 1024;
+
 /**
  * Raw WhatsApp types that mean the same thing as one of ours under a
  * different name. Without these an inbound message lands on 'unsupported'

@@ -49,6 +49,13 @@ const TYPE_LABELS: Record<SuperAdminNotificationType, string> = {
   newsletter_subscribed: 'Newsletter signup',
   template_rejected: 'Template rejected',
   subscription_expiring: 'Subscription expiring',
+  support_message_received: 'Support chat message',
+  autopay_payment_failed: 'AutoPay charge failed',
+  autopay_halted: 'AutoPay stopped',
+  billing_dispute: 'Payment dispute',
+  billing_webhook_dead: 'Razorpay webhook failed',
+  billing_anomaly: 'Billing check failed',
+  billing_refund: 'Refund processed',
 };
 
 const ALL_TYPES = Object.keys(TYPE_LABELS) as SuperAdminNotificationType[];
@@ -111,6 +118,15 @@ function NotificationIcon({ type }: { type: SuperAdminNotificationType }) {
       return <FileWarning className={`${className} text-amber-600`} />;
     case 'subscription_expiring':
       return <Clock className={`${className} text-orange-600`} />;
+    case 'autopay_payment_failed':
+    case 'autopay_halted':
+      return <CreditCard className={`${className} text-amber-600`} />;
+    case 'billing_refund':
+      return <CreditCard className={`${className} text-blue-600`} />;
+    case 'billing_dispute':
+    case 'billing_anomaly':
+    case 'billing_webhook_dead':
+      return <FileWarning className={`${className} text-red-600`} />;
   }
 }
 

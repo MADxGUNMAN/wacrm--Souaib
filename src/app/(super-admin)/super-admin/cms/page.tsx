@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import {
+  Bot,
   BookOpen,
   Settings,
   LayoutTemplate,
@@ -74,6 +75,16 @@ const cmsModules = [
     color: 'text-emerald-500',
     bgColor: 'bg-emerald-500/10',
     borderColor: 'border-emerald-500/20',
+  },
+  {
+    title: 'AI Connector (Claude & ChatGPT)',
+    description:
+      'Manage the /integrations/ai page: copy, permission levels, FAQs, directory links and SEO.',
+    icon: Bot,
+    href: '/super-admin/cms/integrations/ai',
+    color: 'text-violet-500',
+    bgColor: 'bg-violet-500/10',
+    borderColor: 'border-violet-500/20',
   },
 ];
 

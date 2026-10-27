@@ -13,12 +13,25 @@
 //
 // Owner-only: purchasing is an owner action, enforced here and not just
 // hidden in the UI.
+//
+// Razorpay Phase 6: answers 410 `manual_payments_retired` when this
+// account's purchase flow is Razorpay AutoPay, before any price lookup.
 // ============================================================
 
 import { NextResponse } from 'next/server';
 
-import { requireBillingOwner, toBillingErrorResponse } from '@/lib/subscription/guard';
+import { manualPaymentsRetiredResponse } from '@/lib/billing/manual-retirement';
 import {
+  getAccountPricingRegion,
+  manualUpiInrOnlyResponse,
+} from '@/lib/billing/pricing/region-store';
+
+import {
+  requireBillingOwner,
+  toBillingErrorResponse,
+} from '@/lib/subscription/guard';
+import {
+  getRegionSettings,
   getSubscriptionSettings,
   previewQuoteWindow,
   QuoteError,
@@ -31,16 +44,23 @@ import {
   generateQrSvg,
   UpiConfigError,
 } from '@/lib/subscription/upi';
-import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit';
+import {
+  checkRateLimit,
+  rateLimitResponse,
+  RATE_LIMITS,
+} from '@/lib/rate-limit';
 import type { PaymentQuote } from '@/lib/subscription/types';
 
 export async function GET(request: Request) {
   try {
     const ctx = await requireBillingOwner();
 
+    const retired = await manualPaymentsRetiredResponse(ctx.accountId);
+    if (retired) return retired;
+
     const limit = checkRateLimit(
       `billing:quote:${ctx.accountId}`,
-      RATE_LIMITS.paymentQuote,
+      RATE_LIMITS.paymentQuote
     );
     if (!limit.success) return rateLimitResponse(limit);
 
@@ -52,16 +72,29 @@ export async function GET(request: Request) {
       throw new QuoteError('A plan and billing cycle are required');
     }
 
-    // Authoritative price + duration, straight from the DB.
-    const quote = await resolveQuote(planId, cycleId);
-    const settings = await getSubscriptionSettings();
+    // Authoritative price + duration, straight from the DB, in the
+    // workspace's own pricing region.
+    const globalSettings = await getSubscriptionSettings();
+    const pricing = await getAccountPricingRegion(ctx.accountId, {
+      settings: globalSettings,
+    });
+    const quote = await resolveQuote(planId, cycleId, pricing);
+
+    // UPI collects INR only. Never build a QR for another currency, even
+    // if a country plan somehow reached a manual UPI account.
+    if (quote.currency !== 'INR') return manualUpiInrOnlyResponse();
+
+    const settings =
+      pricing.region === 'global'
+        ? globalSettings
+        : await getRegionSettings(pricing.region, pricing.currency);
 
     if (!settings.upi_id) {
       // Distinct from a validation error: nothing the customer did is
       // wrong, the platform simply isn't ready to take money. 503 so
       // it's clearly a server-side configuration gap.
       throw new UpiConfigError(
-        'Online payment is not configured yet. Please contact support to complete your purchase.',
+        'Online payment is not configured yet. Please contact support to complete your purchase.'
       );
     }
 

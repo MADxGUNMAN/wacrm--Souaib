@@ -147,6 +147,16 @@ export const OWNER_ONLY_SETTINGS_SECTIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Settings sections about the signed-in person rather than the workspace.
+ * Always open to every member (see canAccessSettingsSection).
+ */
+export const PERSONAL_SETTINGS_SECTIONS: ReadonlySet<string> = new Set([
+  'profile',
+  'security',
+  'appearance',
+]);
+
+/**
  * Granular settings sub-section access predicate.
  * Evaluates whether a user with settings access can view a specific settings tab.
  */
@@ -158,20 +168,18 @@ export function canAccessSettingsSection(
   if (!role) return true;
   if (role === 'owner') return true;
 
+  // Personal sections belong to the user, not the workspace: every member
+  // can always manage their own profile, password, devices and login
+  // activity, even without the workspace "settings" permission.
+  if (PERSONAL_SETTINGS_SECTIONS.has(section)) return true;
+
   // First check general settings access
   if (!hasSectionAccess(role, permissions, 'settings')) {
     return false;
   }
 
-  // Account settings (profile, security, appearance) and overview are always accessible if in settings
-  if (
-    section === 'overview' ||
-    section === 'profile' ||
-    section === 'security' ||
-    section === 'appearance'
-  ) {
-    return true;
-  }
+  // The overview landing is available to anyone with settings access.
+  if (section === 'overview') return true;
 
   // For workspace settings, check the specific settings_<section> key if it exists in permissions
   const subKey = `settings_${section.replace('-', '_')}`;

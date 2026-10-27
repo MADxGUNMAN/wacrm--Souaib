@@ -195,6 +195,60 @@ export const RATE_LIMITS = {
    *  as an unmetered single-send channel that bypasses the broadcast
    *  budget entirely. */
   testSend: { limit: 10, windowMs: 60_000 },
+
+  /** In-app support chat send, per user. Matches `send` rather than
+   *  being tighter: this is a live human typing to another live human, so
+   *  anything slower than one per second would throttle a real
+   *  conversation. No Meta call and no cost per message, so what is being
+   *  capped is a runaway client or someone flooding the operator's
+   *  inbox — not spend. */
+  supportChat: { limit: 60, windowMs: 60_000 },
+
+  /** Support-chat attachment presigns, per user. Much tighter than the
+   *  send budget because each grant is a signed WRITE into the bucket: an
+   *  unbounded loop here fills S3 without ever sending a message, and
+   *  nobody legitimately attaches twenty files a minute. */
+  supportChatUpload: { limit: 20, windowMs: 60_000 },
+
+  /** Support-chat attachment downloads, per user. Generous, because
+   *  opening a thread full of screenshots mints one signed URL per image
+   *  and those URLs expire in five minutes, so a view left open re-signs
+   *  rather than reusing. */
+  supportChatDownload: { limit: 240, windowMs: 60_000 },
+
+  /** AI connector OAuth endpoints, per IP. Claude's and ChatGPT's
+   *  backends call the token endpoint for every one of their users from a
+   *  shared pool of egress IPs, so the per-IP budgets are deliberately
+   *  roomy — they stop a runaway loop, not a busy platform. The real
+   *  protection is the 256-bit secrets and single-use codes. */
+  oauthMetadata: { limit: 300, windowMs: 60_000 },
+  oauthAuthorize: { limit: 60, windowMs: 60_000 },
+  oauthToken: { limit: 600, windowMs: 60_000 },
+  oauthRevoke: { limit: 120, windowMs: 60_000 },
+  /** Consent decisions, per user. A human clicks Allow once. */
+  oauthDecision: { limit: 20, windowMs: 60_000 },
+  /** Dynamic client registration writes a row per call: tight per IP,
+   *  plus a process-wide hourly ceiling against table stuffing. */
+  oauthRegister: { limit: 10, windowMs: 60_000 },
+  oauthRegisterGlobal: { limit: 300, windowMs: 3_600_000 },
+  /** /mcp per IP (platform backends share egress IPs — roomy) and per
+   *  connection (one user's AI app; ~2 calls/s sustained). */
+  mcpIp: { limit: 1200, windowMs: 60_000 },
+  mcpConnection: { limit: 120, windowMs: 60_000 },
+
+  /** Razorpay checkout creation, per account. Each call may create a
+   *  provider subscription, so it is tight; a real customer needs one or
+   *  two (a retry after closing Checkout reuses the same subscription). */
+  razorpayCheckout: { limit: 10, windowMs: 600_000 },
+  /** Checkout verification, per account. Called once per Checkout success;
+   *  the budget absorbs retries on a flaky connection. */
+  razorpayVerify: { limit: 30, windowMs: 600_000 },
+  /** Billing status polling, per account. The route also throttles its
+   *  own Razorpay refetch to one per 30 s per subscription. */
+  razorpayStatus: { limit: 60, windowMs: 60_000 },
+  /** Cancel AutoPay / change the payment method, per account. Each call
+   *  reaches Razorpay; a real customer needs one or two. */
+  razorpayManage: { limit: 5, windowMs: 3_600_000 },
 } as const;
 
 /** Test-only helper. Clears the in-memory state so unit tests don't

@@ -51,6 +51,41 @@ type Admin = SupabaseClient<any, any, any>;
 /** Ceiling per tick, so one run cannot become unbounded work. */
 export const MAX_REMINDERS_PER_RUN = 100;
 
+/**
+ * Which of these accounts have a working Razorpay AutoPay (authorised,
+ * active or retrying, not ending at period end) in `mode`.
+ *
+ * Plan F5: a reminder that says "your plan ends, act now" is untrue for
+ * them, because the renewal is charged automatically. Scoped to the
+ * deployment's own mode, because dev and production share the database:
+ * a test-mode mandate on dev must not silence production's reminders.
+ *
+ * On a read failure this returns an empty set (send as before) and logs.
+ * A redundant reminder is harmless here: /upgrade-plan tells an AutoPay
+ * customer there is nothing to pay.
+ */
+export async function loadAutopayAccountIds(
+  admin: Admin,
+  accountIds: string[],
+  mode: 'test' | 'live'
+): Promise<Set<string>> {
+  if (accountIds.length === 0) return new Set();
+  const { data, error } = await admin
+    .from('billing_subscriptions')
+    .select('account_id')
+    .in('account_id', accountIds)
+    .eq('mode', mode)
+    .in('status', ['authenticated', 'active', 'pending'])
+    .eq('cancel_at_cycle_end', false);
+  if (error) {
+    console.error('[auto-mail] AutoPay lookup failed:', error.message);
+    return new Set();
+  }
+  return new Set(
+    ((data ?? []) as { account_id: string }[]).map((r) => r.account_id)
+  );
+}
+
 // ------------------------------------------------------------
 // Rules
 // ------------------------------------------------------------
@@ -218,6 +253,12 @@ export async function findDueReminders(
     gateConfig?: SubscriptionGateConfig;
     now?: Date;
     limit?: number;
+    /**
+     * This deployment's Razorpay mode, or null where Razorpay is not
+     * configured. Accounts with a working AutoPay in this mode are
+     * skipped (see loadAutopayAccountIds).
+     */
+    autopayMode?: 'test' | 'live' | null;
   }
 ): Promise<DueReminder[]> {
   const now = options.now ?? new Date();
@@ -286,6 +327,14 @@ export async function findDueReminders(
     }
   }
 
+  const autopayAccounts = options.autopayMode
+    ? await loadAutopayAccountIds(
+        admin,
+        rows.map((r) => r.id),
+        options.autopayMode
+      )
+    : new Set<string>();
+
   const due: DueReminder[] = [];
 
   for (const row of rows) {
@@ -294,6 +343,11 @@ export async function findDueReminders(
     // The operator's own workspace is not a customer — see
     // loadOperatorAccountIds.
     if (operatorAccounts.has(row.id)) continue;
+
+    // AutoPay renews them automatically, so "act before this date" is
+    // untrue (plan F5). Razorpay's own pre-debit notice and our billing
+    // emails cover what they need to know.
+    if (autopayAccounts.has(row.id)) continue;
 
     // `null` -> `undefined` so the resolver applies its own default
     // ('trialing'). A `Partial<AccountSubscriptionRow>` distinguishes

@@ -10,7 +10,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
-import { resolveImportTagIds } from '@/lib/contacts/resolve-import-tags';
+import {
+  idsForTagNames,
+  resolveImportTagIds,
+} from '@/lib/contacts/resolve-import-tags';
 import { addContactTagAndDispatch } from '@/lib/contacts/tag-events';
 import type { ContactSource } from '@/lib/contacts/contact-source';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
@@ -184,7 +187,8 @@ export async function setContactTags(
     tagNames,
     canCreateTags: true,
   });
-  const desired = new Set(tagIdByKey.values());
+  // Only the requested names — tagIdByKey holds every tag in the account.
+  const desired = new Set(idsForTagNames(tagIdByKey, tagNames));
 
   // Diff against the current joins rather than delete-all-then-insert:
   // a diff only touches tags that actually change, so a mid-operation

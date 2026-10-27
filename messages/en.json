@@ -30,6 +30,7 @@
     "beta": "Beta",
     "unreadConversations": "{count} unread {count, plural, =1 {conversation} other {conversations}}",
     "unreadNotifications": "{count} unread {count, plural, =1 {notification} other {notifications}}",
+    "unreadSupportMessages": "{count} unread support {count, plural, =1 {message} other {messages}}",
     "roleOwner": "Owner",
     "roleAdmin": "Admin",
     "roleAgent": "Agent",
@@ -103,7 +104,12 @@
       "viewAll": "View all →",
       "noActivity": "No activity yet",
       "noActivityHint": "Activity from messages, deals, broadcasts, and automations will appear here.",
-      "showingOf": "Showing {visible} of {totalLoaded}{plus}",
+      "showingRange": "Showing {first}–{last}",
+      "noMore": "No older activity",
+      "loadError": "Could not load activity. Please try again.",
+      "page": "Page {page}",
+      "previous": "Previous page",
+      "next": "Next page",
       "show": "Show",
       "timeS": "{sec}s ago",
       "timeM": "{min}m ago",
@@ -265,6 +271,8 @@
       "unsupported": "[Unsupported message type]",
       "aiBadge": "AI",
       "aiBadgeTitle": "Sent automatically by the AI assistant",
+      "viaAiBadge": "via {app}",
+      "viaAiBadgeTitle": "Sent through {app}, connected to Replai by this team member",
       "ownerBadge": "Owner",
       "ownerBadgeTitle": "Sent from this CRM by the account owner",
       "personBadgeTitle": "Sent from this CRM by {name}",
@@ -284,14 +292,21 @@
       "copyFailed": "Copy failed"
     },
     "replyQuote": {
-      "photo": "[Photo]",
-      "video": "[Video]",
-      "document": "[Document]",
-      "audio": "[Audio]",
-      "voiceMessage": "[Voice message]",
-      "location": "[Location]",
-      "template": "[Template]",
-      "message": "[Message]",
+      "you": "You",
+      "photo": "Photo",
+      "video": "Video",
+      "document": "Document",
+      "audio": "Audio",
+      "voiceMessage": "Voice message",
+      "location": "Location",
+      "sticker": "Sticker",
+      "contact": "Contact",
+      "template": "Template",
+      "interactive": "Buttons",
+      "message": "Message",
+      "deleted": "This message was deleted",
+      "original": "Original message",
+      "olderMessage": "Tap to find it in earlier history",
       "cancelReply": "Cancel reply"
     },
     "templatePicker": {
@@ -390,6 +405,8 @@
       "apiHint": "Created through the public API by your own system or integration.",
       "phoneSync": "Phone contacts",
       "phoneSyncHint": "Imported from the address book on your connected WhatsApp phone.",
+      "ai": "AI app",
+      "aiHint": "Created by an AI app such as Claude or ChatGPT that you connected to Replai.",
       "unknown": "Not recorded",
       "unknownHint": "Added before the CRM started recording how contacts arrive."
     },
@@ -509,8 +526,21 @@
       "resultCustomValues_plural": "{count} custom field values saved",
       "resultCustomFields": "{count} new custom field created",
       "resultCustomFields_plural": "{count} new custom fields created",
-      "resultSkipped": "{count} skipped",
+      "resultSkipped": "{count, plural, one {# duplicate number skipped} other {# duplicate numbers skipped}}",
       "resultFailed": "{count} failed",
+      "importingBtn": "Importing…",
+      "progressChecking": "Checking for duplicates…",
+      "progressContacts": "Importing contacts…",
+      "progressTags": "Assigning tags…",
+      "progressCustomFields": "Saving custom field values…",
+      "progressCount": "{done} of {total}",
+      "progressRemaining": "{count} remaining",
+      "progressSkipped": "{count} skipped",
+      "progressKeepOpen": "Keep this window open until the import finishes.",
+      "resultNoCountryCode": "{count, plural, one {# number was saved without a country code (no + in the file). Add the code before messaging it on WhatsApp.} other {# numbers were saved without a country code (no + in the file). Add the code before messaging them on WhatsApp.}}",
+      "noticeNoCountryCode": "{count, plural, one {# number has no + country code. It will be saved exactly as written, not guessed.} other {# numbers have no + country code. They will be saved exactly as written, not guessed.}}",
+      "noticeEmptyPhone": "{count, plural, one {# row has an empty phone cell and was left out.} other {# rows have an empty phone cell and were left out.}}",
+      "noticeInvalidPhone": "{count, plural, one {# phone value isn't a number and was left out} other {# phone values aren't numbers and were left out}} (e.g. {sample}). Spreadsheet apps can turn long numbers into values like 2.14E+11 — format the column as Text and export again.",
       "willBeCreated": "{name} (will be created on import)",
       "columns": {
         "phone": "Phone",
@@ -1372,7 +1402,70 @@
       "fieldsCount": "{count} custom {count, plural, =1 {field} other {fields}}",
       "appearance": "{mode} mode · {theme} accent",
       "yourAccount": "Your account",
-      "loading": "Loading…"
+      "loading": "Loading…",
+      "shortcuts": {
+        "title": "Shortcuts",
+        "hint": "Jump straight to the settings and pages you use most.",
+        "editHint": "Drag tiles to reorder them, or remove what you do not need.",
+        "customize": "Customize",
+        "done": "Done",
+        "reset": "Reset",
+        "add": "Add shortcut",
+        "addTitle": "Add a shortcut",
+        "addDescription": "Pick a settings section or page to pin to your Overview.",
+        "search": "Search shortcuts",
+        "noMatch": "No shortcuts match your search.",
+        "allAdded": "All shortcuts are added",
+        "empty": "You have no shortcuts. Add the settings and pages you use most.",
+        "remove": "Remove {name}",
+        "reorderHandle": "Reorder {name}. Drag it, or use the arrow keys.",
+        "viewLabel": "Layout",
+        "viewCards": "Cards with details",
+        "viewCompact": "Compact",
+        "groups": {
+          "workspace": "Workspace settings",
+          "app": "App pages",
+          "account": "Your account",
+          "help": "Help and developers"
+        },
+        "pages": {
+          "dashboard": "Dashboard",
+          "inbox": "Inbox",
+          "notifications": "Notifications",
+          "contacts": "Contacts",
+          "pipelines": "Pipelines",
+          "broadcasts": "Broadcasts",
+          "templates": "Templates",
+          "automations": "Automations",
+          "flows": "Flows",
+          "agents": "AI Agents",
+          "api-docs": "API documentation",
+          "help": "Help & support"
+        },
+        "desc": {
+          "billing": "Plan, AutoPay and invoices",
+          "alerts": "Message usage limits and alerts",
+          "quick-replies": "Saved replies for the inbox",
+          "opt-out": "Marketing opt-in and opt-out",
+          "ai-connectors": "Claude and ChatGPT access",
+          "integrations": "Google Sheets and other apps",
+          "api": "Keys for the public API",
+          "live-chat": "Chat with the Replai team",
+          "profile": "Name, photo and email",
+          "security": "Password, 2FA and devices",
+          "dashboard": "Key numbers at a glance",
+          "inbox": "Team conversations",
+          "notifications": "Alerts and updates",
+          "contacts": "Customers, tags and fields",
+          "pipelines": "Deals by stage",
+          "broadcasts": "Send campaigns to many contacts",
+          "automations": "Rules that run on their own",
+          "flows": "Chatbot flows and forms",
+          "agents": "AI auto-reply agents",
+          "api-docs": "Endpoints, scopes and examples",
+          "help": "Contact the support team"
+        }
+      }
     },
     "members": {
       "title": "Team members",
@@ -1675,7 +1768,9 @@
       "api": "API keys",
       "integrations": "App integrations",
       "alerts": "Usage alerts",
-      "opt-out": "Opt-in / opt-out"
+      "opt-out": "Opt-in / opt-out",
+      "live-chat": "Live chat",
+      "ai-connectors": "AI connectors"
     },
     "integrations": {
       "title": "App integrations",
@@ -1684,6 +1779,14 @@
     "groups": {
       "account": "Account",
       "workspace": "Workspace"
+    },
+    "subgroups": {
+      "billing": "Billing & usage",
+      "messaging": "Messaging",
+      "crm": "CRM setup",
+      "team": "Team",
+      "developers": "Integrations & API",
+      "support": "Support"
     },
     "profile": {
       "title": "Your profile",
@@ -1874,6 +1977,169 @@
       "reindex": "Reindex",
       "reindexTooltip": "Re-embed all documents (e.g. after adding an embeddings key)",
       "loading": "Loading…"
+    }
+  },
+  "AiConsent": {
+    "title": "Allow {app} to access Replai?",
+    "titleReconnect": "Update what {app} can do in Replai",
+    "subtitle": "{app} will work in the {account} workspace as you.",
+    "signedInAs": "Signed in as {email}.",
+    "notYou": "Not you?",
+    "switchAccount": "Use a different account",
+    "backToApp": "Go back to the app",
+    "alwaysHeading": "It will be able to",
+    "optionalHeading": "You can also allow",
+    "reassurance": "{app} only gets what you switch on here. Anything that sends a message asks you to confirm first, and you can change or disconnect it any time in Settings → AI Connectors.",
+    "allow": "Allow",
+    "deny": "Cancel",
+    "headerLabel": "Authorize app",
+    "toggleTheme": "Switch light or dark mode",
+    "requestTitle": "{app} is requesting access to your Replai workspace",
+    "requestTitleReconnect": "{app} wants to update its access to your Replai workspace",
+    "requires": "{app} requires the following permissions:",
+    "sectionAccount": "Account",
+    "accountIdentity": "Confirm your identity and sign you in.",
+    "accountEmail": "View your name and email address.",
+    "accountWorkspace": "Work in the {account} workspace as you.",
+    "sectionWorkspace": "Workspace data",
+    "readOnly": "Read-only permissions",
+    "sectionActions": "Actions",
+    "presetReadOnly": "Read only",
+    "presetAll": "Allow all",
+    "asksFirst": "Asks you first",
+    "reassuranceShort": "{app} only gets what you allow here. It can never read your API keys or WhatsApp credentials, and you can change or disconnect it any time.",
+    "manageLink": "Manage AI connections",
+    "allowAccess": "Allow Access",
+    "returnTo": "You will be sent back to {host}.",
+    "footerHowItWorks": "How it works",
+    "footerPrivacy": "Privacy",
+    "footerTerms": "Terms",
+    "footerHelp": "Help",
+    "decisionFailed": "Something went wrong. Please try again.",
+    "decisionExpired": "This request has expired. Start connecting again from the app.",
+    "devClient": "This app is not on the Replai list of verified apps. Only continue if you started this connection yourself.",
+    "devClientHost": "This app ({host}) is not on the Replai list of verified apps. Only continue if you started this connection yourself.",
+    "loopback": "{app} runs on your computer. Only allow it if you just started it yourself.",
+    "scopes": {
+      "profile": "Know who you are and which workspace you are in",
+      "contacts:read": "View contacts, tags and notes",
+      "conversations:read": "View inbox conversations",
+      "messages:read": "Read messages in conversations",
+      "deals:read": "View pipelines and deals",
+      "templates:read": "View message templates",
+      "broadcasts:read": "View broadcasts and their results",
+      "automations:read": "View automations and flows",
+      "analytics:read": "View dashboard numbers",
+      "contacts:write": "Create and edit contacts, tags and notes",
+      "conversations:write": "Change conversation status and assignment",
+      "deals:write": "Create and update deals",
+      "messages:send": "Send WhatsApp messages as you",
+      "broadcasts:send": "Send broadcasts to many contacts",
+      "automations:manage": "Turn automations and flows on or off"
+    },
+    "tiers": {
+      "edit": {
+        "title": "Edit records",
+        "body": "Create and update contacts, tags, notes, deals and conversation status."
+      },
+      "send": {
+        "title": "Send messages",
+        "body": "Send WhatsApp messages and templates as you. Each send is shown to you to confirm first."
+      },
+      "broadcast": {
+        "title": "Send broadcasts",
+        "body": "Send a template to many contacts at once, after you confirm the audience."
+      },
+      "automations": {
+        "title": "Manage automations",
+        "body": "Turn automations and flows on or off."
+      }
+    },
+    "denied": {
+      "policy_tier": "Your workspace owner doesn't allow this for members.",
+      "policy_messaging": "Your workspace owner has switched off sending messages from AI apps.",
+      "policy_broadcasts": "Your workspace owner has switched off broadcasts for AI apps.",
+      "policy_automations": "Your workspace owner has switched off automation changes from AI apps.",
+      "role_section": "Your Replai role doesn't include this area.",
+      "generic": "This isn't available for your account."
+    },
+    "errors": {
+      "unavailable": {
+        "title": "Connecting apps is not available right now",
+        "body": "Please try again later."
+      },
+      "expired": {
+        "title": "This link has expired",
+        "body": "Go back to the app and start connecting Replai again."
+      },
+      "repeated_param": {
+        "title": "This sign-in link isn't valid",
+        "body": "Go back to the app and start connecting Replai again."
+      },
+      "missing_client": {
+        "title": "This sign-in link isn't valid",
+        "body": "Go back to the app and start connecting Replai again."
+      },
+      "unknown_client": {
+        "title": "This app can't connect to Replai",
+        "body": "It is not on the list of apps that can connect to Replai."
+      },
+      "blocked_client": {
+        "title": "This app can't connect to Replai",
+        "body": "It has been blocked from connecting to Replai."
+      },
+      "platform_disabled": {
+        "title": "This app is temporarily unavailable",
+        "body": "Connections from this app are paused. Please try again later."
+      },
+      "invalid_metadata": {
+        "title": "This app can't connect to Replai",
+        "body": "It published invalid registration details."
+      },
+      "bad_redirect": {
+        "title": "This sign-in link isn't valid",
+        "body": "The app asked to return to an address it hasn't registered, so we stopped here to keep your account safe."
+      },
+      "no_account": {
+        "title": "No Replai workspace found",
+        "body": "Your sign-in isn't linked to a workspace yet. Finish setting up Replai first."
+      },
+      "super_admin": {
+        "title": "Use a workspace account",
+        "body": "Platform admin accounts cannot connect AI apps. Sign in with a workspace account instead."
+      },
+      "inactive": {
+        "title": "Your access is paused",
+        "body": "Your workspace owner has deactivated your account."
+      },
+      "account_not_allowed": {
+        "title": "Not available for this workspace yet",
+        "body": "AI connectors are being rolled out gradually and are not enabled for this workspace yet."
+      },
+      "account_banned": {
+        "title": "This workspace is suspended",
+        "body": "AI apps cannot connect to a suspended workspace."
+      },
+      "subscription_required": {
+        "title": "An active subscription is needed",
+        "body": "Renew your Replai subscription, then connect the app again."
+      },
+      "ai_locked": {
+        "title": "AI connectors are switched off",
+        "body": "Replai has switched off AI connectors for this workspace."
+      },
+      "policy_disabled": {
+        "title": "AI connectors are switched off",
+        "body": "Your workspace owner has switched off AI connectors."
+      },
+      "policy_platform": {
+        "title": "This app is not allowed",
+        "body": "Your workspace owner hasn't allowed this app for the workspace."
+      },
+      "policy_members": {
+        "title": "Owners only",
+        "body": "Your workspace owner allows AI connectors for owners only."
+      }
     }
   }
 }

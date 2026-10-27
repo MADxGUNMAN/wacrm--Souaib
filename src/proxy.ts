@@ -16,11 +16,25 @@
 //      API routes.
 // ============================================================
 
-import { createServerClient } from '@supabase/ssr'
-import { NextResponse, type NextRequest } from 'next/server'
+import { createServerClient } from '@supabase/ssr';
+import { NextResponse, type NextRequest } from 'next/server';
 
-import { getCachedGateConfig } from '@/lib/subscription/gate-cache'
-import { resolveSubscriptionState } from '@/lib/subscription/status'
+import { safeNextPath } from '@/lib/auth/next-path';
+import { getCachedGateConfig } from '@/lib/subscription/gate-cache';
+import { resolveSubscriptionState } from '@/lib/subscription/status';
+import {
+  gateCacheKey,
+  isGateCached,
+  isTwoFactorOpenPath,
+  readTwoFactorGate,
+  rememberGatePassed,
+  sessionIdFromAccessToken,
+} from '@/lib/two-factor/gate';
+import {
+  DEFAULT_AFTER_TWO_FACTOR,
+  TWO_FACTOR_PATH,
+  safeTwoFactorNext,
+} from '@/lib/two-factor/next-path';
 
 // ============================================================
 // Subscription gate — API allowlist
@@ -57,16 +71,43 @@ const UNGATED_API_PREFIXES = [
   '/api/health',
   '/api/v1',
   '/api/whatsapp/webhook',
-] as const
+  // Signing out, revoking a device and the activity log must keep working
+  // for a banned or lapsed workspace: they protect the user, not the plan.
+  '/api/security',
+] as const;
 
 function isUngatedApiPath(pathname: string): boolean {
   return UNGATED_API_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  )
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
+}
+
+// AI connector machine endpoints (Claude / ChatGPT backends, MCP
+// clients). They never carry a Supabase session cookie and authenticate
+// themselves (PKCE, bearer tokens), so skip the session refresh and the
+// page/billing redirects entirely — a 307 to /login would break them.
+// The consent page (/oauth/consent) is NOT listed: it needs the session.
+const AI_CONNECTOR_MACHINE_PATHS = new Set([
+  '/mcp',
+  '/oauth/authorize',
+  '/oauth/token',
+  '/oauth/register',
+  '/oauth/revoke',
+]);
+
+function isAiConnectorMachinePath(pathname: string): boolean {
+  return (
+    AI_CONNECTOR_MACHINE_PATHS.has(pathname) ||
+    pathname.startsWith('/.well-known/oauth-')
+  );
 }
 
 export async function proxy(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
+  if (isAiConnectorMachinePath(request.nextUrl.pathname)) {
+    return NextResponse.next();
+  }
+
+  let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -74,22 +115,26 @@ export async function proxy(request: NextRequest) {
     {
       cookies: {
         getAll() {
-          return request.cookies.getAll()
+          return request.cookies.getAll();
         },
         setAll(cookiesToSet) {
           // Request cookies carry no options — only the outgoing response
           // cookies below need them.
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({ request })
+          cookiesToSet.forEach(({ name, value }) =>
+            request.cookies.set(name, value)
+          );
+          supabaseResponse = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
-          )
+          );
         },
       },
     }
-  )
+  );
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   // getUser() transparently refreshes an expired access token, which
   // ROTATES the refresh token and writes the new cookies onto
@@ -103,28 +148,28 @@ export async function proxy(request: NextRequest) {
   // refreshed cookies onto whatever response we hand back to fix that.
   const withRefreshedCookies = <T extends NextResponse>(response: T): T => {
     supabaseResponse.cookies.getAll().forEach((cookie) => {
-      response.cookies.set(cookie)
-    })
-    return response
-  }
+      response.cookies.set(cookie);
+    });
+    return response;
+  };
 
   // Landing page — logged-in users should never see it.
   // Super admins go to /super-admin, CRM users go to /dashboard.
   if (user && request.nextUrl.pathname === '/') {
-    const url = request.nextUrl.clone()
+    const url = request.nextUrl.clone();
     try {
       const { data: profile } = await supabase
         .from('profiles')
         .select('is_super_admin')
         .eq('user_id', user.id)
-        .maybeSingle()
+        .maybeSingle();
 
-      url.pathname = profile?.is_super_admin ? '/super-admin' : '/dashboard'
+      url.pathname = profile?.is_super_admin ? '/super-admin' : '/dashboard';
     } catch {
-      url.pathname = '/dashboard'
+      url.pathname = '/dashboard';
     }
-    url.search = ''
-    return withRefreshedCookies(NextResponse.redirect(url))
+    url.search = '';
+    return withRefreshedCookies(NextResponse.redirect(url));
   }
 
   // Auth pages - redirect to dashboard if already logged in.
@@ -133,32 +178,90 @@ export async function proxy(request: NextRequest) {
   // they can accept the invitation in one click. Without this,
   // a forwarded invite link to someone who's already signed in
   // would silently drop them on /dashboard.
-  if (user && (
-    request.nextUrl.pathname === '/login' ||
-    request.nextUrl.pathname === '/signup' ||
-    request.nextUrl.pathname === '/forgot-password'
-  )) {
-    const url = request.nextUrl.clone()
-    const inviteToken = request.nextUrl.searchParams.get('invite')
+  if (
+    user &&
+    (request.nextUrl.pathname === '/login' ||
+      request.nextUrl.pathname === '/signup' ||
+      request.nextUrl.pathname === '/forgot-password')
+  ) {
+    const url = request.nextUrl.clone();
+    const inviteToken = request.nextUrl.searchParams.get('invite');
     if (
       inviteToken &&
       (request.nextUrl.pathname === '/login' ||
         request.nextUrl.pathname === '/signup')
     ) {
-      url.pathname = `/join/${encodeURIComponent(inviteToken)}`
-      url.search = ''
+      url.pathname = `/join/${encodeURIComponent(inviteToken)}`;
+      url.search = '';
+    } else if (
+      request.nextUrl.pathname === '/login' &&
+      safeNextPath(request.nextUrl.searchParams.get('next'))
+    ) {
+      // Already signed in and on the way back to the AI connector
+      // consent page: go straight there. safeNextPath is a strict
+      // allowlist, so this cannot become an open redirect.
+      const next = safeNextPath(request.nextUrl.searchParams.get('next'))!;
+      const target = new URL(next, request.nextUrl.origin);
+      url.pathname = target.pathname;
+      url.search = target.search;
     } else {
       // Check if this user is a super admin — if so, redirect to /super-admin
       const { data: saCheck } = await supabase
         .from('profiles')
         .select('is_super_admin')
         .eq('user_id', user.id)
-        .maybeSingle()
+        .maybeSingle();
 
-      url.pathname = saCheck?.is_super_admin ? '/super-admin' : '/dashboard'
-      url.search = ''
+      url.pathname = saCheck?.is_super_admin ? '/super-admin' : '/dashboard';
+      url.search = '';
     }
-    return withRefreshedCookies(NextResponse.redirect(url))
+    return withRefreshedCookies(NextResponse.redirect(url));
+  }
+
+  // ── Two-factor gate ─────────────────────────────────────────────────
+  // A signed-in session that still owes a 2FA code (the user's own, or
+  // the workspace owner's when the owner requires it for members) can
+  // only reach the /two-factor page, sign-out and public pages. Runs
+  // before the role, ban and subscription checks: identity comes first.
+  // Fails closed: if the check itself errors, verification is required.
+  if (user && !isTwoFactorOpenPath(request.nextUrl.pathname)) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const cacheKey = gateCacheKey(
+      user.id,
+      sessionIdFromAccessToken(session?.access_token)
+    );
+    if (!isGateCached(cacheKey)) {
+      let satisfied = false;
+      try {
+        satisfied = (await readTwoFactorGate(supabase)).satisfied;
+      } catch (err) {
+        console.error('[proxy] two-factor gate failed:', err);
+      }
+      if (satisfied) {
+        rememberGatePassed(cacheKey);
+      } else if (request.nextUrl.pathname.startsWith('/api/')) {
+        return withRefreshedCookies(
+          NextResponse.json(
+            {
+              error: 'Two-factor verification is required',
+              code: 'two_factor_required',
+            },
+            { status: 403 }
+          )
+        );
+      } else {
+        const url = request.nextUrl.clone();
+        const next = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+        url.pathname = TWO_FACTOR_PATH;
+        url.search = '';
+        const safe = safeTwoFactorNext(next);
+        if (safe !== DEFAULT_AFTER_TWO_FACTOR)
+          url.searchParams.set('next', safe);
+        return withRefreshedCookies(NextResponse.redirect(url));
+      }
+    }
   }
 
   // Protected pages - redirect to login if not authenticated.
@@ -166,25 +269,53 @@ export async function proxy(request: NextRequest) {
   // signed-out visitor gets bounced to login, but they are deliberately
   // NOT in `crmPaths` below — they are the destinations of the
   // subscription gate, so gating them would loop forever.
-  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/templates', '/automations', '/settings', '/super-admin', '/upgrade-plan', '/subscription-required']
-  if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
-    const url = request.nextUrl.clone()
-    url.pathname = '/login'
-    return withRefreshedCookies(NextResponse.redirect(url))
+  const protectedPaths = [
+    '/dashboard',
+    '/inbox',
+    '/contacts',
+    '/pipelines',
+    '/broadcasts',
+    '/templates',
+    '/automations',
+    '/settings',
+    '/super-admin',
+    '/upgrade-plan',
+    '/subscription-required',
+    // The 2FA page needs a signed-in (password-verified) session.
+    TWO_FACTOR_PATH,
+  ];
+  if (
+    !user &&
+    protectedPaths.some((path) => request.nextUrl.pathname.startsWith(path))
+  ) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/login';
+    return withRefreshedCookies(NextResponse.redirect(url));
   }
 
   // ── Super Admin access control ──────────────────────────────────────
   // Super admins are platform operators. They must NOT access the normal
   // CRM dashboard. Conversely, normal users must NOT access /super-admin.
-  const crmPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/templates', '/automations', '/settings']
-  const isSuperAdminPath = request.nextUrl.pathname.startsWith('/super-admin')
-  const isCrmPath = crmPaths.some(path => request.nextUrl.pathname.startsWith(path))
+  const crmPaths = [
+    '/dashboard',
+    '/inbox',
+    '/contacts',
+    '/pipelines',
+    '/broadcasts',
+    '/templates',
+    '/automations',
+    '/settings',
+  ];
+  const isSuperAdminPath = request.nextUrl.pathname.startsWith('/super-admin');
+  const isCrmPath = crmPaths.some((path) =>
+    request.nextUrl.pathname.startsWith(path)
+  );
   // API requests that the subscription gate applies to. Separated from
   // the page paths because an API caller needs a JSON 403, not a 307 to
   // an HTML page it cannot render.
   const isGatedApiPath =
     request.nextUrl.pathname.startsWith('/api/') &&
-    !isUngatedApiPath(request.nextUrl.pathname)
+    !isUngatedApiPath(request.nextUrl.pathname);
 
   if (user && (isSuperAdminPath || isCrmPath || isGatedApiPath)) {
     try {
@@ -195,24 +326,24 @@ export async function proxy(request: NextRequest) {
         // pricing page with a button they're not allowed to use.
         .select('account_id, is_super_admin, account_role')
         .eq('user_id', user.id)
-        .maybeSingle()
+        .maybeSingle();
 
-      const isSuperAdmin = profileRow?.is_super_admin === true
+      const isSuperAdmin = profileRow?.is_super_admin === true;
 
       // Super admin trying to access CRM → redirect to /super-admin
       if (isSuperAdmin && isCrmPath) {
-        const url = request.nextUrl.clone()
-        url.pathname = '/super-admin'
-        url.search = ''
-        return withRefreshedCookies(NextResponse.redirect(url))
+        const url = request.nextUrl.clone();
+        url.pathname = '/super-admin';
+        url.search = '';
+        return withRefreshedCookies(NextResponse.redirect(url));
       }
 
       // Non-super-admin trying to access /super-admin → redirect to /dashboard
       if (!isSuperAdmin && isSuperAdminPath) {
-        const url = request.nextUrl.clone()
-        url.pathname = '/dashboard'
-        url.search = ''
-        return withRefreshedCookies(NextResponse.redirect(url))
+        const url = request.nextUrl.clone();
+        url.pathname = '/dashboard';
+        url.search = '';
+        return withRefreshedCookies(NextResponse.redirect(url));
       }
 
       // Ban + subscription checks — non-super-admins only.
@@ -224,12 +355,16 @@ export async function proxy(request: NextRequest) {
       if (!isSuperAdmin && profileRow?.account_id) {
         const { data: accountRow } = await supabase
           .from('accounts')
-          // The selection columns ride along free — this row is already
-          // being fetched for the ban check, so plan-selection routing
-          // costs no extra round trip.
-          .select('is_banned, subscription_status, trial_ends_at, subscription_ends_at, selected_plan_id, selected_cycle_id, plan_selection_required')
+          // `plan_selection_required` rides along free — this row is
+          // already being fetched for the ban check, so plan-selection
+          // routing costs no extra round trip. `billing_grace_ends_at`
+          // likewise: it keeps an account open while Razorpay is still
+          // collecting a due AutoPay charge (resolveSubscriptionState).
+          .select(
+            'is_banned, subscription_status, trial_ends_at, subscription_ends_at, plan_selection_required, billing_grace_ends_at'
+          )
           .eq('id', profileRow.account_id)
-          .maybeSingle()
+          .maybeSingle();
 
         // A platform-level ban outranks billing: don't send a banned
         // account to a payment page, since paying wouldn't help.
@@ -237,23 +372,26 @@ export async function proxy(request: NextRequest) {
           if (isGatedApiPath) {
             return withRefreshedCookies(
               NextResponse.json(
-                { error: 'This workspace has been suspended', code: 'account_banned' },
-                { status: 403 },
-              ),
-            )
+                {
+                  error: 'This workspace has been suspended',
+                  code: 'account_banned',
+                },
+                { status: 403 }
+              )
+            );
           }
-          const url = request.nextUrl.clone()
-          url.pathname = '/banned'
-          url.search = ''
-          return withRefreshedCookies(NextResponse.redirect(url))
+          const url = request.nextUrl.clone();
+          url.pathname = '/banned';
+          url.search = '';
+          return withRefreshedCookies(NextResponse.redirect(url));
         }
 
         // Subscription gate. `resolveSubscriptionState` derives the live
         // verdict from the timestamps rather than trusting
         // `subscription_status`, which goes stale because nothing flips
         // it when a date passes.
-        const gate = await getCachedGateConfig()
-        const state = resolveSubscriptionState(accountRow, gate)
+        const gate = await getCachedGateConfig();
+        const state = resolveSubscriptionState(accountRow, gate);
 
         // ── Plan selection comes BEFORE the CRM ─────────────────
         //
@@ -280,18 +418,18 @@ export async function proxy(request: NextRequest) {
           accountRow?.plan_selection_required === true &&
           isCrmPath
         ) {
-          const url = request.nextUrl.clone()
+          const url = request.nextUrl.clone();
           // Members cannot buy, so sending them to a pricing page would
           // be a dead end. Only the owner is asked to choose.
           url.pathname =
             profileRow.account_role === 'owner'
               ? '/upgrade-plan'
-              : '/dashboard'
-          url.search = ''
+              : '/dashboard';
+          url.search = '';
           // A member on /dashboard is already where we would send them —
           // redirecting would loop. Fall through instead.
           if (url.pathname !== request.nextUrl.pathname) {
-            return withRefreshedCookies(NextResponse.redirect(url))
+            return withRefreshedCookies(NextResponse.redirect(url));
           }
         }
 
@@ -300,44 +438,38 @@ export async function proxy(request: NextRequest) {
             return withRefreshedCookies(
               NextResponse.json(
                 {
-                  error: 'This workspace needs an active subscription to continue',
+                  error:
+                    'This workspace needs an active subscription to continue',
                   code: 'subscription_required',
                 },
-                { status: 403 },
-              ),
-            )
+                { status: 403 }
+              )
+            );
           }
 
           if (isCrmPath) {
-            const url = request.nextUrl.clone()
-            url.search = ''
+            const url = request.nextUrl.clone();
+            url.search = '';
 
             if (profileRow.account_role === 'owner') {
-              // ── Straight to the plan they already chose ──
+              // ── Chooser first, payment second ──
               //
-              // A customer who picked "Yearly" on day one should not be
-              // handed a fresh price list the morning their trial lapses;
-              // they should land on the Yearly QR. Both ids are required
-              // because the payment screen cannot price a half-selection
-              // and would bounce back to the chooser.
+              // A lapsed owner (trial or paid term) lands on the plan
+              // chooser, never straight on the QR. The page pre-selects
+              // the term they chose before, read SERVER-SIDE via
+              // /api/billing/subscription → `selectedPlan`, so no plan id
+              // rides in the URL. Payment comes only after "Continue to
+              // Payment", with whichever card is selected then.
               //
               // Safe from redirect loops: /upgrade-plan and
               // /upgrade-plan/payment are excluded from `crmPaths`, so
               // neither destination re-enters this branch.
-              const planId = accountRow?.selected_plan_id
-              const cycleId = accountRow?.selected_cycle_id
-              if (planId && cycleId) {
-                url.pathname = '/upgrade-plan/payment'
-                url.searchParams.set('plan', String(planId))
-                url.searchParams.set('cycle', String(cycleId))
-              } else {
-                url.pathname = '/upgrade-plan'
-              }
+              url.pathname = '/upgrade-plan';
             } else {
-              url.pathname = '/subscription-required'
+              url.pathname = '/subscription-required';
             }
 
-            return withRefreshedCookies(NextResponse.redirect(url))
+            return withRefreshedCookies(NextResponse.redirect(url));
           }
         }
       }
@@ -348,18 +480,21 @@ export async function proxy(request: NextRequest) {
   }
 
   // API routes that need auth (not webhooks)
-  if (!user && request.nextUrl.pathname.startsWith('/api/whatsapp/') &&
-      !request.nextUrl.pathname.includes('/webhook')) {
+  if (
+    !user &&
+    request.nextUrl.pathname.startsWith('/api/whatsapp/') &&
+    !request.nextUrl.pathname.includes('/webhook')
+  ) {
     return withRefreshedCookies(
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    )
+    );
   }
 
-  return supabaseResponse
+  return supabaseResponse;
 }
 
 export const config = {
   matcher: [
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
-}
+};

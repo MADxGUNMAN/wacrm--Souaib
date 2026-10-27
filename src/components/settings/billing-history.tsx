@@ -47,10 +47,15 @@ import {
   CheckCircle2,
   ChevronDown,
   Clock,
+  ExternalLink,
   History,
   Loader2,
+  PauseCircle,
+  PlayCircle,
   Receipt,
   RefreshCw,
+  RotateCcw,
+  ShieldCheck,
   ShieldOff,
   Sparkles,
   XCircle,
@@ -59,6 +64,11 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Pagination } from '@/components/ui/pagination';
+import type {
+  AutopayPaymentState,
+  CustomerAutopayPayment,
+} from '@/lib/billing/razorpay/history';
+import { formatPlanAmount } from '@/lib/billing/money-format';
 import { formatCurrency } from '@/lib/currency';
 import { cn } from '@/lib/utils';
 import type {
@@ -190,7 +200,97 @@ const ACTIVITY_META: Record<
     icon: Ban,
     tone: 'text-muted-foreground bg-muted',
   },
+  // ---- Razorpay AutoPay ----
+  // Wording matches the AutoPay card and the emails (plan section 3.5).
+  autopay_authenticated: {
+    label: 'AutoPay set up (not a payment)',
+    icon: ShieldCheck,
+    tone: 'text-primary bg-primary/10',
+  },
+  autopay_halted: {
+    label: 'AutoPay stopped after failed payments',
+    icon: AlertTriangle,
+    tone: 'text-destructive bg-destructive/10',
+  },
+  autopay_paused: {
+    label: 'AutoPay paused',
+    icon: PauseCircle,
+    tone: 'text-amber-600 bg-amber-500/10 dark:text-amber-400',
+  },
+  autopay_resumed: {
+    label: 'AutoPay resumed',
+    icon: PlayCircle,
+    tone: 'text-emerald-600 bg-emerald-500/10 dark:text-emerald-400',
+  },
+  autopay_cancelled: {
+    label: 'AutoPay cancelled',
+    icon: XCircle,
+    tone: 'text-muted-foreground bg-muted',
+  },
+  autopay_completed: {
+    label: 'AutoPay completed',
+    icon: CheckCircle2,
+    tone: 'text-muted-foreground bg-muted',
+  },
+  refund_processed: {
+    label: 'Refund processed',
+    icon: RotateCcw,
+    tone: 'text-primary bg-primary/10',
+  },
 };
+
+/** A refund that took back paid time also writes `subscription_revoked`. */
+const REFUND_REVOKE_META = {
+  label: 'Refunded time removed',
+  icon: RotateCcw,
+  tone: 'text-muted-foreground bg-muted',
+};
+
+const AUTOPAY_STATE_META: Record<
+  AutopayPaymentState,
+  { label: string; icon: React.ElementType; badge: string }
+> = {
+  paid: {
+    label: 'Paid',
+    icon: CheckCircle2,
+    badge:
+      'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  },
+  processing: {
+    label: 'Processing',
+    icon: Clock,
+    badge:
+      'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  },
+  failed: {
+    label: 'Failed',
+    icon: XCircle,
+    badge: 'border-destructive/30 bg-destructive/10 text-destructive',
+  },
+  refunded: {
+    label: 'Refunded',
+    icon: RotateCcw,
+    badge: 'border-primary/30 bg-primary/10 text-primary',
+  },
+  partly_refunded: {
+    label: 'Partly refunded',
+    icon: RotateCcw,
+    badge: 'border-primary/30 bg-primary/10 text-primary',
+  },
+  verification: {
+    label: 'Setup check',
+    icon: ShieldCheck,
+    badge: 'border-border bg-muted text-muted-foreground',
+  },
+};
+
+function autopayMethod(m: CustomerAutopayPayment['method']): string | null {
+  if (m.vpaMasked) return `UPI ${m.vpaMasked}`;
+  if (m.last4) return `${m.network ?? 'Card'} •••• ${m.last4}`;
+  if (m.type === 'upi') return 'UPI';
+  if (m.type === 'card') return 'Card';
+  return null;
+}
 
 // ------------------------------------------------------------
 
@@ -204,6 +304,7 @@ export function BillingHistory() {
   // the customer stepped through the activity log.
   const [paymentsPage, setPaymentsPage] = useState(1);
   const [activityPage, setActivityPage] = useState(1);
+  const [transactionsPage, setTransactionsPage] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -211,6 +312,7 @@ export function BillingHistory() {
       const params = new URLSearchParams({
         paymentsPage: String(paymentsPage),
         activityPage: String(activityPage),
+        transactionsPage: String(transactionsPage),
       });
       const res = await fetch(`/api/billing/history?${params}`, {
         cache: 'no-store',
@@ -230,7 +332,7 @@ export function BillingHistory() {
     } finally {
       setLoading(false);
     }
-  }, [paymentsPage, activityPage]);
+  }, [paymentsPage, activityPage, transactionsPage]);
 
   useEffect(() => {
     void load();
@@ -270,7 +372,9 @@ export function BillingHistory() {
   if (!data) return null;
 
   const { payments, activity, summary } = data;
-  const hasAnything = payments.total > 0 || activity.total > 0;
+  const transactions = data.transactions ?? null;
+  const hasAutopay = (transactions?.total ?? 0) > 0;
+  const hasAnything = payments.total > 0 || activity.total > 0 || hasAutopay;
 
   return (
     <div className="space-y-5">
@@ -282,7 +386,11 @@ export function BillingHistory() {
         <Card>
           <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-3 p-4">
             <div>
-              <p className="text-muted-foreground text-xs">Total paid</p>
+              {/* Sums manual transfers only. With AutoPay payments listed
+                  too, "Total paid" would understate what was paid. */}
+              <p className="text-muted-foreground text-xs">
+                {hasAutopay ? 'Paid by manual transfer' : 'Total paid'}
+              </p>
               <p className="text-foreground mt-0.5 text-lg font-semibold tracking-tight">
                 {/* One entry per currency. Almost always exactly one; see
                     the route for why it is not summed into a single
@@ -310,63 +418,97 @@ export function BillingHistory() {
         </Card>
       ) : null}
 
-      {/* ---- Payments ---- */}
-      <section>
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <h3 className="text-foreground text-sm font-semibold">
-            Payment history
+      {/* ---- AutoPay payments (Razorpay) ----
+          Only verified records: a row says "Paid" only when access was
+          applied from it, and the receipt is Razorpay's own invoice page
+          for a paid invoice, or "Receipt not available". */}
+      {transactions && hasAutopay ? (
+        <section>
+          <h3 className="text-foreground mb-2 text-sm font-semibold">
+            AutoPay payments
           </h3>
-          <button
-            type="button"
-            onClick={() => void load()}
-            disabled={loading}
-            className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 text-xs font-medium disabled:opacity-60"
-          >
-            {loading ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3.5" />
-            )}
-            Refresh
-          </button>
-        </div>
-
-        {payments.total === 0 ? (
           <Card>
-            <CardContent className="flex flex-col items-center py-8 text-center">
-              <Receipt className="text-muted-foreground size-6" />
-              <p className="text-muted-foreground mt-2 text-sm">
-                No payments yet
-              </p>
-              <p className="text-muted-foreground mt-1 max-w-[38ch] text-xs">
-                Once you submit a payment for verification it appears here with
-                its transaction ID and the period it covers.
-              </p>
+            <CardContent className="p-0">
+              <ul className="divide-border divide-y">
+                {transactions.items.map((t) => (
+                  <AutopayPaymentRow key={t.id} payment={t} />
+                ))}
+              </ul>
             </CardContent>
           </Card>
-        ) : (
-          <>
+          <PagerBar
+            page={transactions.page}
+            pageSize={transactions.pageSize}
+            total={transactions.total}
+            totalPages={transactions.totalPages}
+            loading={loading}
+            onPageChange={setTransactionsPage}
+            noun="payment"
+          />
+        </section>
+      ) : null}
+
+      {/* ---- Payments ----
+          With AutoPay history these are the older manual transfers, and
+          an empty manual list is noise, not information. */}
+      {hasAutopay && payments.total === 0 ? null : (
+        <section>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <h3 className="text-foreground text-sm font-semibold">
+              {hasAutopay ? 'Earlier manual payments' : 'Payment history'}
+            </h3>
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading}
+              className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 text-xs font-medium disabled:opacity-60"
+            >
+              {loading ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              Refresh
+            </button>
+          </div>
+
+          {payments.total === 0 ? (
             <Card>
-              <CardContent className="p-0">
-                <ul className="divide-border divide-y">
-                  {payments.items.map((p) => (
-                    <PaymentRow key={p.id} payment={p} />
-                  ))}
-                </ul>
+              <CardContent className="flex flex-col items-center py-8 text-center">
+                <Receipt className="text-muted-foreground size-6" />
+                <p className="text-muted-foreground mt-2 text-sm">
+                  No payments yet
+                </p>
+                <p className="text-muted-foreground mt-1 max-w-[38ch] text-xs">
+                  Once you submit a payment for verification it appears here
+                  with its transaction ID and the period it covers.
+                </p>
               </CardContent>
             </Card>
-            <PagerBar
-              page={payments.page}
-              pageSize={payments.pageSize}
-              total={payments.total}
-              totalPages={payments.totalPages}
-              loading={loading}
-              onPageChange={setPaymentsPage}
-              noun="payment"
-            />
-          </>
-        )}
-      </section>
+          ) : (
+            <>
+              <Card>
+                <CardContent className="p-0">
+                  <ul className="divide-border divide-y">
+                    {payments.items.map((p) => (
+                      <PaymentRow key={p.id} payment={p} />
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+              <PagerBar
+                page={payments.page}
+                pageSize={payments.pageSize}
+                total={payments.total}
+                totalPages={payments.totalPages}
+                loading={loading}
+                onPageChange={setPaymentsPage}
+                noun="payment"
+              />
+            </>
+          )}
+        </section>
+      )}
 
       {/* ---- Plan activity ----
           Hidden entirely when empty. An empty second list on an account
@@ -378,7 +520,7 @@ export function BillingHistory() {
             Plan activity
           </h3>
           <p className="text-muted-foreground mb-2 text-xs">
-            Changes to your access that did not come from one of your payments.
+            Changes to your access and AutoPay that are not payments themselves.
           </p>
           <Card>
             <CardContent className="p-0">
@@ -650,8 +792,158 @@ function Detail({
 
 // ------------------------------------------------------------
 
+/**
+ * One AutoPay payment. The figures are Razorpay's; "Paid" only when the
+ * payment bought access, and the receipt link only for a paid invoice.
+ */
+function AutopayPaymentRow({
+  payment: t,
+}: {
+  payment: CustomerAutopayPayment;
+}) {
+  const [open, setOpen] = useState(false);
+  const meta = AUTOPAY_STATE_META[t.state];
+  const StatusIcon = meta.icon;
+  const method = autopayMethod(t.method);
+  const title =
+    [t.planName, t.cycleLabel].filter(Boolean).join(' · ') || 'AutoPay payment';
+  const period =
+    t.periodStart && t.periodEnd
+      ? `${formatDate(t.periodStart)} to ${formatDate(t.periodEnd)}`
+      : null;
+
+  return (
+    <li>
+      <div className="flex items-start">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="hover:bg-muted/40 flex min-w-0 flex-1 items-start gap-3 py-3 pr-2 pl-4 text-left transition-colors"
+        >
+          <span
+            className={cn(
+              'mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full',
+              meta.badge
+            )}
+          >
+            <StatusIcon className="size-3.5" />
+          </span>
+
+          <span className="min-w-0 flex-1">
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="text-foreground text-sm font-medium">
+                {title}
+              </span>
+              <Badge className="border-border bg-muted text-muted-foreground text-[10px]">
+                {t.chargeLabel}
+              </Badge>
+              <Badge className={cn('text-[10px]', meta.badge)}>
+                {meta.label}
+              </Badge>
+            </span>
+            <span className="text-muted-foreground mt-1 block text-xs">
+              {formatDateTime(t.createdAt)}
+              {method ? ` · ${method}` : ''}
+              {' · '}
+              <span className="font-mono">{t.reference}</span>
+            </span>
+            {period ? (
+              <span className="text-muted-foreground mt-0.5 block text-xs">
+                Covers {period}
+              </span>
+            ) : null}
+            {t.isVerification ? (
+              <span className="text-muted-foreground mt-0.5 block text-xs">
+                A small check made when AutoPay was set up. It is refunded
+                automatically and is not a subscription payment.
+              </span>
+            ) : null}
+            {t.failureReason ? (
+              <span className="border-destructive/25 bg-destructive/5 text-muted-foreground mt-1.5 flex items-start gap-1.5 rounded-md border px-2 py-1.5 text-xs">
+                <AlertTriangle className="text-destructive mt-0.5 size-3 shrink-0" />
+                <span>{t.failureReason}</span>
+              </span>
+            ) : null}
+          </span>
+
+          <ChevronDown
+            aria-hidden="true"
+            className={cn(
+              'text-muted-foreground mt-1 size-4 shrink-0 transition-transform',
+              open && 'rotate-180'
+            )}
+          />
+        </button>
+
+        {/* Outside the toggle button: a link cannot sit inside a button. */}
+        <div className="shrink-0 py-3 pr-4 pl-2 text-right">
+          <p className="text-foreground text-sm font-semibold">
+            {formatPlanAmount(t.amount, t.currency)}
+          </p>
+          {t.amountRefunded > 0 ? (
+            <p className="text-muted-foreground text-[10px]">
+              {formatPlanAmount(t.amountRefunded, t.currency)} refunded
+            </p>
+          ) : null}
+          {t.isVerification ? null : t.receiptUrl ? (
+            <a
+              href={t.receiptUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary mt-1 inline-flex items-center gap-1 text-xs font-medium hover:underline"
+            >
+              Receipt
+              <ExternalLink className="size-3" />
+              <span className="sr-only">(opens Razorpay in a new tab)</span>
+            </a>
+          ) : t.state === 'paid' ||
+            t.state === 'refunded' ||
+            t.state === 'partly_refunded' ? (
+            <p className="text-muted-foreground mt-1 text-[10px]">
+              Receipt not available
+            </p>
+          ) : null}
+        </div>
+      </div>
+
+      {open ? (
+        <dl className="border-border bg-muted/30 grid gap-x-6 gap-y-2.5 border-t px-4 py-3 text-xs sm:grid-cols-2">
+          <Detail label="Plan" value={t.planName} />
+          <Detail label="Billing cycle" value={t.cycleLabel} />
+          <Detail label="Charge type" value={t.chargeLabel} />
+          <Detail
+            label="Period covered"
+            value={period ?? (t.isVerification ? 'Not applicable' : null)}
+          />
+          <Detail
+            label="Amount"
+            value={formatPlanAmount(t.amount, t.currency)}
+          />
+          {t.amountRefunded > 0 ? (
+            <Detail
+              label="Refunded"
+              value={formatPlanAmount(t.amountRefunded, t.currency)}
+            />
+          ) : null}
+          <Detail label="Method" value={method} />
+          <Detail label="Date" value={formatDateTime(t.createdAt)} />
+          <Detail label="Payment ID" mono value={t.reference} />
+          <Detail
+            label="Invoice ID"
+            mono={Boolean(t.invoiceReference)}
+            value={t.invoiceReference ?? 'Not issued'}
+          />
+        </dl>
+      ) : null}
+    </li>
+  );
+}
+
 function ActivityRow({ activity: a }: { activity: CustomerPlanActivity }) {
-  const meta = ACTIVITY_META[a.eventType] ?? {
+  const meta = (a.eventType === 'subscription_revoked' && a.billingLinked
+    ? REFUND_REVOKE_META
+    : ACTIVITY_META[a.eventType]) ?? {
     label: a.eventType,
     icon: History,
     tone: 'text-muted-foreground bg-muted',

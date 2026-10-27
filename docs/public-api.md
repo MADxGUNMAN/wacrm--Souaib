@@ -160,17 +160,18 @@ Everything goes **inside `template.params`**. Top-level keys the endpoint
 does not recognise are ignored silently, so a misplaced value produces a
 "this template needs …" error rather than a warning about the key itself.
 
-| Key in `template.params` | Type                                     | For                                                                        |
-| ------------------------ | ---------------------------------------- | -------------------------------------------------------------------------- |
-| `body`                   | `string[]`                               | Body `{{1}}, {{2}}, …` in order                                            |
-| `namedBody`              | `{ [name]: string }`                     | Body variables of a NAMED-format template, keyed by name instead of number |
-| `headerText`             | `string`                                 | A TEXT header that contains `{{1}}`                                        |
-| `headerMediaUrl`         | `string`                                 | An IMAGE / VIDEO / DOCUMENT header — a public `https://` link              |
-| `headerMediaId`          | `string`                                 | Same header, but by Meta media id from a prior upload                      |
-| `headerLocation`         | `{ latitude, longitude, name, address }` | A LOCATION header (all four required)                                      |
-| `buttonParams`           | `{ [index]: string }`                    | URL buttons with `{{1}}`, and COPY_CODE buttons. Keyed by button index     |
-| `offerExpiresAtMs`       | `number`                                 | Limited-time offer templates. UNIX timestamp in **milliseconds**           |
-| `cards`                  | `CardValues[]`                           | Carousel templates, in card order                                          |
+| Key in `template.params` | Type                                     | For                                                                           |
+| ------------------------ | ---------------------------------------- | ----------------------------------------------------------------------------- |
+| `body`                   | `string[]`                               | Body `{{1}}, {{2}}, …` in order                                               |
+| `namedBody`              | `{ [name]: string }`                     | Body variables of a NAMED-format template, keyed by name instead of number    |
+| `headerText`             | `string`                                 | A TEXT header that contains `{{1}}`                                           |
+| `headerMediaUrl`         | `string`                                 | An IMAGE / VIDEO / DOCUMENT header — a public `https://` link                 |
+| `headerMediaId`          | `string`                                 | Same header, but by Meta media id from a prior upload                         |
+| `headerDocumentFilename` | `string`                                 | Name shown on a DOCUMENT header. Defaults to the filename in `headerMediaUrl` |
+| `headerLocation`         | `{ latitude, longitude, name, address }` | A LOCATION header (all four required)                                         |
+| `buttonParams`           | `{ [index]: string }`                    | URL buttons with `{{1}}`, and COPY_CODE buttons. Keyed by button index        |
+| `offerExpiresAtMs`       | `number`                                 | Limited-time offer templates. UNIX timestamp in **milliseconds**              |
+| `cards`                  | `CardValues[]`                           | Carousel templates, in card order                                             |
 
 `namedBody` and `body` are mutually exclusive — the two formats cannot
 coexist in one template, and a positional array sent for a named template
@@ -202,6 +203,33 @@ curl -X POST https://your-crm.example.com/api/v1/messages \
 Omit `body` if the template has no body variables. Set `language` to the
 template's **approved** language code: a template approved as `en` will
 not send as `en_US`, and Meta's rejection does not name the mismatch.
+
+##### The filename on a document header
+
+WhatsApp shows an attachment as **"Untitled"** unless the document
+parameter carries a `filename`. You usually do not have to do anything:
+the filename is derived from the last path segment of `headerMediaUrl`,
+so the request above delivers a file named `ORD-5074.pdf` on its own.
+
+Set `headerDocumentFilename` explicitly in two cases:
+
+- the URL does not end in a human-readable name —
+  `/files/a1b2c3d4.pdf?v=2` derives `a1b2c3d4.pdf`, which is not what you
+  want the customer to save;
+- you are sending by `headerMediaId`, which carries no URL to derive from.
+
+```jsonc
+"params": {
+  "headerMediaUrl": "https://example.com/files/a1b2c3d4.pdf",
+  "headerDocumentFilename": "Invoice ORD-5074.pdf", // what the customer sees
+  "body": ["Ravi", "ORD-5074"],
+}
+```
+
+Always include the extension — a file saved without one will not open by
+double-click. Any directory component is stripped, so
+`../invoices/x.pdf` is sent as `x.pdf`. The field is ignored for image
+and video headers, which Meta does not accept a filename on.
 
 If a media header is the _same file_ on every send, you can set a default
 on the template instead and omit `headerMediaUrl` entirely. For anything

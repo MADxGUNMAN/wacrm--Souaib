@@ -5,7 +5,14 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import type { Notification } from '@/types';
-import { Bell, CheckCheck, Gauge, Loader2, UserPlus } from 'lucide-react';
+import {
+  Bell,
+  CheckCheck,
+  Gauge,
+  Loader2,
+  Sparkles,
+  UserPlus,
+} from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -16,6 +23,7 @@ import { toast } from 'sonner';
 const TYPE_ICON: Record<Notification['type'], typeof Bell> = {
   conversation_assigned: UserPlus,
   usage_threshold: Gauge,
+  ai_connection: Sparkles,
 };
 
 export default function NotificationsPage() {

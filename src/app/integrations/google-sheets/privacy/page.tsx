@@ -4,6 +4,7 @@ import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getIntegrationPage, getSiteSettings } from '@/lib/cms/queries';
+import { resolveSheetsContent } from '@/lib/cms/google-sheets-content';
 import { TableOfContents } from '@/components/legal/TableOfContents';
 import { ShieldCheck, ArrowLeft } from 'lucide-react';
 
@@ -39,11 +40,9 @@ export async function generateMetadata(): Promise<Metadata> {
   const settings = await getSiteSettings();
   const isNoIndex = settings?.no_index ?? false;
 
-  const title =
-    page?.seo_meta_title || `Privacy Policy — Replai for Google Sheets Add-on`;
-  const description =
-    page?.seo_meta_description ||
-    'Privacy Policy and Google API Services User Data Disclosure for the Replai Google Sheets Add-on.';
+  const doc = resolveSheetsContent(page?.content).privacy_doc;
+  const title = doc.meta_title;
+  const description = doc.meta_description;
 
   return {
     title: `${title} | ${settings?.site_name || 'Replai'}`,
@@ -61,6 +60,9 @@ export default async function GoogleSheetsPrivacyPage() {
   if (!page) {
     notFound();
   }
+
+  const c = resolveSheetsContent(page.content);
+  const doc = c.privacy_doc;
 
   const formattedDate = new Date(page.updated_at).toLocaleDateString('en-US', {
     year: 'numeric',
@@ -88,10 +90,10 @@ export default async function GoogleSheetsPrivacyPage() {
               href="/integrations/google-sheets"
               className="transition-colors hover:text-emerald-600"
             >
-              Google Sheets
+              {c.breadcrumb_label}
             </Link>
             <span>/</span>
-            <span className="font-medium text-slate-800">Privacy Policy</span>
+            <span className="font-medium text-slate-800">{doc.breadcrumb}</span>
           </div>
 
           <Link
@@ -99,7 +101,7 @@ export default async function GoogleSheetsPrivacyPage() {
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 transition-colors hover:text-emerald-700 sm:text-sm"
           >
             <ArrowLeft className="h-4 w-4" />
-            <span>Back to Google Sheets Overview</span>
+            <span>{c.legal_back_link_text}</span>
           </Link>
         </div>
 
@@ -110,22 +112,19 @@ export default async function GoogleSheetsPrivacyPage() {
               <ShieldCheck className="h-6 w-6" />
             </div>
             <span className="text-xs font-bold tracking-wider text-emerald-700 uppercase">
-              Google Workspace Add-on Compliance
+              {doc.eyebrow}
             </span>
           </div>
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">
-            Privacy Policy for Google Sheets Add-on
+            {doc.heading}
           </h1>
-          <p className="mt-3 text-sm text-slate-500">
-            Official data privacy disclosures, Google API user data compliance,
-            and data retention policies for Replai for Google Sheets.
-          </p>
+          <p className="mt-3 text-sm text-slate-500">{doc.intro}</p>
           <div className="mt-4 flex items-center gap-4 text-xs font-medium text-slate-400">
-            <span>Last revised: {formattedDate}</span>
-            <span>•</span>
-            <span className="text-emerald-600">
-              Applies to: Replai Workspace Add-on
+            <span>
+              {c.legal_revised_label} {formattedDate}
             </span>
+            <span>•</span>
+            <span className="text-emerald-600">{c.legal_applies_to}</span>
           </div>
         </div>
 

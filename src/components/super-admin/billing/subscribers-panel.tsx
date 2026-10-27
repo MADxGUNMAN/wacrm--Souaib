@@ -1,7 +1,7 @@
 'use client';
 
 // ============================================================
-// Subscribers tab — manual subscription control.
+// Subscriptions › Workspaces: manual subscription control.
 //
 // Displays `liveStatus`, NOT the stored `subscription_status`. Nothing
 // flips that column when a date passes (there is no cron), so a row can
@@ -14,18 +14,18 @@
 // date, and revoking is not the same as letting a window lapse.
 // ============================================================
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Ban,
   CalendarClock,
   Check,
   Clock,
+  Globe,
   History,
   Loader2,
   Plus,
   RotateCcw,
-  Search,
   ShieldOff,
   X,
 } from 'lucide-react';
@@ -50,29 +50,46 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
-import type { SubscriberCounts, SubscriberRow } from '@/types/super-admin';
+import { formatMoneyMajor } from '@/lib/billing/money-format';
+import type {
+  BillingEventView,
+  SubscriberAccessVia,
+  SubscriberAutopay,
+  SubscriberCounts,
+  SubscriberPricingRegion,
+  SubscriberRow,
+} from '@/types/super-admin';
+import { AutopayManualActionWarning } from './autopay-warning';
+import {
+  accountStatusLabel,
+  amountCaption,
+  billingEventLabel,
+  statusMeta,
+} from './billing-labels';
+import { ChannelBadge } from './channel-badge';
+import { describeBillingEvent } from './event-description';
+import {
+  FilterSelect,
+  FilterToolbar,
+  formatIst,
+  ListFrame,
+  ListPagination,
+  methodText,
+  ModeBadge,
+  errorMessage,
+  SearchBox,
+  StatusPill,
+  TableStateRow,
+  Th,
+} from './razorpay-shared';
 
-const STATUS_STYLE: Record<SubscriberRow['liveStatus'], string> = {
-  trialing: 'bg-blue-50 text-blue-700',
-  active: 'bg-green-50 text-green-700',
-  expired: 'bg-red-50 text-red-700',
-  none: 'bg-slate-100 text-slate-600',
-};
-
+/** IST, like every other billing screen. */
 function formatDate(value: string | null): string {
-  if (!value) return '—';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '—';
-  return new Intl.DateTimeFormat(undefined, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  }).format(d);
+  return formatIst(value);
 }
 
 type ActionKind =
@@ -126,14 +143,25 @@ const STATE_FILTER_LABELS: Record<string, string> = {
   none: 'Ungated',
 };
 
+const STATE_FILTER_OPTIONS = Object.entries(STATE_FILTER_LABELS).map(
+  ([value, label]) => ({ value, label })
+);
+
 const STATUS_LABELS: Record<SubscriberRow['liveStatus'], string> = {
-  none: 'none — never gated (internal / demo)',
-  trialing: 'trialing',
-  active: 'active',
-  expired: 'expired',
+  none: 'Ungated, never gated (internal or demo)',
+  trialing: 'Trialing',
+  active: 'Active',
+  expired: 'Expired',
 };
 
-export function SubscribersPanel() {
+const COLS = 8;
+
+export function SubscribersPanel({
+  onOpenAutopay,
+}: {
+  /** Opens a Razorpay subscription in Subscriptions › AutoPay mandates. */
+  onOpenAutopay?: (billingSubscriptionId: string) => void;
+} = {}) {
   const [rows, setRows] = useState<SubscriberRow[]>([]);
   const [counts, setCounts] = useState<SubscriberCounts | null>(null);
   const [loading, setLoading] = useState(true);
@@ -143,12 +171,24 @@ export function SubscribersPanel() {
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
 
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
   const [target, setTarget] = useState<SubscriberRow | null>(null);
 
   useEffect(() => {
-    const t = setTimeout(() => setDebounced(search), 350);
+    const t = setTimeout(() => {
+      setDebounced(search);
+      setPage(1);
+    }, 350);
     return () => clearTimeout(t);
   }, [search]);
+
+  // Reset page when filter changes
+  useEffect(() => {
+    setPage(1);
+  }, [stateFilter]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -159,15 +199,20 @@ export function SubscribersPanel() {
       const res = await fetch(
         `/api/super-admin/billing/subscriptions?${params.toString()}`
       );
-      if (!res.ok) throw new Error('Failed to load subscribers');
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(errorMessage(res.status, data));
+        return;
+      }
 
       setRows(data.subscribers ?? []);
       setCounts(data.counts ?? null);
       setError(null);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : 'Failed to load subscribers'
+        err instanceof Error
+          ? `Could not reach the server: ${err.message}`
+          : 'Could not reach the server.'
       );
     } finally {
       setLoading(false);
@@ -178,227 +223,216 @@ export function SubscribersPanel() {
     void load();
   }, [load]);
 
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const paginatedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, page, pageSize]);
+
   return (
-    <div className="space-y-4">
-      {/* Counters — derived from liveStatus so they agree with the rows. */}
-      {counts ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-          <CountTile label="Total" value={counts.total} />
-          <CountTile label="Trialing" value={counts.trialing} tone="blue" />
-          <CountTile label="Active" value={counts.active} tone="green" />
-          <CountTile label="Expired" value={counts.expired} tone="red" />
-          <CountTile label="Blocked" value={counts.blocked} tone="amber" />
-        </div>
-      ) : null}
-
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative w-full sm:max-w-sm">
-            <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <Input
-              placeholder="Search workspace, owner name or email…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="border-slate-200 bg-white pl-9 text-slate-900 placeholder:text-slate-400"
-            />
-          </div>
-          <Select
-            value={stateFilter}
-            onValueChange={(v) => {
-              if (v) setStateFilter(v);
+    <div className="space-y-3">
+      <ListFrame
+        className="h-[calc(100vh-13rem)] min-h-[420px]"
+        toolbar={
+          <FilterToolbar
+            active={search !== '' || stateFilter !== 'all'}
+            onReset={() => {
+              setSearch('');
+              setStateFilter('all');
             }}
-          >
-            <SelectTrigger className="w-[170px] border-slate-200 bg-white text-slate-900">
-              <SelectValue placeholder="State" />
-            </SelectTrigger>
-            <SelectContent className="border-slate-200 bg-white text-slate-900">
-              {Object.entries(STATE_FILTER_LABELS).map(([value, label]) => (
-                <SelectItem key={value} value={value}>
-                  {label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-slate-50/80">
-              <TableRow className="border-slate-200 hover:bg-transparent">
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  Workspace
-                </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  Owner
-                </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  Status
-                </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  Term
-                </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-600 uppercase">
-                  Ends
-                </TableHead>
-                <TableHead className="text-right text-xs font-semibold text-slate-600 uppercase">
-                  Manage
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading && rows.length === 0 ? (
-                <TableRow className="border-slate-200">
-                  <TableCell
-                    colSpan={6}
-                    className="h-28 text-center text-slate-400"
+            search={
+              <SearchBox
+                label="Search workspaces"
+                placeholder="Workspace, owner name or email"
+                value={search}
+                onChange={setSearch}
+              />
+            }
+            middle={counts ? <WorkspaceCountsSummary counts={counts} /> : null}
+            filters={
+              <FilterSelect
+                label="State"
+                value={stateFilter}
+                onChange={setStateFilter}
+                options={STATE_FILTER_OPTIONS}
+                width="w-[150px]"
+              />
+            }
+          />
+        }
+        footer={
+          <ListPagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            totalPages={totalPages}
+            loading={loading}
+            noun="workspaces"
+            onPage={setPage}
+            onPageSize={(n) => {
+              setPageSize(n);
+              setPage(1);
+            }}
+          />
+        }
+      >
+        <Table containerClassName="overflow-visible">
+          <TableHeader className="sticky top-0 z-20 bg-slate-50 shadow-xs">
+            <TableRow className="border-b border-slate-200 hover:bg-transparent">
+              <Th>Workspace</Th>
+              <Th>Owner</Th>
+              <Th>Status</Th>
+              <Th>Access via</Th>
+              <Th>Term</Th>
+              <Th>AutoPay</Th>
+              <Th>Ends</Th>
+              <Th className="text-right">Manage</Th>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableStateRow
+              colSpan={COLS}
+              loading={loading}
+              error={error}
+              empty={rows.length === 0}
+              emptyText={
+                search !== '' || stateFilter !== 'all'
+                  ? 'No workspaces match these filters.'
+                  : 'No workspaces yet.'
+              }
+              onReset={
+                search !== '' || stateFilter !== 'all'
+                  ? () => {
+                      setSearch('');
+                      setStateFilter('all');
+                    }
+                  : undefined
+              }
+            />
+            {error
+              ? null
+              : paginatedRows.map((row) => (
+                  <TableRow
+                    key={row.accountId}
+                    className="border-b border-slate-100 transition-colors hover:bg-slate-50/80"
                   >
-                    <span className="inline-flex items-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading subscribers…
-                    </span>
-                  </TableCell>
-                </TableRow>
-              ) : error ? (
-                <TableRow className="border-slate-200">
-                  <TableCell
-                    colSpan={6}
-                    className="h-28 text-center text-red-500"
-                  >
-                    {error}
-                  </TableCell>
-                </TableRow>
-              ) : rows.length === 0 ? (
-                <TableRow className="border-slate-200">
-                  <TableCell
-                    colSpan={6}
-                    className="h-28 text-center text-slate-400"
-                  >
-                    No workspaces match this filter.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                rows.map((row) => (
-                  <TableRow key={row.accountId} className="border-slate-200">
-                    <TableCell className="py-3.5">
-                      <div className="flex items-center gap-2">
-                        <p className="max-w-[180px] truncate text-sm font-semibold text-slate-800">
+                    <TableCell className="px-3 py-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <p className="max-w-[180px] truncate text-xs font-semibold text-slate-800">
                           {row.accountName}
                         </p>
                         {row.isBanned ? (
                           <span
-                            className="inline-flex items-center gap-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700"
-                            title="Banned by a super admin — outranks billing"
+                            className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] leading-none font-semibold text-red-700"
+                            title="Banned by a super admin. This outranks billing."
                           >
-                            <Ban className="h-2.5 w-2.5" />
+                            <Ban className="h-2.5 w-2.5" aria-hidden />
                             Banned
+                          </span>
+                        ) : null}
+                        {row.isBlocked ? (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] leading-none font-semibold text-amber-700"
+                            title="Access blocked by a super admin"
+                          >
+                            <ShieldOff className="h-2.5 w-2.5" aria-hidden />
+                            Blocked
                           </span>
                         ) : null}
                       </div>
                     </TableCell>
-                    <TableCell>
-                      {/* The phone sits where the owner NAME used to.
-                          Workspaces are named after their owner at signup
-                          (bootstrap_user_account defaults the account name
-                          to the full name), so this column repeated the
-                          Workspace column on almost every row and told the
-                          operator nothing new. The number is the one piece
-                          of contact detail that was not reachable from any
-                          screen.
-
-                          Tabular figures so the numbers align down the
-                          column and a wrong digit is easy to spot. */}
+                    <TableCell className="px-3 py-1.5">
                       <div className="max-w-[190px]">
                         <PhoneDisplay
                           phone={row.ownerPhone}
                           copyable
-                          className="text-sm"
-                          emptyPlaceholder="— no phone on file"
+                          className="text-xs font-medium"
+                          emptyPlaceholder="No phone on file"
                         />
                       </div>
-                      {/* Emails truncate at the DOMAIN, which is precisely
-                          the part that distinguishes two similar addresses.
-                          A mistyped "@gamil.com" next to the real
-                          "@gmail.com" both rendered as
-                          "gunmanaimcompetitive@g…" and looked like one
-                          account duplicated. Wider, plus the full address
-                          on hover, so an operator can always tell them
-                          apart without opening the row. */}
                       <p
-                        className="max-w-[240px] truncate text-xs text-slate-400"
+                        className="max-w-[240px] truncate text-[11px] text-slate-400"
                         title={row.ownerEmail ?? undefined}
                       >
                         {row.ownerEmail ?? ''}
                       </p>
                     </TableCell>
-                    <TableCell>
-                      <span
-                        className={cn(
-                          'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium capitalize',
-                          STATUS_STYLE[row.liveStatus]
-                        )}
-                      >
-                        {row.liveStatus}
-                      </span>
+                    <TableCell className="px-3 py-1.5">
+                      <StatusPill domain="workspace" status={row.liveStatus} />
                       {row.inGracePeriod ? (
-                        <p className="mt-1 text-[10px] font-medium text-amber-600">
-                          in grace period
+                        <p className="mt-0.5 text-[10px] font-medium text-amber-600">
+                          In grace period
                         </p>
                       ) : null}
                       {/* Surface drift so the operator can see the stored
                           column is stale rather than being confused by it. */}
                       {row.storedStatus !== row.liveStatus ? (
-                        <p className="mt-0.5 text-[10px] text-slate-400">
-                          stored: {row.storedStatus}
+                        <p
+                          className="mt-0.5 text-[10px] text-slate-400"
+                          title="The stored status has not caught up with the dates. The live status is shown."
+                        >
+                          Stored as {accountStatusLabel(row.storedStatus)}
                         </p>
                       ) : null}
                     </TableCell>
-                    <TableCell>
-                      {/* Shows the billing term (Monthly / Yearly), not the
-                          plan name. There is a single product now, so the
-                          name added nothing; the term is what distinguishes
-                          one subscriber from another. */}
-                      <p className="text-sm text-slate-700">
+                    <TableCell className="px-3 py-1.5">
+                      <AccessViaCell accessVia={row.accessVia} />
+                    </TableCell>
+                    <TableCell className="px-3 py-1.5">
+                      <p className="text-xs font-medium text-slate-700">
                         {row.cycleLabel ?? '—'}
                       </p>
+                      <PricingBadge pricing={row.pricingRegion} />
                     </TableCell>
-                    <TableCell>
-                      <p className="text-sm text-slate-700">
+                    <TableCell className="px-3 py-1.5">
+                      <AutopayCell autopay={row.autopay} />
+                    </TableCell>
+                    <TableCell className="px-3 py-1.5">
+                      <p className="text-xs font-medium whitespace-nowrap text-slate-700">
                         {formatDate(row.endsAt)}
                       </p>
                       {row.daysLeft !== null ? (
-                        <p className="text-xs text-slate-400">
+                        <p className="text-[10px] text-slate-400">
                           {row.daysLeft} day{row.daysLeft === 1 ? '' : 's'} left
                         </p>
                       ) : null}
                       {row.pendingWindow ? (
-                        <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                        <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
                           {row.pendingWindow.type === 'active'
-                            ? `+ Paid starts ${formatDate(row.pendingWindow.startsAt)}`
-                            : `+ ${row.pendingWindow.durationDays}d trial queued`}
+                            ? `Paid plan queued from ${formatDate(row.pendingWindow.startsAt)}`
+                            : `${row.pendingWindow.durationDays}-day trial queued`}
                         </span>
                       ) : null}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="px-3 py-1.5 text-right">
                       <button
                         type="button"
                         onClick={() => setTarget(row)}
-                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                        aria-label={`Manage ${row.accountName}`}
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
                       >
                         Manage
                       </button>
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      </div>
+                ))}
+          </TableBody>
+        </Table>
+      </ListFrame>
 
       {target ? (
         <ManageSubscriptionDialog
           row={target}
           onClose={() => setTarget(null)}
+          onOpenAutopay={
+            onOpenAutopay
+              ? (id) => {
+                  setTarget(null);
+                  onOpenAutopay(id);
+                }
+              : undefined
+          }
           onDone={async () => {
             setTarget(null);
             await load();
@@ -409,29 +443,39 @@ export function SubscribersPanel() {
   );
 }
 
-function CountTile({
-  label,
-  value,
-  tone = 'slate',
-}: {
-  label: string;
-  value: number;
-  tone?: 'slate' | 'blue' | 'green' | 'red' | 'amber';
-}) {
-  const toneClass = {
-    slate: 'text-slate-900',
-    blue: 'text-blue-600',
-    green: 'text-green-600',
-    red: 'text-red-600',
-    amber: 'text-amber-600',
-  }[tone];
-
+function WorkspaceCountsSummary({ counts }: { counts: SubscriberCounts }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-medium tracking-wider text-slate-400 uppercase">
-        {label}
-      </p>
-      <p className={cn('mt-1 text-2xl font-bold', toneClass)}>{value}</p>
+    <div className="flex items-center divide-x divide-slate-200 rounded-lg border border-slate-200 bg-white shadow-2xs select-none">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs">
+        <span className="font-medium text-slate-500">Total</span>
+        <span className="font-semibold text-slate-900 tabular-nums">
+          {counts.total}
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs">
+        <span className="font-medium text-slate-500">Trialing</span>
+        <span className="font-semibold text-blue-600 tabular-nums">
+          {counts.trialing}
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs">
+        <span className="font-medium text-slate-500">Active</span>
+        <span className="font-semibold text-emerald-600 tabular-nums">
+          {counts.active}
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs">
+        <span className="font-medium text-slate-500">Expired</span>
+        <span className="font-semibold text-red-600 tabular-nums">
+          {counts.expired}
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs">
+        <span className="font-medium text-slate-500">Blocked</span>
+        <span className="font-semibold text-amber-600 tabular-nums">
+          {counts.blocked}
+        </span>
+      </div>
     </div>
   );
 }
@@ -449,17 +493,8 @@ function CountTile({
  */
 function RecentHistory({ accountId }: { accountId: string }) {
   const [open, setOpen] = useState(false);
-  const [events, setEvents] = useState<
-    | {
-        id: string;
-        eventType: string;
-        source: string;
-        actorName: string | null;
-        note: string | null;
-        createdAt: string;
-      }[]
-    | null
-  >(null);
+  const [events, setEvents] = useState<BillingEventView[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -469,12 +504,18 @@ function RecentHistory({ accountId }: { accountId: string }) {
     (async () => {
       try {
         const res = await fetch(
-          `/api/super-admin/billing/events?accountId=${accountId}&pageSize=5`
+          `/api/super-admin/billing/events?accountId=${encodeURIComponent(accountId)}&pageSize=5`,
+          { cache: 'no-store' }
         );
         const data = await res.json().catch(() => ({}));
-        if (!cancelled) setEvents(res.ok ? (data.events ?? []) : []);
+        if (cancelled) return;
+        if (!res.ok) setLoadError(errorMessage(res.status, data));
+        setEvents(res.ok ? (data.events ?? []) : []);
       } catch {
-        if (!cancelled) setEvents([]);
+        if (!cancelled) {
+          setLoadError('Could not reach the server.');
+          setEvents([]);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -483,18 +524,6 @@ function RecentHistory({ accountId }: { accountId: string }) {
       cancelled = true;
     };
   }, [open, events, accountId]);
-
-  const LABELS: Record<string, string> = {
-    trial_started: 'Trial started',
-    trial_extended: 'Trial extended',
-    payment_submitted: 'Payment submitted',
-    payment_approved: 'Payment approved',
-    payment_rejected: 'Payment rejected',
-    subscription_activated: 'Subscription activated',
-    subscription_extended: 'Subscription extended',
-    subscription_revoked: 'Access blocked',
-    subscription_expired: 'Expired',
-  };
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/60">
@@ -517,37 +546,62 @@ function RecentHistory({ accountId }: { accountId: string }) {
               <Loader2 className="h-3 w-3 animate-spin" />
               Loading…
             </p>
+          ) : loadError ? (
+            <p role="alert" className="py-1 text-xs text-red-600">
+              {loadError}
+            </p>
           ) : !events || events.length === 0 ? (
             <p className="py-1 text-xs text-slate-400">
               Nothing recorded for this workspace yet.
             </p>
           ) : (
-            <ul className="space-y-1.5">
-              {events.map((e) => (
-                <li key={e.id} className="flex items-start gap-2 text-xs">
-                  <span
-                    className={cn(
-                      'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
-                      e.source === 'payment' ? 'bg-green-500' : 'bg-blue-500'
-                    )}
-                  />
-                  <span className="min-w-0">
-                    <span className="font-medium text-slate-700">
-                      {LABELS[e.eventType] ?? e.eventType}
-                    </span>
-                    <span className="text-slate-400">
-                      {' · '}
-                      {new Date(e.createdAt).toLocaleDateString()}
-                      {e.actorName ? ` · ${e.actorName}` : ''}
-                    </span>
-                    {e.note ? (
-                      <span className="block text-slate-500 italic">
-                        “{e.note}”
-                      </span>
+            <ul className="divide-y divide-slate-200/70">
+              {events.map((e) => {
+                const d = describeBillingEvent(e);
+                const isMoney =
+                  e.amountKind === 'paid' || e.amountKind === 'refund';
+                return (
+                  <li
+                    key={e.id}
+                    className="flex items-start justify-between gap-3 py-1.5 text-xs"
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <ChannelBadge channel={e.channel} size="sm" />
+                        <span className="font-medium text-slate-800">
+                          {billingEventLabel(e.eventType)}
+                        </span>
+                        {e.mode === 'test' ? <ModeBadge mode="test" /> : null}
+                      </div>
+                      <p className="text-slate-600">{d.text}</p>
+                      {d.note ? (
+                        <p className="text-[11px] text-slate-500">
+                          <span className="font-medium">Note:</span> {d.note}
+                        </p>
+                      ) : null}
+                      <p className="text-[11px] text-slate-400">
+                        {formatIst(e.createdAt, { time: true })}
+                        {' · '}
+                        {e.initiatedBy.label}
+                      </p>
+                    </div>
+                    {isMoney && e.amount != null ? (
+                      <div className="shrink-0 text-right">
+                        <p className="font-semibold text-slate-900 tabular-nums">
+                          {formatMoneyMajor(e.amount, e.currency)}
+                        </p>
+                        <p className="text-[10px] text-emerald-700">
+                          {amountCaption(
+                            e.amountKind,
+                            e.channel,
+                            e.moneyInvolved
+                          )}
+                        </p>
+                      </div>
                     ) : null}
-                  </span>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -558,14 +612,146 @@ function RecentHistory({ accountId }: { accountId: string }) {
 
 // ------------------------------------------------------------
 
+/**
+ * The workspace's Razorpay AutoPay in one cell: status in words, the
+ * method, and the next charge. "Unknown" when the lookup failed, so a
+ * failed query never reads as "no AutoPay".
+ */
+function AutopayCell({
+  autopay,
+}: {
+  autopay: SubscriberAutopay | null | undefined;
+}) {
+  if (autopay === undefined) {
+    return (
+      <span
+        className="text-[11px] text-slate-400"
+        title="The AutoPay lookup failed. Reload to try again."
+      >
+        Unknown
+      </span>
+    );
+  }
+  if (autopay === null) {
+    return <span className="text-[11px] text-slate-400">None</span>;
+  }
+  return (
+    <div className="space-y-0.5">
+      <div className="flex items-center gap-1">
+        <StatusPill domain="subscription" status={autopay.status} />
+        {autopay.mode === 'test' ? <ModeBadge mode="test" /> : null}
+      </div>
+      <p className="text-[10px] text-slate-500">
+        {methodText(autopay.paymentMethod, autopay.methodSummary)}
+        {autopay.charging
+          ? autopay.chargeAt
+            ? ` · next charge ${formatIst(autopay.chargeAt)}`
+            : ''
+          : ' · not charging'}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Which pricing the workspace sees (localized pricing): "Global" or the
+ * country code and currency. The reason is in the tooltip. Nothing when
+ * the lookup failed, rather than a guessed "Global".
+ */
+function PricingBadge({
+  pricing,
+}: {
+  pricing: SubscriberPricingRegion | undefined;
+}) {
+  if (!pricing) return null;
+  const isGlobal = pricing.region === 'global';
+  const label = isGlobal
+    ? `Global · ${pricing.currency}`
+    : `${pricing.region} · ${pricing.currency}`;
+  const detected =
+    pricing.countryCode && pricing.countryCode !== pricing.region
+      ? ` Phone country: ${pricing.countryCode}.`
+      : '';
+  // After a Global currency change a pinned mandate still charges the
+  // currency it was bought in; say so rather than imply the new one.
+  const mandateCurrency =
+    pricing.mandateCurrency && pricing.mandateCurrency !== pricing.currency
+      ? pricing.mandateCurrency
+      : null;
+  return (
+    <span
+      className={cn(
+        'mt-0.5 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] leading-none font-medium',
+        isGlobal
+          ? 'border-slate-200 bg-slate-50 text-slate-500'
+          : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      )}
+      title={`Pricing: ${pricing.reasonText}${detected}${
+        mandateCurrency
+          ? ` AutoPay keeps charging ${mandateCurrency} at the price it was bought with.`
+          : ''
+      }`}
+    >
+      <Globe className="h-2.5 w-2.5" aria-hidden />
+      <span className="sr-only">Pricing: </span>
+      {label}
+      {mandateCurrency ? ` · AutoPay ${mandateCurrency}` : null}
+    </span>
+  );
+}
+
+/**
+ * How the workspace has (or last had) access: Razorpay AutoPay, Manual
+ * UPI payment, Admin grant or Trial, derived on the server from the
+ * newest grant event. "Not recorded" when nothing explains it.
+ */
+function AccessViaCell({
+  accessVia,
+}: {
+  accessVia: SubscriberAccessVia | undefined;
+}) {
+  if (!accessVia) {
+    return (
+      <span
+        className="text-[11px] text-slate-400"
+        title="The access lookup failed or nothing is recorded. Reload to try again."
+      >
+        Not recorded
+      </span>
+    );
+  }
+  return (
+    <div className="space-y-0.5">
+      <div className="flex flex-wrap items-center gap-1">
+        {!accessVia.current ? (
+          <span className="text-[10px] text-slate-500">Last access:</span>
+        ) : null}
+        <StatusPill domain="access" status={accessVia.kind} />
+      </div>
+      {accessVia.since || accessVia.detail ? (
+        <p className="text-[10px] text-slate-400">
+          {[
+            accessVia.since ? `Granted ${formatIst(accessVia.since)}` : null,
+            accessVia.detail,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function ManageSubscriptionDialog({
   row,
   onClose,
   onDone,
+  onOpenAutopay,
 }: {
   row: SubscriberRow;
   onClose: () => void;
   onDone: () => void | Promise<void>;
+  onOpenAutopay?: (billingSubscriptionId: string) => void;
 }) {
   const [intent, setIntent] = useState<Intent>('give');
   /** Within "Give access": paid time, or trial days. */
@@ -823,7 +1009,8 @@ function ManageSubscriptionDialog({
               {row.accountName}
             </DialogTitle>
             <DialogDescription className="text-sm text-slate-500">
-              {row.liveStatus} · ends {formatDate(row.endsAt)}
+              {statusMeta('workspace', row.liveStatus).label} · ends{' '}
+              {formatDate(row.endsAt)}
               {row.pendingWindow ? (
                 <span className="ml-1 text-xs text-emerald-600">
                   (+ {row.pendingWindow.type === 'active' ? 'paid' : 'trial'}{' '}
@@ -831,6 +1018,10 @@ function ManageSubscriptionDialog({
                 </span>
               ) : null}
             </DialogDescription>
+            <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500">
+              <span>Access via</span>
+              <AccessViaCell accessVia={row.accessVia} />
+            </div>
           </div>
           {/* -m-1.5 p-1.5 gives a 32px hit target without moving the icon:
               the previous bare 20px icon was a small target for the only
@@ -846,6 +1037,13 @@ function ManageSubscriptionDialog({
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+          {/* F6: manual changes do not move Razorpay's charge date. */}
+          <AutopayManualActionWarning
+            autopay={row.autopay}
+            intent={intent}
+            onOpenAutopay={onOpenAutopay}
+          />
+
           {/* Three visible choices instead of six hidden ones. */}
           <div className="grid grid-cols-3 gap-1.5">
             {INTENTS.map((opt) => (
@@ -1008,14 +1206,14 @@ function ManageSubscriptionDialog({
                   </span>
                   <span className="mt-0.5 block text-xs text-slate-600">
                     {!anyOpen
-                      ? 'Nothing to expire — neither the trial nor a paid plan is currently open on this workspace.'
+                      ? 'Nothing to expire. Neither the trial nor a paid plan is currently open on this workspace.'
                       : bothOpen
                         ? 'This workspace has BOTH a trial and a paid plan open at once. Choose which to end below.'
                         : `Moves the ${soleOpenWindow === 'trial' ? 'TRIAL' : 'PAID PLAN'} end date to right now, so the workspace lapses exactly as it would on the real day.`}{' '}
                     {anyOpen ? (
                       <>
-                        <strong>Use this for testing</strong> — the customer
-                        sees the normal upgrade prompt.
+                        <strong>Use this for testing</strong>. The customer sees
+                        the normal upgrade prompt.
                       </>
                     ) : null}
                   </span>
@@ -1119,7 +1317,7 @@ function ManageSubscriptionDialog({
                     ? 'Ends the trial now. The paid plan takes over immediately since it is already queued.'
                     : expireTarget === 'paid'
                       ? 'Ends the paid plan now. The trial keeps counting down untouched.'
-                      : 'Ends both — the workspace loses access entirely, right now.'}
+                      : 'Ends both. The workspace loses access entirely, right now.'}
                 </p>
               ) : null}
 
@@ -1223,7 +1421,7 @@ function ManageSubscriptionDialog({
                   />
                   <p className="mt-1.5 text-xs text-slate-500">
                     Must be in the future. Does not change the account&apos;s
-                    status — if a paid plan is currently active, the trial stays
+                    status. If a paid plan is currently active, the trial stays
                     queued behind it.
                   </p>
                 </div>
@@ -1243,7 +1441,7 @@ function ManageSubscriptionDialog({
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
                 <p className="text-xs text-slate-600">
                   Writes the status column directly without touching any date.
-                  Normally you want one of the three options above — this exists
+                  Normally you want one of the three options above. This exists
                   for marking a workspace as never-gated (internal or demo).
                 </p>
               </div>

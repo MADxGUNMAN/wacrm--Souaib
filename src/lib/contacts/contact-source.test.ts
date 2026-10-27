@@ -48,7 +48,9 @@ describe('config integrity', () => {
     const sql = readFileSync(
       join(
         process.cwd(),
-        'supabase/migrations/20260916120000_contact_source.sql'
+        // The LATEST migration that redefines the constraint. It added 'ai'
+        // after 20260916120000_contact_source.sql.
+        'supabase/migrations/20261001000100_ai_connector_policy_audit.sql'
       ),
       'utf8'
     );

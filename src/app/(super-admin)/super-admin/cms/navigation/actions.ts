@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from "@/lib/auth/admin-client";
 import { revalidatePath } from "next/cache";
+import { requireSuperAdminAction } from "@/lib/super-admin/action-guard";
 import type { NavLink, FooterColumn } from "@/types/super-admin";
 
 export async function updateNavigationLinks(data: {
@@ -9,6 +10,9 @@ export async function updateNavigationLinks(data: {
   footer_links: FooterColumn[];
   site_description: string | null;
 }) {
+  const guard = await requireSuperAdminAction();
+  if (!guard.ok) return { error: guard.error };
+
   const admin = supabaseAdmin();
 
   // The site_settings table is meant to be a singleton

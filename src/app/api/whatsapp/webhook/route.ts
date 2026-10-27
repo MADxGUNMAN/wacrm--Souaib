@@ -4,7 +4,11 @@ import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import { normalizeContentType } from '@/lib/whatsapp/content-types';
-import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
+import {
+  findContactByNormalizedPhone,
+  findExistingContact,
+  isUniqueViolation,
+} from '@/lib/contacts/dedupe';
 import { resolveContactNameUpdate } from '@/lib/contacts/display-name';
 import {
   betterContactName,
@@ -653,7 +657,8 @@ async function processEcho(
     accountId,
     configOwnerUserId,
     customerPhone,
-    ''
+    '',
+    { source: 'echo', waMessageId: echo.id }
   );
   if (!contactOutcome) return;
   const contactRecord = contactOutcome.contact;
@@ -1288,7 +1293,8 @@ async function ingestHistoryThread(
     accountId,
     configOwnerUserId,
     threadPhone,
-    stagedName
+    stagedName,
+    { source: 'history' }
   );
   if (!contactOutcome) return { stored: 0, skipped: 0 };
 
@@ -1875,6 +1881,102 @@ function isValidStatusTransition(current: string, incoming: string): boolean {
   return ii > ci;
 }
 
+/** Every broadcast_recipients status (CHECK constraint, migration
+ *  20260831000000). */
+const RECIPIENT_STATUSES = [
+  'pending',
+  'sent',
+  'delivered',
+  'read',
+  'replied',
+  'failed',
+  'skipped',
+] as const;
+
+/**
+ * The statuses a recipient may currently hold for `incoming` to be
+ * applied — `isValidStatusTransition` turned into a WHERE predicate so
+ * the forward-only rule is enforced by the UPDATE itself.
+ */
+function allowedPredecessorStatuses(incoming: string): string[] {
+  return RECIPIENT_STATUSES.filter((s) => isValidStatusTransition(s, incoming));
+}
+
+/**
+ * Find the broadcast_recipients row for a status whose wamid no recipient
+ * carries yet, via the stored broadcast message: (broadcast_id from the
+ * message, contact_id from its conversation). Account-scoped through the
+ * parent broadcast so a cross-tenant id can never match.
+ *
+ * Returns a row only when exactly one candidate fits — one with no wamid
+ * yet or this same wamid. Anything else is logged and skipped: guessing
+ * which recipient a status belongs to would write a fact we do not have.
+ * The matched row gets the wamid backfilled so later statuses take the
+ * fast path.
+ */
+async function resolveBroadcastRecipientFallback(args: {
+  wamid: string;
+  broadcastId: string;
+  contactId: string;
+  accountId: string;
+}): Promise<{ id: string; status: string } | null> {
+  const { data: rows, error } = await supabaseAdmin()
+    .from('broadcast_recipients')
+    .select('id, status, whatsapp_message_id, broadcasts!inner(account_id)')
+    .eq('broadcast_id', args.broadcastId)
+    .eq('contact_id', args.contactId)
+    .eq('broadcasts.account_id', args.accountId)
+    .neq('status', 'skipped')
+    .limit(2);
+
+  if (error) {
+    console.error('[webhook] broadcast recipient fallback lookup failed', {
+      ...args,
+      code: error.code,
+      message: error.message,
+    });
+    return null;
+  }
+
+  const candidates = (
+    (rows ?? []) as Array<{
+      id: string;
+      status: string;
+      whatsapp_message_id: string | null;
+    }>
+  ).filter(
+    (r) => r.whatsapp_message_id == null || r.whatsapp_message_id === args.wamid
+  );
+  if (candidates.length !== 1) {
+    console.warn('[webhook] broadcast recipient fallback ambiguous/none', {
+      ...args,
+      n: candidates.length,
+    });
+    return null;
+  }
+
+  const cand = candidates[0];
+  if (cand.whatsapp_message_id == null) {
+    // Set-once. The unique wamid index makes a racing double-backfill
+    // fail safely; the status mirror still proceeds on this row.
+    const { error: backfillErr } = await supabaseAdmin()
+      .from('broadcast_recipients')
+      .update({ whatsapp_message_id: args.wamid })
+      .eq('id', cand.id)
+      .is('whatsapp_message_id', null);
+    if (backfillErr) {
+      console.warn('[webhook] broadcast recipient wamid backfill failed', {
+        ...args,
+        recipientId: cand.id,
+        code: backfillErr.code,
+        message: backfillErr.message,
+      });
+    }
+  }
+
+  return { id: cand.id, status: cand.status };
+}
+
 async function handleStatusUpdate(status: {
   id: string;
   status: string;
@@ -1989,15 +2091,56 @@ async function handleStatusUpdate(status: {
   // handler (after the broadcast mirror below), so a slow subscriber
   // endpoint can't delay the broadcast_recipients update.
 
+  // The stored message this status belongs to. Looked up once here and
+  // used twice: as the broadcast-recipient fallback key in step 2 and to
+  // resolve the owning account for the fan-out in step 3. Bounded to one
+  // row because message_id isn't unique.
+  const { data: msgRow } = await supabaseAdmin()
+    .from('messages')
+    .select(
+      'conversation_id, broadcast_id, conversations(account_id, contact_id)'
+    )
+    .eq('message_id', status.id)
+    .limit(1)
+    .maybeSingle();
+  const msgConv = (msgRow?.conversations ?? null) as {
+    account_id: string;
+    contact_id: string | null;
+  } | null;
+
   // 2) Mirror onto broadcast_recipients via whatsapp_message_id
   //    (added in migration 003). The aggregate trigger on
   //    broadcast_recipients re-derives the parent broadcast's
   //    sent/delivered/read/failed counts automatically.
-  const { data: recipient, error: recFetchErr } = await supabaseAdmin()
+  const { data: wamidRecipient, error: recFetchErr } = await supabaseAdmin()
     .from('broadcast_recipients')
     .select('id, status')
     .eq('whatsapp_message_id', status.id)
     .maybeSingle();
+
+  let recipient: { id: string; status: string } | null = wamidRecipient;
+
+  // Fallback when no recipient carries this wamid yet. The send path
+  // stamps it at send time now, but that write is best-effort, an old
+  // browser bundle may still be doing it seconds late, and rows from
+  // before the fix never got it in time (2 Oct 2026: 173 recipients of
+  // one campaign stuck at 'sent'). A broadcast send also stores a
+  // `messages` row tagged with `broadcast_id`, and its conversation names
+  // the contact — together that identifies the recipient row.
+  if (
+    !recFetchErr &&
+    !recipient &&
+    msgRow?.broadcast_id &&
+    msgConv?.contact_id &&
+    msgConv.account_id
+  ) {
+    recipient = await resolveBroadcastRecipientFallback({
+      wamid: status.id,
+      broadcastId: msgRow.broadcast_id as string,
+      contactId: msgConv.contact_id,
+      accountId: msgConv.account_id,
+    });
+  }
 
   if (recFetchErr) {
     console.error('Error fetching broadcast recipient:', recFetchErr);
@@ -2022,12 +2165,10 @@ async function handleStatusUpdate(status: {
     //
     // Without this a broadcast recipient could reach 'failed' with a
     // `sent_at`, a wamid and an EMPTY error column — a red badge with
-    // nothing behind it. The reason was arriving here and being dropped:
-    // `statusPatch` above is handed to fn_apply_message_status, which
-    // writes onto `messages`, and a broadcast send never creates a
-    // `messages` row (the fan-out calls Meta directly and tracks progress
-    // only on this table). So the RPC matched zero rows and the detail
-    // died with the request.
+    // nothing behind it. Broadcast sends do store a `messages` row now
+    // (broadcast-inbox.ts), so the RPC above records the reason there
+    // too, but the campaign report reads it from THIS table — so it is
+    // mirrored here as well.
     //
     // This webhook is the ONLY carrier of the cause for a message Meta
     // accepted and then failed later, and it arrives once.
@@ -2037,10 +2178,17 @@ async function handleStatusUpdate(status: {
       update.error_details = statusPatch.error_details ?? null;
     }
 
+    // Forward-only in the WHERE clause, not just in the JS check above:
+    // the send-side stamp and other status deliveries write this row
+    // concurrently, and a read-then-write would let a slower writer drag
+    // it backwards. Listing every predecessor the ladder allows (rather
+    // than pinning the status we read) means a concurrent pending→sent
+    // stamp cannot make a genuine `delivered` miss.
     const { error: recUpdateErr } = await supabaseAdmin()
       .from('broadcast_recipients')
       .update(update)
-      .eq('id', recipient.id);
+      .eq('id', recipient.id)
+      .in('status', allowedPredecessorStatuses(status.status));
 
     if (recUpdateErr) {
       console.error('Error updating broadcast recipient status:', recUpdateErr);
@@ -2049,18 +2197,10 @@ async function handleStatusUpdate(status: {
 
   // 3) Webhook fan-out for messages we store (inbox / API sends).
   //    Runs last so a slow subscriber can't delay the mirrors above.
-  //    Bounded to one row (message_id isn't unique) purely to resolve
+  //    Uses the message row looked up before step 2 purely to resolve
   //    the owning account for delivery.
-  const { data: msgRow } = await supabaseAdmin()
-    .from('messages')
-    .select('conversation_id, conversations(account_id)')
-    .eq('message_id', status.id)
-    .limit(1)
-    .maybeSingle();
-
   if (msgRow) {
-    const conv = msgRow.conversations as { account_id: string } | null;
-    const accountId = conv?.account_id;
+    const accountId = msgConv?.account_id;
     if (accountId) {
       await dispatchWebhookEvent(
         supabaseAdmin(),
@@ -2217,7 +2357,8 @@ async function processMessage(
     accountId,
     configOwnerUserId,
     senderPhone,
-    contactName
+    contactName,
+    { source: 'inbound', waMessageId: message.id }
   );
   if (!contactOutcome) return;
   const contactRecord = contactOutcome.contact;
@@ -2807,17 +2948,26 @@ interface ContactOutcome {
   wasCreated: boolean;
 }
 
+/** Which webhook path is resolving the contact; logged on failure. */
+interface ContactResolutionContext {
+  source: 'inbound' | 'echo' | 'history';
+  waMessageId?: string;
+}
+
 async function findOrCreateContact(
   accountId: string,
   configOwnerUserId: string,
   phone: string,
-  name: string
+  name: string,
+  logCtx?: ContactResolutionContext
 ): Promise<ContactOutcome | null> {
   // Find an existing contact for this account by phone. The shared
-  // helper pre-filters in SQL by the last-8-digit suffix (so we don't
-  // pull every contact on every inbound message) then applies the
-  // strict `phonesMatch` in JS on the small candidate set. The same
-  // helper backs the manual contact form and CSV import, so all three
+  // helper matches on the generated digits-only `phone_normalized`
+  // column — exact first, then a last-8-digit suffix pre-filter plus the
+  // strict `phonesMatch` for trunk variants. It must NOT query raw
+  // `phone`: formatted stored values (`+238 988 48 84`) never matched,
+  // and every reply from such a contact was dropped (2 Oct 2026). The
+  // same helper backs the manual contact form and CSV import, so all
   // paths agree on what "same number" means (issue #212).
   const existingContact = await findExistingContact(
     supabaseAdmin(),
@@ -2841,9 +2991,7 @@ async function findOrCreateContact(
     const nameUpdate = resolveContactNameUpdate({
       existingName: existingContact.name,
       existingProfileName: existingContact.wa_profile_name as
-        | string
-        | null
-        | undefined,
+        string | null | undefined,
       incomingProfileName: name,
     });
 
@@ -2900,19 +3048,40 @@ async function findOrCreateContact(
     .single();
 
   if (createError) {
-    // Lost a race: a concurrent inbound delivery (or another path)
-    // created this contact between our lookup and insert, and the
-    // unique index (migration 022) rejected the duplicate. Re-resolve
-    // the existing row instead of dropping the message.
+    // The unique index (migration 022) rejected the insert: a row with
+    // the same (account_id, phone_normalized) already exists — created by
+    // a concurrent delivery, or stored in a format the lookup above did
+    // not match. Re-resolve on EXACTLY the key the index just reported,
+    // so the existing row is always found and the message is stored.
+    let reResolveError: { code?: string; message: string } | null = null;
     if (isUniqueViolation(createError)) {
-      const raced = await findExistingContact(
+      const raced = await findContactByNormalizedPhone(
         supabaseAdmin(),
         accountId,
         phone
       );
-      if (raced) return { contact: raced, wasCreated: false };
+      if (raced.contact) return { contact: raced.contact, wasCreated: false };
+      reResolveError = raced.error;
     }
-    console.error('Error creating contact:', createError);
+    // Reaching here means the customer's message is about to be dropped.
+    // The webhook has already answered 200 (`after()`), so Meta will not
+    // retry: this line is the only trace. Stable tag for `docker logs`
+    // grepping, with every field needed to reconstruct what was lost.
+    console.error(
+      '[webhook][contact-resolution-failed] message NOT stored',
+      JSON.stringify({
+        accountId,
+        phone: normalizePhone(phone),
+        source: logCtx?.source ?? 'unknown',
+        waMessageId: logCtx?.waMessageId ?? null,
+        insertError: {
+          code: createError.code,
+          message: createError.message,
+          details: createError.details,
+        },
+        reResolveError,
+      })
+    );
     return null;
   }
 

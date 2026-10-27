@@ -70,6 +70,9 @@ export const VALID_MESSAGE_TYPES = [
   ...MEDIA_KINDS,
 ] as const;
 
+/** Meta WhatsApp Cloud API limit for text message body length (param text.body). */
+export const TEXT_MESSAGE_MAX = 4096;
+
 /**
  * Typed failure with a machine `code` and a suggested HTTP `status`.
  * Callers map it to their own response shape (`toErrorResponse` for
@@ -122,6 +125,12 @@ export interface SendMessageParams {
   senderUserId?: string | null;
   /** Internal ID of the source message if this send is a forwarded / re-sent message (Phase 6). */
   forwardedFromMessageId?: string | null;
+  /**
+   * Set when a connected AI app (Claude/ChatGPT) sends on a member's
+   * behalf; persisted to `messages.via_ai` so the inbox can badge it.
+   * Only written when present, so other callers' inserts are unchanged.
+   */
+  viaAi?: { platform: string; connection_id: string } | null;
 }
 
 export interface SendMessageResult {
@@ -184,12 +193,21 @@ export function validateSendMessageParams(params: {
     );
   }
 
-  if (messageType === 'text' && !contentText) {
-    throw new SendMessageError(
-      'bad_request',
-      'content_text is required for text messages',
-      400
-    );
+  if (messageType === 'text') {
+    if (!contentText || !contentText.trim()) {
+      throw new SendMessageError(
+        'bad_request',
+        'content_text is required for text messages',
+        400
+      );
+    }
+    if (contentText.length > TEXT_MESSAGE_MAX) {
+      throw new SendMessageError(
+        'bad_request',
+        `Text message exceeds the ${TEXT_MESSAGE_MAX}-character limit (${contentText.length} characters)`,
+        400
+      );
+    }
   }
 
   if (messageType === 'template' && !templateName) {
@@ -320,7 +338,9 @@ export async function sendMessageToConversation(
     replyToMessageId,
     senderUserId,
     forwardedFromMessageId,
+    viaAi,
   } = params;
+  const viaAiField = viaAi ? { via_ai: viaAi } : {};
 
   if (!conversationId) {
     throw new SendMessageError(
@@ -730,6 +750,7 @@ export async function sendMessageToConversation(
         status: 'failed',
         reply_to_message_id: replyToMessageId || null,
         forwarded_from_message_id: forwardedFromMessageId || null,
+        ...viaAiField,
         error_code: meta?.code != null ? String(meta.code) : 'meta_error',
         error_message: meta ? meta.operatorText : message,
         error_details: meta
@@ -851,12 +872,19 @@ export async function sendMessageToConversation(
       status: 'sent',
       reply_to_message_id: replyToMessageId || null,
       forwarded_from_message_id: forwardedFromMessageId || null,
+      ...viaAiField,
     })
     .select()
     .single();
 
   if (msgError) {
-    console.error('[send-message] error inserting sent message:', msgError);
+    // Code + message only: a Postgres error's `details` can quote the
+    // failing row, which would put the message text in the server log.
+    console.error(
+      '[send-message] error inserting sent message:',
+      msgError.code,
+      msgError.message
+    );
     throw new SendMessageError(
       'db_error',
       `Message sent to Meta but failed to save to DB: ${msgError.message}`,

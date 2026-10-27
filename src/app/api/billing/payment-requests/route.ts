@@ -12,11 +12,20 @@
 // NOT reject a mismatch automatically: partial payments, rounding by the
 // payer's bank, and deliberate part-payments are all real, and the whole
 // point of this flow is that a human decides.
+//
+// Razorpay Phase 6: POST answers 410 `manual_payments_retired` when this
+// account's purchase flow is Razorpay AutoPay (src/lib/billing/
+// manual-retirement.ts). GET history is never retired.
 // ============================================================
 
 import { after, NextResponse } from 'next/server';
 
 import { getCurrentAccount } from '@/lib/auth/account';
+import { manualPaymentsRetiredResponse } from '@/lib/billing/manual-retirement';
+import {
+  getAccountPricingRegion,
+  manualUpiInrOnlyResponse,
+} from '@/lib/billing/pricing/region-store';
 import { sendPaymentSubmittedEmail } from '@/lib/email/billing';
 import {
   checkRateLimit,
@@ -64,6 +73,12 @@ export async function POST(request: Request) {
   try {
     const ctx = await requireBillingOwner();
 
+    // Phase 6: an account on Razorpay AutoPay cannot submit a manual
+    // payment (410 manual_payments_retired). Checked before the body is
+    // read so nothing is parsed, stored or emailed.
+    const retired = await manualPaymentsRetiredResponse(ctx.accountId);
+    if (retired) return retired;
+
     const limit = checkRateLimit(
       `billing:submit:${ctx.accountId}`,
       RATE_LIMITS.paymentSubmit
@@ -101,7 +116,11 @@ export async function POST(request: Request) {
     // admin may have changed the price between the customer scanning and
     // submitting. Storing the price in force AT SUBMIT TIME is what the
     // admin will compare the bank statement against.
-    const quote = await resolveQuote(input.planId, input.cycleId);
+    const pricing = await getAccountPricingRegion(ctx.accountId);
+    const quote = await resolveQuote(input.planId, input.cycleId, pricing);
+    // Manual UPI collects INR only (defence in depth: the resolver never
+    // gives a manual UPI account a non-INR region).
+    if (quote.currency !== 'INR') return manualUpiInrOnlyResponse();
 
     const admin = supabaseAdmin();
     const { data, error } = await admin

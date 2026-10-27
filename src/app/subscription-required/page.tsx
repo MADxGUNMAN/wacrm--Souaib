@@ -17,14 +17,22 @@
 // ============================================================
 
 import { useEffect, useState } from 'react';
+
+import { signOutWithAudit } from '@/lib/security/client';
 import { useRouter } from 'next/navigation';
-import { Lock, LogOut, Mail, RefreshCw, ShieldCheck } from 'lucide-react';
+import {
+  AlertTriangle,
+  Lock,
+  LogOut,
+  Mail,
+  RefreshCw,
+  ShieldCheck,
+} from 'lucide-react';
 
 import {
   useSubscription,
   resetSubscriptionStore,
 } from '@/hooks/use-subscription';
-import { createClient } from '@/lib/supabase/client';
 
 export default function SubscriptionRequiredPage() {
   const router = useRouter();
@@ -66,8 +74,7 @@ export default function SubscriptionRequiredPage() {
   }, [data, router]);
 
   const handleSignOut = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
+    await signOutWithAudit();
     resetSubscriptionStore();
     window.location.replace('/login');
   };
@@ -84,6 +91,9 @@ export default function SubscriptionRequiredPage() {
   const owner = data?.owner ?? null;
   const accountName = data?.account.name ?? '';
   const planName = data?.subscription?.planName ?? null;
+  const autopayKey = data?.autopay?.display.key ?? null;
+  const autopayFailed =
+    autopayKey === 'action_needed' || autopayKey === 'payment_failed_retrying';
 
   // Prefilled so the member doesn't have to compose it. `encodeURIComponent`
   // on both parts — an account name with an ampersand would otherwise
@@ -155,6 +165,19 @@ export default function SubscriptionRequiredPage() {
               Last active plan:{' '}
               <span className="text-foreground font-medium">{planName}</span>
             </p>
+          ) : null}
+
+          {/* The owner set up AutoPay but the charge could not be
+              collected. Worth saying: otherwise the member assumes the
+              owner simply forgot, and the nudge they send is wrong. */}
+          {autopayFailed ? (
+            <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-3">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+              <p className="text-foreground text-xs leading-relaxed">
+                The owner&apos;s AutoPay payment couldn&apos;t be collected. Ask
+                them to renew or update the payment method in Billing.
+              </p>
+            </div>
           ) : null}
 
           <div className="mt-6 flex flex-col gap-2.5 sm:flex-row">

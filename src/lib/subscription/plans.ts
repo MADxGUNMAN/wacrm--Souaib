@@ -111,17 +111,54 @@ export function serialisePlanFeatures(features: PlanFeature[]): PlanFeature[] {
  * default -> the first visible one -> null (no cycles configured).
  */
 export function resolveDefaultCycle(
-  cycles: BillingCycle[],
+  cycles: BillingCycle[]
 ): BillingCycle | null {
   const visible = cycles.filter((c) => c.is_visible);
   return visible.find((c) => c.is_default) ?? visible[0] ?? null;
+}
+
+/**
+ * Which card /upgrade-plan opens on.
+ *
+ * A BLOCKED account (lapsed trial, lapsed paid term, or forced expiry)
+ * re-opens on the term it chose before — `selectedPlan` comes from the
+ * server (`/api/billing/subscription`), never from the URL. Everyone
+ * else keeps the operator's seeding: default -> recommended -> first.
+ *
+ * The stored choice is honoured only when it still matches the plan the
+ * page is selling AND one of the cycles actually on offer. Otherwise the
+ * default wins; a value that is not on the page is never invented.
+ */
+export function pickInitialCycleId(
+  offers: ReadonlyArray<{
+    cycle: Pick<BillingCycle, 'id' | 'is_default' | 'is_recommended'>;
+  }>,
+  opts: {
+    isBlocked: boolean;
+    planId: string | null;
+    selectedPlan: { planId: string; cycleId: string } | null;
+  }
+): string | null {
+  if (offers.length === 0) return null;
+
+  const { isBlocked, planId, selectedPlan } = opts;
+  if (isBlocked && selectedPlan && selectedPlan.planId === planId) {
+    const stored = offers.find((o) => o.cycle.id === selectedPlan.cycleId);
+    if (stored) return stored.cycle.id;
+  }
+
+  const preferred =
+    offers.find((o) => o.cycle.is_default) ??
+    offers.find((o) => o.cycle.is_recommended) ??
+    offers[0];
+  return preferred.cycle.id;
 }
 
 /** Look up the price row for one (plan, cycle) pair. */
 export function findPrice(
   prices: SubscriptionPlanPrice[],
   planId: string,
-  cycleId: string,
+  cycleId: string
 ): SubscriptionPlanPrice | null {
   return (
     prices.find((p) => p.plan_id === planId && p.cycle_id === cycleId) ?? null
@@ -136,11 +173,9 @@ export function findPrice(
  */
 export function findMonthlyBaseline(
   bundle: Pick<PlansBundle, 'cycles' | 'prices'>,
-  planId: string,
+  planId: string
 ): number | null {
-  const monthly = bundle.cycles.find(
-    (c) => c.months === 1 && !c.duration_days,
-  );
+  const monthly = bundle.cycles.find((c) => c.months === 1 && !c.duration_days);
   if (!monthly) return null;
   const price = findPrice(bundle.prices, planId, monthly.id);
   return price ? toAmount(price.amount) : null;
@@ -154,7 +189,7 @@ export function findMonthlyBaseline(
  */
 export function perMonthAmount(
   amount: number,
-  cycle: Pick<BillingCycle, 'months' | 'duration_days'>,
+  cycle: Pick<BillingCycle, 'months' | 'duration_days'>
 ): number | null {
   if (cycle.duration_days) return null;
   if (!cycle.months || cycle.months <= 1) return null;
@@ -230,7 +265,7 @@ export function deriveDaySavings(params: {
  */
 export function formatPriceEquals(
   template: string | null | undefined,
-  values: { total: string; days: number },
+  values: { total: string; days: number }
 ): string {
   const fallback = `= ${values.total} for ${values.days} days`;
   if (!template || !template.trim()) return fallback;
@@ -285,7 +320,7 @@ export function deriveSavings(params: {
  */
 export function buildPlanRows(
   bundle: Pick<PlansBundle, 'plans' | 'prices'>,
-  cycleId: string,
+  cycleId: string
 ): PlanWithPrice[] {
   return bundle.plans
     .filter((p) => p.is_visible)
@@ -315,7 +350,7 @@ export function visibleCycles(cycles: BillingCycle[]): BillingCycle[] {
  * marketing label ("Quarterly") is less useful than the actual span.
  */
 export function describeCycleDuration(
-  cycle: Pick<BillingCycle, 'months' | 'duration_days'>,
+  cycle: Pick<BillingCycle, 'months' | 'duration_days'>
 ): string {
   if (cycle.duration_days) {
     return `${cycle.duration_days} day${cycle.duration_days === 1 ? '' : 's'}`;

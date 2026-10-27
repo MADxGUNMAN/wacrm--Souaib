@@ -20,6 +20,8 @@ import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit';
 import { EMAIL_INVALID_MESSAGE, isValidEmail } from '@/lib/validation/email';
 
 import { createClient } from '@supabase/supabase-js';
+import { recordSecurityEvent } from '@/lib/security/server';
+import { requestDeviceMeta } from '@/lib/security/device';
 
 export async function POST(request: Request) {
   try {
@@ -102,6 +104,10 @@ export async function POST(request: Request) {
       );
     }
 
+    // The check above opened a real auth session. Close just that one so
+    // it doesn't linger as a phantom device under Logged-in devices.
+    await authClient.auth.signOut({ scope: 'local' }).catch(() => {});
+
     // Don't allow changing to the same email
     if (trimmedEmail.toLowerCase() === currentEmail.toLowerCase()) {
       return NextResponse.json(
@@ -148,6 +154,13 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+
+    await recordSecurityEvent(admin, {
+      userId: ctx.userId,
+      accountId: ctx.accountId,
+      type: 'email_change_requested',
+      meta: requestDeviceMeta(request.headers),
+    });
 
     return NextResponse.json({ success: true, emailSent: true });
   } catch (err) {

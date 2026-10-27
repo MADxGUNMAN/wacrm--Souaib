@@ -1,0 +1,42 @@
+{
+  "name": "replai",
+  "version": "1.0.0",
+  "description": "Manage your Replai WhatsApp CRM from ChatGPT: look up contacts, conversations and deals, update records, and send WhatsApp messages and broadcasts with your own Replai permissions.",
+  "author": {
+    "name": "Junkies Coder",
+    "url": "https://junkiescoder.com"
+  },
+  "homepage": "https://wacrm.junkiescoder.com/integrations/ai",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Replai",
+    "shortDescription": "WhatsApp CRM for your team",
+    "longDescription": "Replai is a WhatsApp Business CRM. This plugin connects ChatGPT to your Replai workspace so you can work with your customers in plain language.\n\nWhat you can do:\n- Find contacts and read their notes, tags and latest conversation.\n- See which inbox conversations are open or unread, read the messages and check whether WhatsApp\u0027s 24-hour reply window is open.\n- Add notes, tags and contacts, change conversation status and assignment, and create, move or close deals.\n- Reply on WhatsApp or send an approved template to a customer.\n- Prepare a template broadcast, review who it will reach, and send it only after you confirm.\n- Check broadcast results, template performance and dashboard numbers, and switch automations or chatbot flows on or off.\n\nHow permissions work:\n- You sign in with your Replai account. ChatGPT acts as you, with your Replai role and nothing more, in the workspace you signed in to.\n- When you connect you choose what it may do (view, edit records, send messages, broadcasts, automations), and you can narrow or disconnect it any time in Replai Settings, AI Connectors.\n- Your workspace owner can switch sending, broadcasts or AI access off for the whole workspace and sets daily limits.\n- Broadcasts always need a preview and your confirmation. Messages sent this way are marked in the Replai inbox and every action is listed in the connection\u0027s activity.\n\nRequires a Replai account with WhatsApp Business connected.",
+    "developerName": "Junkies Coder",
+    "category": "Business \u0026 Operations",
+    "capabilities": [
+      "Search contacts and read their notes, tags and custom fields",
+      "Read inbox conversations and messages, and check the 24-hour reply window",
+      "Create and update contacts, tags, notes and custom fields",
+      "Change conversation status and assign conversations to teammates",
+      "Create, move and close deals in sales pipelines",
+      "Send WhatsApp replies and approved templates as you",
+      "Preview and send template broadcasts after your confirmation",
+      "Report on broadcasts, templates, response times and the dashboard",
+      "Switch automations and chatbot flows on or off"
+    ],
+    "defaultPrompt": [
+      "Which of my Replai conversations are unread right now?",
+      "Show my open deals in the Negotiation stage",
+      "How did my last WhatsApp broadcast perform?"
+    ],
+    "websiteURL": "https://wacrm.junkiescoder.com/integrations/ai",
+    "privacyPolicyURL": "https://wacrm.junkiescoder.com/privacy",
+    "termsOfServiceURL": "https://wacrm.junkiescoder.com/terms",
+    "supportURL": "https://wacrm.junkiescoder.com/contact",
+    "brandColor": "#047857",
+    "brandColorDark": "#34D399",
+    "logo": "./assets/logo.png",
+    "composerIcon": "./assets/composer-icon.png"
+  }
+}

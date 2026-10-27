@@ -10,9 +10,10 @@ import {
   getLegalPagesList,
   getLandingFaqs,
 } from '@/lib/cms/queries';
-import { getPlansBundle } from '@/lib/subscription/queries';
+import { getLandingPlansBundle } from '@/lib/billing/pricing/region-store';
 
 import { LandingNavbar } from '@/components/landing/LandingNavbar';
+import { resolveMarketingCopy } from '@/lib/cms/marketing-copy';
 import { HeroSection } from '@/components/landing/HeroSection';
 import { FeaturesSection } from '@/components/landing/FeaturesSection';
 import { HowItWorksSection } from '@/components/landing/HowItWorksSection';
@@ -39,7 +40,9 @@ export async function generateMetadata(): Promise<Metadata> {
       settings?.meta_description ||
       settings?.site_description ||
       'Scale your customer communication with AI-powered WhatsApp CRM.',
+    applicationName: settings?.site_name || 'Replai',
     openGraph: {
+      siteName: settings?.site_name || 'Replai',
       title:
         settings?.meta_title ||
         `${settings?.site_name || 'Replai'} | AI-Powered WhatsApp CRM`,
@@ -65,6 +68,42 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * schema.org WebSite for the home page (Google site names). `name` is the
+ * preferred site name; `alternateName` lists fallbacks in order, ending
+ * with the host, because Google won't give two global sites the same name
+ * and "Replai" is also used elsewhere.
+ * https://developers.google.com/search/docs/appearance/site-names
+ */
+function websiteJsonLd(
+  settings: Awaited<ReturnType<typeof getSiteSettings>>
+): string {
+  const name = settings?.site_name?.trim() || 'Replai';
+  const url = (
+    settings?.canonical_url ||
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    'https://wacrm.junkiescoder.com'
+  ).replace(/\/?$/, '/');
+  let host = '';
+  try {
+    host = new URL(url).host;
+  } catch {
+    host = '';
+  }
+  const data = {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    '@id': `${url}#website`,
+    name,
+    alternateName: [`${name} CRM`, `${name} WhatsApp CRM`, host].filter(
+      Boolean
+    ),
+    url,
+  };
+  // Escape "<" so the JSON can never close the <script> tag.
+  return JSON.stringify(data).replace(/</g, '\\u003c');
+}
+
 export default async function LandingPage() {
   const [
     settings,
@@ -85,7 +124,9 @@ export default async function LandingPage() {
     getLandingIntegrations(),
     getLegalPagesList(),
     getLandingFaqs(),
-    getPlansBundle(),
+    // Signed-in visitors see their workspace's pricing; everyone else
+    // sees Global (Universal).
+    getLandingPlansBundle(),
   ]);
 
   // Map sections by key for easy lookup
@@ -96,6 +137,14 @@ export default async function LandingPage() {
       <Suspense fallback={null}>
         <NewsletterToast />
       </Suspense>
+      {/* WebSite structured data: the signal Google uses for the site name
+          shown above each result. Without it, Google falls back to the
+          parent domain's name (junkiescoder.com, "Junkies Coder"). */}
+      <Script
+        id="json-ld-website"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: websiteJsonLd(settings) }}
+      />
       {settings?.json_ld_schema && (
         <Script
           id="json-ld-schema"
@@ -161,6 +210,7 @@ export default async function LandingPage() {
         siteName={settings?.site_name}
         logoUrl={settings?.logo_url}
         links={settings?.header_links}
+        ctaLabels={resolveMarketingCopy(settings?.marketing_copy).navbar}
         transparentUntilScrolled
       />
 

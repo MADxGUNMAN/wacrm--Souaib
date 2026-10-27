@@ -1,6 +1,8 @@
 'use client';
 
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
+
+import { replaceSearchParams } from '@/lib/url-state';
 import { KeyRound, Sparkles } from 'lucide-react';
 
 import { MetaSDKProvider } from '@/components/providers/meta-sdk-provider';
@@ -36,7 +38,6 @@ function resolveMode(raw: string | null): Mode {
 }
 
 export function WhatsAppSettings() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const mode = resolveMode(searchParams.get('mode'));
 
@@ -46,7 +47,8 @@ export function WhatsAppSettings() {
     // `?tab=whatsapp`, which is what the sidebar and header link to.
     if (next === DEFAULT_MODE) params.delete('mode');
     else params.set('mode', next);
-    router.replace(`/settings?${params.toString()}`, { scroll: false });
+    // Client-only sub-tab: no server navigation (see lib/url-state).
+    replaceSearchParams(params);
   };
 
   return (

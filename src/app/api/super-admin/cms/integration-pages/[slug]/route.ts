@@ -81,12 +81,25 @@ export async function PUT(request: Request, { params }: RouteProps) {
       'seo_meta_title',
       'seo_meta_description',
       'is_published',
+      'content',
     ];
 
     for (const field of allowedFields) {
       if (field in body) {
         updatePayload[field] = body[field];
       }
+    }
+
+    if (
+      'content' in updatePayload &&
+      (typeof updatePayload.content !== 'object' ||
+        updatePayload.content === null ||
+        Array.isArray(updatePayload.content))
+    ) {
+      return NextResponse.json(
+        { error: 'content must be an object' },
+        { status: 400 }
+      );
     }
 
     const { data, error } = await admin

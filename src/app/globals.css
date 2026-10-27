@@ -225,6 +225,17 @@ html[data-theme='rose'] {
   body {
     @apply bg-background text-foreground;
   }
+  /*
+   * App shells (dashboard + super admin, marked [data-app-shell]) scroll
+   * inside their own <main>. The document itself must never scroll there,
+   * or the page shows two scrollbars. This backstop holds even if a future
+   * element escapes the shell; marketing pages are unaffected.
+   */
+  html:has(body [data-app-shell]),
+  html:has(body [data-app-shell]) body {
+    overflow: hidden;
+    height: 100%;
+  }
   html {
     @apply font-sans;
   }
@@ -457,7 +468,33 @@ html[data-mode='dark'] .contact-panel-resize-icon {
   animation: wa-float-gentle 3s ease-in-out infinite;
 }
 
+/* Jump-to-quoted-message flash (src/components/chat/use-jump-to-message.ts).
+   A soft tint that fades out behind the target row, the way WhatsApp marks
+   the message you jumped to. Applied to the full-width ROW rather than the
+   bubble, so it reads as "this line" and does not fight the bubble's own
+   emerald or muted fill. Duration must match FLASH_MS in the hook. */
+@keyframes message-flash {
+  0%,
+  35% {
+    background-color: rgb(16 185 129 / 0.22);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.message-flash {
+  animation: message-flash 1.8s ease-out;
+  border-radius: 0.75rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  /* A still tint, no motion — the reader still needs to see which
+     message they landed on. */
+  .message-flash {
+    animation: none;
+    background-color: rgb(16 185 129 / 0.18);
+  }
   .animate-wa-ring,
   .animate-wa-shimmer,
   .animate-wa-float {

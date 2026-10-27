@@ -47,9 +47,16 @@ const SECURITY_HEADERS = [
     //
     // `(self)` is not the same as removing the entry: an embedded
     // third-party iframe still gets nothing.
+    //
+    // `payment` is the one exception to "same-origin only". Razorpay
+    // Checkout runs in an iframe from api.razorpay.com and may use the
+    // Payment Request API inside it (UPI apps, saved wallets). Unlike the
+    // CSP below, this header is ENFORCED, so `payment=()` would silently
+    // break those methods with no console error on our page. Only
+    // Razorpay's two Checkout origins are added; no other frame gets it.
     key: 'Permissions-Policy',
     value:
-      'camera=(), microphone=(self), geolocation=(self), payment=(), usb=()',
+      'camera=(), microphone=(self), geolocation=(self), payment=(self "https://api.razorpay.com" "https://checkout.razorpay.com"), usb=()',
   },
   {
     key: 'Content-Security-Policy-Report-Only',
@@ -58,7 +65,12 @@ const SECURITY_HEADERS = [
       // Next.js needs 'unsafe-inline' for its inline hydration script
       // and 'unsafe-eval' in dev + some production optimisations.
       // Nonce-based CSP is a later project.
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      //
+      // checkout.razorpay.com serves Razorpay Checkout's loader script,
+      // fetched on demand by the payment page only. The loader then adds
+      // its risk-detection bundle from cdn.razorpay.com to OUR page
+      // (seen as a Report-Only violation in the Phase 2 browser check).
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com https://cdn.razorpay.com",
       // Tailwind + inline style attributes on lots of components.
       "style-src 'self' 'unsafe-inline'",
       // Supabase public-bucket avatars, contact avatars (arbitrary
@@ -79,7 +91,26 @@ const SECURITY_HEADERS = [
       "font-src 'self' data:",
       // Supabase REST + realtime (WSS). All Meta API calls happen
       // server-side, so graph.facebook.com does not belong here.
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+      //
+      // S3 IS needed: every upload goes browser → presigned PUT → S3
+      // directly (the bytes deliberately never pass through this server),
+      // so the XHR in upload-media.ts and in the support-chat attachment
+      // stager are cross-origin requests to *.amazonaws.com. Without this
+      // they are violations today — silent, because the header ships as
+      // Report-Only — and would become hard failures the moment it is
+      // enforced, breaking every attachment and avatar upload.
+      //
+      // Razorpay: the Checkout loader talks to api.razorpay.com and sends
+      // its own telemetry to lumberjack.razorpay.com from our page. The
+      // fraud and bot checks Checkout uses (hCaptcha, Sardine, Stripe
+      // Radar, Sentry) run INSIDE Razorpay's iframe under Razorpay's own
+      // CSP, so they are deliberately not listed here (Phase 0 report §4).
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.amazonaws.com https://api.razorpay.com https://lumberjack.razorpay.com",
+      // Razorpay Checkout's modal is an iframe. Without this directive
+      // frames fall back to default-src 'self'; that stays, plus Razorpay.
+      // (The auto-mail preview is a srcdoc iframe, which this does not
+      // affect.)
+      "frame-src 'self' https://api.razorpay.com https://checkout.razorpay.com",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
@@ -184,6 +215,22 @@ const nextConfig: NextConfig = {
    * they apply to every response regardless of which cache rule
    * matched.
    */
+  /** Short links for the AI connector page (07 §2.1). */
+  async redirects() {
+    return [
+      {
+        source: '/integrations/claude',
+        destination: '/integrations/ai',
+        permanent: true,
+      },
+      {
+        source: '/integrations/chatgpt',
+        destination: '/integrations/ai',
+        permanent: true,
+      },
+    ];
+  },
+
   async headers() {
     return [
       /**
@@ -223,7 +270,20 @@ const nextConfig: NextConfig = {
         headers: [{ key: 'Cache-Control', value: 'no-store' }],
       },
       {
-        source: '/:path((?!_next/static|_next/image|api).*)',
+        // AI connector: the OAuth endpoints, the consent page and /mcp
+        // carry codes, tokens and per-user content — never cacheable.
+        // (The .well-known metadata routes set their own short public
+        // cache in the handler.)
+        source: '/oauth/:path*',
+        headers: [{ key: 'Cache-Control', value: 'no-store' }],
+      },
+      {
+        source: '/mcp',
+        headers: [{ key: 'Cache-Control', value: 'no-store' }],
+      },
+      {
+        source:
+          '/:path((?!_next/static|_next/image|api|oauth/|mcp$|\\.well-known/).*)',
         headers: [
           {
             key: 'Cache-Control',

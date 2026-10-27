@@ -12,11 +12,22 @@
 // account. Two admins working the same queue, or one impatient
 // double-click, therefore cannot grant two subscription windows for one
 // payment — the loser gets a 409. See lib/subscription/activate.ts.
+//
+// Razorpay Phase 6 (plan section 9 item 9): the list is read-only for
+// every reviewed row, and Approve/Reject only ever succeed on a row that
+// is still `pending`, by that same conditional claim. Once an account is
+// on Razorpay, POST /api/billing/payment-requests answers 410, so no new
+// pending row can appear for it: "pending" here therefore means "was
+// still pending at cutover". GET also reports `manualIntake`
+// (open | partial | retired) for the tab label and notice.
 // ============================================================
 
 import { after, NextResponse } from 'next/server';
 
 import { supabaseAdmin } from '@/lib/auth/admin-client';
+import { getRazorpayConfig } from '@/lib/billing/razorpay/config';
+import { resolveManualIntake } from '@/lib/billing/razorpay/provider';
+import { getSubscriptionSettings } from '@/lib/subscription/queries';
 import {
   sendPaymentApprovedEmail,
   sendPaymentRejectedEmail,
@@ -35,6 +46,9 @@ import {
 
 const PAGE_SIZES = new Set([10, 20, 50, 100]);
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function GET(request: Request) {
   try {
     await requireSuperAdmin(request);
@@ -45,19 +59,29 @@ export async function GET(request: Request) {
     const search = (searchParams.get('search') ?? '').trim();
     const sortBy = searchParams.get('sortBy') ?? 'newest';
 
+    // `id` loads ONE request (any status) so the All payments ledger and
+    // the Activity log can open the review drawer for it. Read-only.
+    const id = searchParams.get('id');
+    if (id && !UUID_RE.test(id)) {
+      return NextResponse.json(
+        { error: 'id must be a payment request id (UUID).' },
+        { status: 400 }
+      );
+    }
+
     const page = Math.max(1, Number(searchParams.get('page')) || 1);
     const requestedSize = Number(searchParams.get('pageSize')) || 20;
     const pageSize = PAGE_SIZES.has(requestedSize) ? requestedSize : 20;
 
-    let query = admin
-      .from('payment_requests')
-      .select('*', { count: 'exact' });
+    let query = admin.from('payment_requests').select('*', { count: 'exact' });
 
-    if (status !== 'all') {
+    if (id) {
+      query = query.eq('id', id);
+    } else if (status !== 'all') {
       query = query.eq('status', status);
     }
 
-    if (search) {
+    if (search && !id) {
       // Escape PostgREST's `or` filter metacharacters. An unescaped
       // comma would be read as a filter separator and a parenthesis
       // would break the expression — a search for "Pro, Ltd." must not
@@ -70,7 +94,7 @@ export async function GET(request: Request) {
             `payer_name.ilike.%${safe}%`,
             `payer_mobile.ilike.%${safe}%`,
             `plan_name_snapshot.ilike.%${safe}%`,
-          ].join(','),
+          ].join(',')
         );
       }
     }
@@ -99,7 +123,9 @@ export async function GET(request: Request) {
     // resolved from the schema cache, which this project has already
     // been burned by (issue #294) — and `user_id` has no FK to profiles
     // to embed through anyway.
-    const accountIds = [...new Set(rows.map((r) => r.account_id).filter(Boolean))];
+    const accountIds = [
+      ...new Set(rows.map((r) => r.account_id).filter(Boolean)),
+    ];
     const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
 
     const [accountsRes, profilesRes] = await Promise.all([
@@ -110,24 +136,28 @@ export async function GET(request: Request) {
             .in('id', accountIds)
         : Promise.resolve({ data: [], error: null }),
       userIds.length
-        ? admin.from('profiles').select('user_id, full_name, email').in('user_id', userIds)
+        ? admin
+            .from('profiles')
+            .select('user_id, full_name, email')
+            .in('user_id', userIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
 
     const accountsById = new Map(
-      (accountsRes.data ?? []).map((a: Record<string, unknown>) => [a.id, a]),
+      (accountsRes.data ?? []).map((a: Record<string, unknown>) => [a.id, a])
     );
     const profilesById = new Map(
-      (profilesRes.data ?? []).map((p: Record<string, unknown>) => [p.user_id, p]),
+      (profilesRes.data ?? []).map((p: Record<string, unknown>) => [
+        p.user_id,
+        p,
+      ])
     );
 
     const requests = rows.map((r) => {
       const account = accountsById.get(r.account_id) as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       const profile = profilesById.get(r.user_id) as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
 
       const expected = toAmount(r.expected_amount);
       const paid = toAmount(r.paid_amount);
@@ -141,8 +171,10 @@ export async function GET(request: Request) {
         amount_matches: Math.abs(expected - paid) < 0.01,
         amount_difference: Math.round((paid - expected) * 100) / 100,
         account_name: (account?.name as string) ?? null,
-        account_subscription_status: (account?.subscription_status as string) ?? null,
-        account_subscription_ends_at: (account?.subscription_ends_at as string) ?? null,
+        account_subscription_status:
+          (account?.subscription_status as string) ?? null,
+        account_subscription_ends_at:
+          (account?.subscription_ends_at as string) ?? null,
         submitted_by_name: (profile?.full_name as string) ?? null,
         submitted_by_email: (profile?.email as string) ?? null,
       };
@@ -151,13 +183,33 @@ export async function GET(request: Request) {
     // Status tallies for the tab badges. Head-only counts, so this adds
     // no row transfer.
     const [pendingCount, approvedCount, rejectedCount] = await Promise.all([
-      admin.from('payment_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
-      admin.from('payment_requests').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
-      admin.from('payment_requests').select('id', { count: 'exact', head: true }).eq('status', 'rejected'),
+      admin
+        .from('payment_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending'),
+      admin
+        .from('payment_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'approved'),
+      admin
+        .from('payment_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'rejected'),
     ]);
+
+    // Phase 6: can accounts on THIS deployment still start a manual
+    // payment? Drives the tab label and the read-only notice only. A
+    // settings read failure must not break the queue, so it falls back
+    // to the DB-flag-less answer.
+    const settings = await getSubscriptionSettings().catch(() => null);
+    const manualIntake = resolveManualIntake({
+      settingsProvider: settings?.payment_provider ?? null,
+      config: getRazorpayConfig(),
+    });
 
     return NextResponse.json({
       requests,
+      manualIntake,
       total: count ?? 0,
       page,
       pageSize,
@@ -173,7 +225,7 @@ export async function GET(request: Request) {
     console.error('[super-admin/billing/payment-requests] GET failed:', err);
     return NextResponse.json(
       { error: 'Failed to load payment requests' },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }
@@ -186,10 +238,15 @@ export async function PATCH(request: Request) {
     const id = typeof body.id === 'string' ? body.id : '';
     const action = typeof body.action === 'string' ? body.action : '';
     const note =
-      typeof body.note === 'string' && body.note.trim() ? body.note.trim() : null;
+      typeof body.note === 'string' && body.note.trim()
+        ? body.note.trim()
+        : null;
 
     if (!id) {
-      return NextResponse.json({ error: 'Request id is required' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Request id is required' },
+        { status: 400 }
+      );
     }
 
     if (action === 'approve') {
@@ -248,10 +305,11 @@ export async function PATCH(request: Request) {
         // what to fix and guarantees a support ticket.
         return NextResponse.json(
           {
-            error: 'Add a short reason for the rejection — the customer sees it.',
+            error:
+              'Add a short reason for the rejection — the customer sees it.',
             field: 'note',
           },
-          { status: 400 },
+          { status: 400 }
         );
       }
 
@@ -284,7 +342,7 @@ export async function PATCH(request: Request) {
 
     return NextResponse.json(
       { error: "action must be 'approve' or 'reject'" },
-      { status: 400 },
+      { status: 400 }
     );
   } catch (err) {
     if (err instanceof NextResponse) return err;
@@ -292,12 +350,15 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     if (err instanceof ValidationError) {
-      return NextResponse.json({ error: err.message, field: err.field }, { status: 400 });
+      return NextResponse.json(
+        { error: err.message, field: err.field },
+        { status: 400 }
+      );
     }
     console.error('[super-admin/billing/payment-requests] PATCH failed:', err);
     return NextResponse.json(
       { error: 'Failed to review the payment request' },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }

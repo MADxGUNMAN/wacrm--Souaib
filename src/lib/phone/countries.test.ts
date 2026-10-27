@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  COUNTRIES,
   DEFAULT_COUNTRY,
   findCountryByCode,
   parsePhoneToCountryAndNational,
@@ -89,11 +90,79 @@ describe('countries phone validation & parsing', () => {
     expect(formatPhoneNumber(null)).toBe('');
     expect(formatPhoneNumber('123')).toBe('+123');
 
+    // Bare national numbers still use the default country
+    expect(formatPhoneNumber('9876543210')).toBe('+91 98765 43210');
+
     // Parts breakdown
     const parts = formatPhoneNumberParts('916359463987');
     expect(parts.dialCode).toBe('+91');
     expect(parts.nationalNumber).toBe('63594 63987');
     expect(parts.country?.code).toBe('IN');
     expect(parts.formatted).toBe('+91 63594 63987');
+  });
+});
+
+describe('international numbers are never re-labelled as the default country', () => {
+  it('has one entry per ISO code', () => {
+    const codes = COUNTRIES.map((c) => c.code);
+    expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  // Real values from a multi-country import that rendered as "+91 …"
+  it.each([
+    ['+98 71 5372 5951', 'IR', '+98'],
+    ['+98 83 3725 8666', 'IR', '+98'],
+    ['+211 92 246 6000', 'SS', '+211'],
+    ['+222 45 25 50 70', 'MR', '+222'],
+    ['+264 61 123 456', 'NA', '+264'],
+    ['+373 22 123 456', 'MD', '+373'],
+    ['+95 9 123 456 789', 'MM', '+95'],
+    ['+592 225 1234', 'GY', '+592'],
+    ['+382 20 123 456', 'ME', '+382'],
+    ['+389 2 312 3456', 'MK', '+389'],
+    ['+258 21 123 456', 'MZ', '+258'],
+    ['+856 21 123 456', 'LA', '+856'],
+    ['+268 2518 6997', 'SZ', '+268'],
+    ['+1 868 625 1234', 'TT', '+1868'],
+    ['+1 260-624-0622', 'US', '+1'],
+  ])('%s → %s', (phone, code, dial) => {
+    const parts = formatPhoneNumberParts(phone);
+    expect(parts.country?.code).toBe(code);
+    expect(parts.dialCode).toBe(dial);
+    expect(parts.formatted.startsWith(`${dial} `)).toBe(true);
+    // Every digit of the original survives
+    expect(parts.formatted.replace(/\D/g, '')).toBe(phone.replace(/\D/g, ''));
+  });
+
+  it('shows an unknown +code as written instead of prefixing +91', () => {
+    // +999 is unassigned
+    const parts = formatPhoneNumberParts('+999 1234 5678');
+    expect(parts.country).toBeNull();
+    expect(parts.formatted).toBe('+99912345678');
+  });
+
+  it('shows local numbers without a country code as written', () => {
+    expect(formatPhoneNumber('050 675 1025')).toBe('050 675 1025');
+    expect(formatPhoneNumber('04 333 8923')).toBe('04 333 8923');
+    expect(formatPhoneNumber('466 2615')).toBe('466 2615');
+  });
+
+  it('matches +CC exactly even when the default country differs', () => {
+    const res = parsePhoneToCountryAndNational('+987153725951', 'IN');
+    expect(res.country.code).toBe('IR');
+    expect(res.nationalNumber).toBe('7153725951');
+    expect(res.matched).toBe(true);
+  });
+
+  it('prefers an exact national length for digits-only wa_ids', () => {
+    expect(parsePhoneToCountryAndNational('987153725951').country.code).toBe(
+      'IR'
+    );
+    expect(parsePhoneToCountryAndNational('26651412347').country.code).toBe(
+      'LS'
+    );
+    expect(parsePhoneToCountryAndNational('919426046258').country.code).toBe(
+      'IN'
+    );
   });
 });

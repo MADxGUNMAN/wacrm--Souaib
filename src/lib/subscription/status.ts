@@ -53,6 +53,16 @@ export interface SubscriptionState {
   isBlocked: boolean;
   /** Grace days still being consumed past `endsAt`. */
   inGracePeriod: boolean;
+  /**
+   * Set while Razorpay is still collecting a due AutoPay charge
+   * (`accounts.billing_grace_ends_at`, written only by the
+   * `billing_refresh_account_grace` SQL function). Keeps the account
+   * unblocked until this instant. Null when there is no such grace,
+   * which is the case for every account without AutoPay.
+   *
+   * Shown to the customer as "payment pending", never as "active".
+   */
+  autopayGraceEndsAt: Date | null;
 
   /**
    * Non-null when a second window is queued behind the current one.
@@ -150,6 +160,7 @@ export function resolveSubscriptionState(
       daysLeft: null,
       isBlocked: false,
       inGracePeriod: false,
+      autopayGraceEndsAt: null,
       pendingWindow: EMPTY_PENDING,
     };
   }
@@ -168,6 +179,7 @@ export function resolveSubscriptionState(
       daysLeft: null,
       isBlocked: false,
       inGracePeriod: false,
+      autopayGraceEndsAt: null,
       pendingWindow: EMPTY_PENDING,
     };
   }
@@ -262,6 +274,7 @@ export function resolveSubscriptionState(
       daysLeft: null,
       isBlocked: false,
       inGracePeriod: false,
+      autopayGraceEndsAt: null,
       pendingWindow: EMPTY_PENDING,
     };
   }
@@ -270,9 +283,25 @@ export function resolveSubscriptionState(
   const windowOpen = msLeft > 0;
 
   const pastGrace = msLeft + graceMs <= 0;
-  const isBlocked = forcedExpired || (live === 'expired' && pastGrace);
+
+  // Razorpay AutoPay grace (D2). It can only relax a block the dates alone
+  // would impose while a charge is being collected; an operator's forced
+  // `expired` still wins. NULL for every account without AutoPay, which
+  // keeps this function's result identical to before for them.
+  const autopayGraceEnd = toDate(row?.billing_grace_ends_at);
+  const autopayGraceOpen =
+    !forcedExpired &&
+    live === 'expired' &&
+    autopayGraceEnd !== null &&
+    autopayGraceEnd.getTime() > nowMs;
+
+  const isBlocked =
+    forcedExpired || (live === 'expired' && pastGrace && !autopayGraceOpen);
   const inGracePeriod =
-    !forcedExpired && live === 'expired' && !windowOpen && !pastGrace;
+    !forcedExpired &&
+    live === 'expired' &&
+    !windowOpen &&
+    (!pastGrace || autopayGraceOpen);
 
   return {
     status: live,
@@ -284,6 +313,7 @@ export function resolveSubscriptionState(
     daysLeft: Math.max(0, Math.ceil(msLeft / MS_PER_DAY)),
     isBlocked,
     inGracePeriod,
+    autopayGraceEndsAt: autopayGraceOpen ? autopayGraceEnd : null,
     pendingWindow,
   };
 }

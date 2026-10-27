@@ -28,9 +28,19 @@ import type {
   IntegrationStep,
   IntegrationFAQ,
 } from '@/types/super-admin';
+import {
+  resolveSheetsContent,
+  type SheetsPageContent,
+} from '@/lib/cms/google-sheets-content';
+import { SheetsContentEditor } from './sheets-content-editor';
 
 export default function GoogleSheetsCMSEditorPage() {
   const [page, setPage] = useState<IntegrationPage | null>(null);
+  // integration_pages.content (Page Copy tab), resolved over the defaults
+  // so every input shows what the public page renders.
+  const [content, setContent] = useState<SheetsPageContent>(() =>
+    resolveSheetsContent(null)
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('landing');
@@ -44,6 +54,7 @@ export default function GoogleSheetsCMSEditorPage() {
         if (!res.ok) throw new Error('Failed to load integration page');
         const data = await res.json();
         setPage(data.page);
+        setContent(resolveSheetsContent(data.page?.content));
       } catch (err) {
         toast.error((err as Error).message);
       } finally {
@@ -62,7 +73,7 @@ export default function GoogleSheetsCMSEditorPage() {
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(page),
+          body: JSON.stringify({ ...page, content }),
         }
       );
       if (!res.ok) {
@@ -273,6 +284,10 @@ export default function GoogleSheetsCMSEditorPage() {
           <TabsTrigger value="landing" className="gap-2">
             <Layers className="h-4 w-4" />
             Landing & Overview
+          </TabsTrigger>
+          <TabsTrigger value="copy" className="gap-2">
+            <Sparkles className="h-4 w-4" />
+            Page Copy
           </TabsTrigger>
           <TabsTrigger value="privacy" className="gap-2">
             <Shield className="h-4 w-4" />
@@ -597,6 +612,11 @@ export default function GoogleSheetsCMSEditorPage() {
               ))}
             </div>
           </div>
+        </TabsContent>
+
+        {/* TAB: PAGE COPY (integration_pages.content) */}
+        <TabsContent value="copy" className="space-y-6">
+          <SheetsContentEditor content={content} onChange={setContent} />
         </TabsContent>
 
         {/* TAB 2: PRIVACY POLICY */}

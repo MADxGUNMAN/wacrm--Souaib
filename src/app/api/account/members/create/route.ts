@@ -79,6 +79,8 @@ export async function POST(request: Request) {
         // dropped on member creation.
         settings_alerts: Boolean(p.settings_alerts ?? false),
         settings_opt_out: Boolean(p.settings_opt_out ?? true),
+        settings_live_chat: Boolean(p.settings_live_chat ?? true),
+        settings_ai_connectors: Boolean(p.settings_ai_connectors ?? true),
       };
     }
 

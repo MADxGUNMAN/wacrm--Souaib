@@ -1,18 +1,23 @@
 import {
   Coins,
   CreditCard,
+  Headset,
   KeyRound,
   LayoutGrid,
   Palette,
   Puzzle,
   Shield,
   Smartphone,
+  Sparkles,
   Tags,
   User,
   UsersRound,
   Zap,
   BellRing,
   BellOff,
+  Blocks,
+  Database,
+  MessagesSquare,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -62,6 +67,16 @@ export const SETTINGS_SECTIONS = [
   // the broken key `settings_opt_in-out` and never match the stored
   // permission. 'opt-out' derives `settings_opt_out`.
   'opt-out',
+  // Live chat with the Replai support team. Same one-hyphen rule as
+  // above: 'live-chat' derives `settings_live_chat`. Deliberately NOT in
+  // OWNER_ONLY_SETTINGS_SECTIONS — the person who hits a problem is often
+  // not the owner, and routing every support question through one would
+  // defeat the point.
+  'live-chat',
+  // Connect Claude / ChatGPT. One hyphen → derives `settings_ai_connectors`.
+  // Must stay 'ai-connectors': the connector's tool errors and emails link
+  // to /settings?tab=ai-connectors (SETTINGS_PATH in lib/ai-connector/policy).
+  'ai-connectors',
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
@@ -74,7 +89,24 @@ export interface SectionMeta {
   label: string;
   icon: LucideIcon;
   group: 'top' | 'account' | 'workspace';
+  /** Workspace sections only: the sub-menu they sit under in the rail. */
+  subgroup?: WorkspaceSubgroup;
 }
+
+/**
+ * Sub-menus inside the Workspace group, in rail order. A sub-menu with a
+ * single visible item renders as a plain link (no one-item folders).
+ */
+export const WORKSPACE_SUBGROUPS = [
+  { id: 'billing', icon: CreditCard },
+  { id: 'messaging', icon: MessagesSquare },
+  { id: 'crm', icon: Database },
+  { id: 'team', icon: UsersRound },
+  { id: 'developers', icon: Blocks },
+  { id: 'support', icon: Headset },
+] as const satisfies readonly { id: string; icon: LucideIcon }[];
+
+export type WorkspaceSubgroup = (typeof WORKSPACE_SUBGROUPS)[number]['id'];
 
 export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   overview: {
@@ -108,55 +140,84 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
     label: 'Billing & plan',
     icon: CreditCard,
     group: 'workspace',
+    subgroup: 'billing',
   },
   whatsapp: {
     id: 'whatsapp',
     label: 'WhatsApp',
     icon: Smartphone,
     group: 'workspace',
+    subgroup: 'messaging',
   },
   'quick-replies': {
     id: 'quick-replies',
     label: 'Quick replies',
     icon: Zap,
     group: 'workspace',
+    subgroup: 'messaging',
   },
   fields: {
     id: 'fields',
     label: 'Fields & tags',
     icon: Tags,
     group: 'workspace',
+    subgroup: 'crm',
   },
   deals: {
     id: 'deals',
     label: 'Deals & currency',
     icon: Coins,
     group: 'workspace',
+    subgroup: 'crm',
   },
   members: {
     id: 'members',
     label: 'Team members',
     icon: UsersRound,
     group: 'workspace',
+    subgroup: 'team',
   },
-  api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
+  api: {
+    id: 'api',
+    label: 'API keys',
+    icon: KeyRound,
+    group: 'workspace',
+    subgroup: 'developers',
+  },
   integrations: {
     id: 'integrations',
     label: 'App integrations',
     icon: Puzzle,
     group: 'workspace',
+    subgroup: 'developers',
   },
   alerts: {
     id: 'alerts',
     label: 'Usage alerts',
     icon: BellRing,
     group: 'workspace',
+    subgroup: 'billing',
   },
   'opt-out': {
     id: 'opt-out',
     label: 'Opt-in / opt-out',
     icon: BellOff,
     group: 'workspace',
+    subgroup: 'messaging',
+  },
+  'live-chat': {
+    id: 'live-chat',
+    label: 'Live chat',
+    icon: Headset,
+    group: 'workspace',
+    subgroup: 'support',
+  },
+  'ai-connectors': {
+    id: 'ai-connectors',
+    label: 'AI connectors',
+    icon: Sparkles,
+    group: 'workspace',
+    subgroup: 'developers',
   },
 };
 

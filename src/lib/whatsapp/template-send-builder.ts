@@ -82,6 +82,19 @@ export interface SendTimeParams {
   /** Alternative: send the media by Meta media id (from prior upload). */
   headerMediaId?: string;
   /**
+   * The name the recipient sees on a DOCUMENT header, e.g. `ORD-5074.pdf`.
+   *
+   * Only meaningful for a document header — Meta rejects `filename` on an
+   * image or video parameter, so it is ignored for those.
+   *
+   * Optional, and usually unnecessary: when omitted, the filename is
+   * derived from the media URL's last path segment. Without either,
+   * WhatsApp labels the attachment "Untitled" (older clients use the
+   * template's body text, which is worse), so there is no reason to ever
+   * send a document header with no name attached.
+   */
+  headerDocumentFilename?: string;
+  /**
    * Per-button overrides keyed by the button's index in the
    * template's `buttons` array. Used for URL buttons with a {{1}}
    * suffix and for COPY_CODE buttons whose example you want to
@@ -252,7 +265,12 @@ type MetaSendParameter =
     }
   | { type: 'image'; image: { link?: string; id?: string } }
   | { type: 'video'; video: { link?: string; id?: string } }
-  | { type: 'document'; document: { link?: string; id?: string } }
+  // `filename` is document-only. Meta rejects it on image/video, which is
+  // why it is not on those two members above rather than being shared.
+  | {
+      type: 'document';
+      document: { link?: string; id?: string; filename?: string };
+    }
   | {
       type: 'location';
       location: {
@@ -384,16 +402,124 @@ function buildHeaderComponent(
     );
   }
   const mediaPayload: { link?: string; id?: string } = id ? { id } : { link };
+
+  if (headerType === 'document') {
+    // WITHOUT A FILENAME, WHATSAPP LABELS THE ATTACHMENT "Untitled".
+    //
+    // Meta's document parameter takes the same media object as a plain
+    // document message, which already sets `filename` (see
+    // sendMediaMessage in meta-api.ts) — the template path simply never
+    // did, so every templated invoice arrived nameless. Some clients go
+    // further and name the saved file after the template's entire body
+    // text.
+    //
+    // Derived from the URL when the caller says nothing, because the last
+    // path segment is almost always the right answer and a caller should
+    // not have to repeat `ORD-5074.pdf` twice in one request to get it.
+    // Derived ONLY when sending by link. With a media id the bytes come
+    // from Meta's store, and `link` here is just the template's stored
+    // default — naming the attachment after a file we are not sending
+    // would be confidently wrong.
+    const filename =
+      normalizeDocumentFilename(params.headerDocumentFilename) ||
+      (id ? '' : documentFilenameFromUrl(link));
+
+    return {
+      type: 'header',
+      parameters: [
+        {
+          type: 'document',
+          document: filename ? { ...mediaPayload, filename } : mediaPayload,
+        },
+      ],
+    };
+  }
+
   return {
     type: 'header',
     parameters: [
       headerType === 'image'
         ? { type: 'image', image: mediaPayload }
-        : headerType === 'video'
-          ? { type: 'video', video: mediaPayload }
-          : { type: 'document', document: mediaPayload },
+        : { type: 'video', video: mediaPayload },
     ],
   };
+}
+
+/** Longest filename we will send. Meta truncates well beyond this. */
+const MAX_DOCUMENT_FILENAME = 240;
+
+/**
+ * Clean a caller-supplied document filename.
+ *
+ * Strips any directory component and control characters: the value is
+ * shown as a filename and may be used by the recipient's client when
+ * saving, so a path separator in it is at best confusing and at worst a
+ * traversal attempt against whatever writes the file.
+ *
+ * Returns '' for anything unusable, so the caller can fall back.
+ */
+export function normalizeDocumentFilename(value: unknown): string {
+  if (typeof value !== 'string') return '';
+
+  const withoutPath = value
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()!
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim();
+
+  if (!withoutPath || withoutPath === '.' || withoutPath === '..') return '';
+  return withoutPath.slice(0, MAX_DOCUMENT_FILENAME);
+}
+
+/**
+ * Derive a document filename from its URL.
+ *
+ * Takes the last path segment and percent-decodes it, so
+ * `.../orders/ORD%205074.pdf?v=2` becomes `ORD 5074.pdf`. Query strings
+ * and fragments are dropped — they are not part of the name.
+ *
+ * Returns '' when the URL has no file-like final segment. Sending a
+ * bare directory name, or a cache-busting hash, would be worse than
+ * letting WhatsApp fall back: a wrong name looks deliberate.
+ */
+export function documentFilenameFromUrl(url: string | undefined): string {
+  if (!url) return '';
+
+  // Strip query and fragment before splitting, so `?v=2` never lands in
+  // the name. Parsed leniently: this runs on a value that has already
+  // been accepted for sending, and a URL edge case must not throw here.
+  let path: string;
+  try {
+    // Parsed, not split: `new URL(...).pathname` on `https://x.test`
+    // gives '/', whereas naive splitting yields the HOST — which
+    // contains a dot and so passes the extension check below as
+    // "x.test". A hostname is not a filename.
+    path = new URL(url).pathname;
+  } catch {
+    // Relative or malformed. Treat the whole value as a path and drop the
+    // query and fragment by hand.
+    path = url.split('#')[0]!.split('?')[0]!;
+  }
+
+  const lastSegment = path.split('/').filter(Boolean).pop() ?? '';
+  if (!lastSegment) return '';
+
+  let decoded = lastSegment;
+  try {
+    decoded = decodeURIComponent(lastSegment);
+  } catch {
+    // Malformed percent-encoding — use the raw segment rather than
+    // losing the name entirely.
+  }
+
+  const cleaned = normalizeDocumentFilename(decoded);
+  // Require an extension. A segment with no dot is usually a route or an
+  // id, not a filename, and `ORD-5074` saved without `.pdf` will not open
+  // by double-click on most systems.
+  if (!/\.[A-Za-z0-9]{1,12}$/.test(cleaned)) return '';
+  return cleaned;
 }
 
 function buildBodyComponent(
@@ -627,6 +753,11 @@ export function buildCarouselSendComponents(
       );
     }
     const media: { link?: string; id?: string } = id ? { id } : { link };
+    // Same "Untitled" trap as the single-header path. Derived only — a
+    // carousel of documents is rare enough that a per-card filename
+    // override would be more surface than it earns.
+    const cardFilename =
+      format === 'DOCUMENT' && !id ? documentFilenameFromUrl(link) : '';
     components.push({
       type: 'header',
       parameters: [
@@ -634,7 +765,12 @@ export function buildCarouselSendComponents(
           ? { type: 'image', image: media }
           : format === 'VIDEO'
             ? { type: 'video', video: media }
-            : { type: 'document', document: media },
+            : {
+                type: 'document',
+                document: cardFilename
+                  ? { ...media, filename: cardFilename }
+                  : media,
+              },
       ],
     });
 

@@ -18,6 +18,12 @@
 // ============================================================
 
 import { supabaseAdmin } from '@/lib/auth/admin-client';
+import {
+  GLOBAL_REGION,
+  isGlobalRegion,
+  mergeRegionSettings,
+  regionLabel,
+} from '@/lib/billing/pricing/regions';
 import { addDuration, resolveCycleDuration } from './status';
 import { toAmount, toNullableAmount } from './plans';
 import type {
@@ -29,6 +35,7 @@ import type {
   CustomerPlanActivity,
   PaymentRequest,
   PlansBundle,
+  PricingRegionResolution,
   PublicSubscriptionSettings,
   SelectedPlanSummary,
   SubscriptionEventType,
@@ -99,6 +106,16 @@ export const FALLBACK_SETTINGS: PublicSubscriptionSettings = {
   upcoming_unpaid_label: 'Not paid',
   pay_now_label: 'Pay now',
   change_plan_label: 'Change plan',
+  // Razorpay defaults. 'manual_upi' keeps a database without the
+  // migration on the existing flow.
+  payment_provider: 'manual_upi',
+  autopay_grace_days: 3,
+  razorpay_checkout_name: null,
+  razorpay_checkout_description: null,
+  autopay_consent_template: null,
+  autopay_defer_summary_template: null,
+  autopay_immediate_summary_template: null,
+  autopay_cancel_note: null,
 };
 
 // ------------------------------------------------------------
@@ -160,12 +177,79 @@ export async function getGateConfig(): Promise<SubscriptionGateConfig> {
   };
 }
 
+/** The stored row of one country region, or null. Never throws. */
+export async function getPricingRegionRow(code: string): Promise<{
+  code: string;
+  currency: string | null;
+  is_enabled: boolean;
+  settings: Record<string, unknown>;
+} | null> {
+  if (isGlobalRegion(code)) return null;
+  const admin = supabaseAdmin();
+  const { data, error } = await admin
+    .from('pricing_regions')
+    .select('code, currency, is_enabled, settings')
+    .eq('code', code)
+    .maybeSingle();
+  if (error) {
+    console.error('[subscription] pricing region read failed:', error.message);
+    return null;
+  }
+  if (!data) return null;
+  const row = data as Record<string, unknown>;
+  return {
+    code: String(row.code),
+    currency: row.currency ? String(row.currency).trim().toUpperCase() : null,
+    is_enabled: Boolean(row.is_enabled),
+    settings:
+      row.settings && typeof row.settings === 'object'
+        ? (row.settings as Record<string, unknown>)
+        : {},
+  };
+}
+
+/**
+ * Effective settings for a pricing region. Global returns exactly
+ * {@link getSubscriptionSettings}; a country layers its copy overrides
+ * and currency on top (blank overrides keep the Global wording).
+ * `currency` overrides the stored one, for callers that already resolved
+ * the region.
+ */
+export async function getRegionSettings(
+  region: string = GLOBAL_REGION,
+  currency?: string
+): Promise<PublicSubscriptionSettings> {
+  if (isGlobalRegion(region)) return getSubscriptionSettings();
+  const [global, row] = await Promise.all([
+    getSubscriptionSettings(),
+    getPricingRegionRow(region),
+  ]);
+  return mergeRegionSettings(
+    global,
+    row?.settings ?? {},
+    currency || row?.currency || global.currency
+  );
+}
+
 // ------------------------------------------------------------
 // Catalogue
 // ------------------------------------------------------------
 
-function normaliseCycle(row: Record<string, unknown>): BillingCycle {
+/**
+ * Customer visibility of a cycle row. Country cycles always store
+ * `is_visible = false` (so code without region support never shows them)
+ * and carry their real visibility in `is_visible_in_region`.
+ */
+export function cycleRowVisible(row: Record<string, unknown>): boolean {
+  const region = String(row.region ?? GLOBAL_REGION);
+  return region === GLOBAL_REGION
+    ? Boolean(row.is_visible)
+    : Boolean(row.is_visible_in_region);
+}
+
+export function normaliseCycle(row: Record<string, unknown>): BillingCycle {
   return {
+    region: String(row.region ?? GLOBAL_REGION),
     id: String(row.id),
     cycle_key: String(row.cycle_key),
     label: String(row.label),
@@ -176,7 +260,7 @@ function normaliseCycle(row: Record<string, unknown>): BillingCycle {
     is_default: Boolean(row.is_default),
     is_recommended: Boolean(row.is_recommended),
     recommended_label: (row.recommended_label as string | null) ?? null,
-    is_visible: Boolean(row.is_visible),
+    is_visible: cycleRowVisible(row),
     position: Number(row.position ?? 0),
     created_at: String(row.created_at ?? ''),
     updated_at: String(row.updated_at ?? ''),
@@ -206,20 +290,34 @@ function normalisePrice(row: Record<string, unknown>): SubscriptionPlanPrice {
  * server-only.
  */
 export async function getPlansBundle(
-  options: { includeHidden?: boolean } = {}
+  options: {
+    includeHidden?: boolean;
+    /** 'global' (default) or a country code. Cycles never mix regions. */
+    region?: string;
+    /** Currency of an already-resolved region; else the stored one. */
+    currency?: string;
+  } = {}
 ): Promise<PlansBundle> {
   const { includeHidden = false } = options;
+  const region = options.region || GLOBAL_REGION;
+  const isGlobal = isGlobalRegion(region);
   const admin = supabaseAdmin();
 
-  const [settings, cyclesRes, plansRes, pricesRes] = await Promise.all([
-    getSubscriptionSettings(),
-    includeHidden
-      ? admin.from('billing_cycles').select('*').order('position')
-      : admin
-          .from('billing_cycles')
-          .select('*')
-          .eq('is_visible', true)
-          .order('position'),
+  let cyclesQuery = admin
+    .from('billing_cycles')
+    .select('*')
+    .eq('region', isGlobal ? GLOBAL_REGION : region);
+  if (!includeHidden) {
+    cyclesQuery = cyclesQuery.eq(
+      isGlobal ? 'is_visible' : 'is_visible_in_region',
+      true
+    );
+  }
+
+  const [settings, regionRow, cyclesRes, plansRes] = await Promise.all([
+    getRegionSettings(region, options.currency),
+    isGlobal ? Promise.resolve(null) : getPricingRegionRow(region),
+    cyclesQuery.order('position'),
     includeHidden
       ? admin.from('subscription_plans').select('*').order('position')
       : admin
@@ -227,8 +325,24 @@ export async function getPlansBundle(
           .select('*')
           .eq('is_visible', true)
           .order('position'),
-    admin.from('subscription_plan_prices').select('*'),
   ]);
+
+  const cycleIds = (cyclesRes.data ?? []).map((r) =>
+    String((r as Record<string, unknown>).id)
+  );
+  const pricesRes =
+    cycleIds.length > 0
+      ? await admin
+          .from('subscription_plan_prices')
+          .select('*')
+          .in('cycle_id', cycleIds)
+      : { data: [], error: null };
+
+  // Currency shown for the region. A country with no currency yet shows
+  // none rather than borrowing Global's, so the editor never implies INR.
+  const regionCurrency = isGlobal
+    ? settings.currency
+    : (options.currency ?? regionRow?.currency ?? '');
 
   if (cyclesRes.error) {
     console.error(
@@ -255,6 +369,12 @@ export async function getPlansBundle(
     prices: (pricesRes.data ?? []).map((r) =>
       normalisePrice(r as Record<string, unknown>)
     ),
+    region: {
+      code: isGlobal ? GLOBAL_REGION : region,
+      currency: regionCurrency,
+      label: regionLabel(region),
+      isGlobal,
+    },
   };
 }
 
@@ -271,7 +391,19 @@ export interface ResolvedQuote {
   cycleDurationDays: number | null;
   amount: number;
   currency: string;
+  /** Pricing region of the cycle ('global' or a country code). */
+  region: string;
 }
+
+/** The pricing a caller resolved for an account; Global when omitted. */
+export type QuotePricing = Pick<PricingRegionResolution, 'region' | 'currency'>;
+
+export const REGION_MISMATCH_MESSAGE =
+  'That billing term is not available for your workspace. Reload the page to see current prices.';
+
+/** The Global currency changed while a quote was being priced. */
+export const PRICES_CHANGED_MESSAGE =
+  'Prices were just updated. Reload the page to see current prices.';
 
 export class QuoteError extends Error {
   readonly status = 400 as const;
@@ -296,11 +428,21 @@ export class QuoteError extends Error {
  */
 export async function resolveQuote(
   planId: string,
-  cycleId: string
+  cycleId: string,
+  pricing?: QuotePricing
 ): Promise<ResolvedQuote> {
   const admin = supabaseAdmin();
+  const region = pricing?.region || GLOBAL_REGION;
 
-  const [planRes, cycleRes, priceRes, settings] = await Promise.all([
+  // Read sandwich (Global currency change, report section 12): the
+  // currency is read BEFORE the price (callers that pass `pricing` read it
+  // in getAccountPricingRegion) and re-read AFTER it below.
+  // fn_change_global_currency commits prices and currency at one instant,
+  // so currency-price-currency can never pair a new price with an old
+  // currency, or the reverse, without the two currency reads differing.
+  const settings = pricing?.currency ? null : await getSubscriptionSettings();
+
+  const [planRes, cycleRes, priceRes] = await Promise.all([
     admin
       .from('subscription_plans')
       .select('id, name, is_visible')
@@ -308,7 +450,9 @@ export async function resolveQuote(
       .maybeSingle(),
     admin
       .from('billing_cycles')
-      .select('id, label, months, duration_days, is_visible')
+      .select(
+        'id, label, months, duration_days, is_visible, region, is_visible_in_region'
+      )
       .eq('id', cycleId)
       .maybeSingle(),
     admin
@@ -317,7 +461,6 @@ export async function resolveQuote(
       .eq('plan_id', planId)
       .eq('cycle_id', cycleId)
       .maybeSingle(),
-    getSubscriptionSettings(),
   ]);
 
   const plan = planRes.data;
@@ -329,8 +472,13 @@ export async function resolveQuote(
   if (!plan || !plan.is_visible) {
     throw new QuoteError('That plan is not available');
   }
-  if (!cycle || !cycle.is_visible) {
+  if (!cycle || !cycleRowVisible(cycle as Record<string, unknown>)) {
     throw new QuoteError('That billing cycle is not available');
+  }
+  // Never price a cycle from another region: the customer would be billed
+  // in a currency, or at a price, they were not shown.
+  if (String(cycle.region ?? GLOBAL_REGION) !== region) {
+    throw new QuoteError(REGION_MISMATCH_MESSAGE);
   }
   if (!price || !price.is_visible) {
     throw new QuoteError(
@@ -348,6 +496,35 @@ export async function resolveQuote(
     );
   }
 
+  const currency = (
+    pricing?.currency ||
+    settings?.currency ||
+    'INR'
+  ).toUpperCase();
+
+  // Second half of the read sandwich. A direct read (not
+  // getSubscriptionSettings) keeps it to the one column it needs. A read
+  // error is logged and ignored: a transient blip must not block checkout,
+  // and the first read already paired this price with a currency.
+  if (isGlobalRegion(region)) {
+    const { data: after, error: afterErr } = await admin
+      .from('subscription_settings')
+      .select('currency')
+      .limit(1)
+      .maybeSingle();
+    if (afterErr) {
+      console.error(
+        '[subscription] currency re-read failed:',
+        afterErr.message
+      );
+    } else {
+      const now = (after as { currency?: string | null } | null)?.currency;
+      if (now && now.trim().toUpperCase() !== currency) {
+        throw new QuoteError(PRICES_CHANGED_MESSAGE);
+      }
+    }
+  }
+
   return {
     planId: plan.id,
     planName: plan.name,
@@ -357,7 +534,8 @@ export async function resolveQuote(
     cycleDurationDays:
       cycle.duration_days == null ? null : Number(cycle.duration_days),
     amount,
-    currency: settings.currency || 'INR',
+    currency,
+    region,
   };
 }
 
@@ -384,7 +562,7 @@ export function previewQuoteWindow(
 // `string`-typed variable collapses that inference to GenericStringError
 // and the result is no longer assignable to AccountSubscriptionRow.
 const ACCOUNT_SUBSCRIPTION_COLUMNS =
-  'subscription_status, trial_started_at, trial_ends_at, subscription_plan_id, subscription_plan_name, subscription_cycle_label, subscription_started_at, subscription_ends_at, subscription_note, selected_plan_id, selected_cycle_id, plan_selected_at, plan_selection_required' as const;
+  'subscription_status, trial_started_at, trial_ends_at, subscription_plan_id, subscription_plan_name, subscription_cycle_label, subscription_started_at, subscription_ends_at, subscription_note, selected_plan_id, selected_cycle_id, plan_selected_at, plan_selection_required, billing_grace_ends_at' as const;
 
 export async function getAccountSubscription(
   accountId: string
@@ -431,8 +609,10 @@ export class PlanSelectionError extends Error {
  * the caller renders "choose a plan" instead, which is the truth.
  */
 export async function getSelectedPlan(
-  accountId: string
+  accountId: string,
+  pricing?: QuotePricing
 ): Promise<SelectedPlanSummary | null> {
+  const region = pricing?.region || GLOBAL_REGION;
   const admin = supabaseAdmin();
 
   const { data: account } = await admin
@@ -454,7 +634,7 @@ export async function getSelectedPlan(
       .maybeSingle(),
     admin
       .from('billing_cycles')
-      .select('id, label, months, duration_days')
+      .select('id, label, months, duration_days, region')
       .eq('id', cycleId)
       .maybeSingle(),
     admin
@@ -469,8 +649,12 @@ export async function getSelectedPlan(
   // the row can also have been made invisible), or the pair was never
   // priced. Either way there is nothing to charge for.
   if (!plan || !cycle || !price || price.is_visible === false) return null;
+  // A choice made under another region (the owner's phone changed, or a
+  // country plan was switched off) cannot be paid at today's price.
+  if (String(cycle.region ?? GLOBAL_REGION) !== region) return null;
 
-  const settings = await getSubscriptionSettings();
+  const currency =
+    pricing?.currency || (await getSubscriptionSettings()).currency;
 
   return {
     planId: plan.id as string,
@@ -478,7 +662,7 @@ export async function getSelectedPlan(
     cycleId: cycle.id as string,
     cycleLabel: cycle.label as string,
     amount: toAmount(price.amount),
-    currency: settings.currency,
+    currency,
     selectedAt: (account?.plan_selected_at as string | null) ?? null,
   };
 }
@@ -503,9 +687,11 @@ export async function getSelectedPlan(
 export async function setSelectedPlan(
   accountId: string,
   planId: string,
-  cycleId: string
+  cycleId: string,
+  pricing?: QuotePricing
 ): Promise<SelectedPlanSummary> {
   const admin = supabaseAdmin();
+  const region = pricing?.region || GLOBAL_REGION;
 
   const [{ data: plan }, { data: cycle }, { data: price }] = await Promise.all([
     admin
@@ -515,7 +701,7 @@ export async function setSelectedPlan(
       .maybeSingle(),
     admin
       .from('billing_cycles')
-      .select('id, label, is_visible')
+      .select('id, label, is_visible, region, is_visible_in_region')
       .eq('id', cycleId)
       .maybeSingle(),
     admin
@@ -531,8 +717,11 @@ export async function setSelectedPlan(
   if (!plan || plan.is_visible === false) {
     throw new PlanSelectionError('That plan is not available.', 400);
   }
-  if (!cycle || cycle.is_visible === false) {
+  if (!cycle || !cycleRowVisible(cycle as Record<string, unknown>)) {
     throw new PlanSelectionError('That billing term is not available.', 400);
+  }
+  if (String(cycle.region ?? GLOBAL_REGION) !== region) {
+    throw new PlanSelectionError(REGION_MISMATCH_MESSAGE, 400);
   }
   if (!price || price.is_visible === false) {
     throw new PlanSelectionError(
@@ -559,7 +748,8 @@ export async function setSelectedPlan(
     );
   }
 
-  const settings = await getSubscriptionSettings();
+  const currency =
+    pricing?.currency || (await getSubscriptionSettings()).currency;
 
   return {
     planId: plan.id as string,
@@ -567,7 +757,7 @@ export async function setSelectedPlan(
     cycleId: cycle.id as string,
     cycleLabel: cycle.label as string,
     amount: toAmount(price.amount),
-    currency: settings.currency,
+    currency,
     selectedAt: new Date().toISOString(),
   };
 }
@@ -869,6 +1059,11 @@ export async function listCustomerPlanActivity(
   page: unknown = 1,
   pageSize: number = CUSTOMER_HISTORY_PAGE_SIZE
 ): Promise<CustomerHistoryPage<CustomerPlanActivity>> {
+  // AutoPay events are listed when they change what the customer has
+  // agreed to (set up, stopped, paused, cancelled, completed) or a refund.
+  // NOT shown: payments themselves (the AutoPay payments list has them),
+  // retries in progress, disputes, and internal checks such as
+  // `billing_anomaly`, which are operator information.
   const CUSTOMER_VISIBLE_EVENTS: SubscriptionEventType[] = [
     'trial_started',
     'trial_extended',
@@ -876,6 +1071,13 @@ export async function listCustomerPlanActivity(
     'subscription_extended',
     'subscription_revoked',
     'subscription_expired',
+    'autopay_authenticated',
+    'autopay_halted',
+    'autopay_paused',
+    'autopay_resumed',
+    'autopay_cancelled',
+    'autopay_completed',
+    'refund_processed',
   ];
 
   const admin = supabaseAdmin();
@@ -887,7 +1089,7 @@ export async function listCustomerPlanActivity(
     // Column list, not `*`. An added operator-only column must not
     // silently start shipping to customers.
     .select(
-      'id, event_type, plan_name, cycle_label, window_kind, duration_days, duration_months, ends_at, created_at',
+      'id, event_type, plan_name, cycle_label, window_kind, duration_days, duration_months, ends_at, created_at, billing_payment_id',
       { count: 'exact' }
     )
     .eq('account_id', accountId)
@@ -917,6 +1119,8 @@ export async function listCustomerPlanActivity(
           row.duration_months == null ? null : Number(row.duration_months),
         endsAt: (row.ends_at as string | null) ?? null,
         createdAt: String(row.created_at ?? ''),
+        // Only whether one exists; the id itself stays server-side.
+        billingLinked: row.billing_payment_id != null,
       };
     }),
     page: current,

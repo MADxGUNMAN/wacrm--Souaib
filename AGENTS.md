@@ -1,4 +1,5 @@
 <!-- BEGIN:nextjs-agent-rules -->
+
 # This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
@@ -76,9 +77,9 @@ warning is right. From `next/dist/server/lib/router-server.js`:
 ```js
 if (!res.getHeader('cache-control') && type === 'nextStaticFolder') {
   if (opts.dev && !isNextFont(pathname)) {
-    res.setHeader('Cache-Control', 'no-cache, must-revalidate')
+    res.setHeader('Cache-Control', 'no-cache, must-revalidate');
   } else {
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   }
 }
 ```
@@ -90,7 +91,7 @@ exemption Next deliberately keeps cacheable in dev. A well-meant
 `no-store` override therefore made things slightly worse while looking
 like a fix. Removed on 20 Aug 2026.
 
-Turbopack dev chunk names *are* hashed from the module group rather than
+Turbopack dev chunk names _are_ hashed from the module group rather than
 the contents, so a stale chunk making a newly-added export arrive
 `undefined` is a real failure mode — but the browser cache is not the
 lever. If you suspect it, hard-refresh (`Ctrl+Shift+R`) and check the
@@ -102,6 +103,7 @@ Inferring from the browser wasted an hour that one `Select-String` on this
 file would have closed.
 
 Other Next 16 specifics:
+
 - `middleware.ts` is now **`src/proxy.ts`** and must export `proxy`.
   It enforces the ban + subscription gate for pages AND `/api/*`
   (allowlist in `UNGATED_API_PREFIXES`).
@@ -148,8 +150,9 @@ $env:NEXT_DIST_DIR=".next-verify"; npm run build
 
 Bucket `replai-jc` (`us-east-1`), public-read via bucket policy so Meta
 can fetch media. `src/lib/storage/s3-client.ts` + `POST /api/storage/presign`
-+ `DELETE /api/storage/delete`; clients call
-`uploadAccountMedia(folder, file, { onProgress, customPath })`.
+
+- `DELETE /api/storage/delete`; clients call
+  `uploadAccountMedia(folder, file, { onProgress, customPath })`.
 
 **Uploads go browser → S3 directly, via a presigned PUT.** There is no
 proxy upload route any more (`/api/storage/upload` was deleted 20 Aug 2026).
@@ -222,7 +225,7 @@ Supabase project `dknolotutfiesuhbhmze`. Migrations in
 - Postgres has no `ALTER CHECK`: `DROP CONSTRAINT IF EXISTS` then
   `ADD CONSTRAINT` (pattern in migrations 010, 069, 075).
 - `accounts.owner_user_id` is **ON DELETE RESTRICT** — delete the
-  `accounts` row (cascades tenant data) *before* the `auth.users` row.
+  `accounts` row (cascades tenant data) _before_ the `auth.users` row.
 - Deleting a user **cascades** `contacts`, `tags`, `custom_fields`,
   `flows`, `automations`, `contact_notes` via their `user_id`. Before
   deleting anyone, check whether they authored rows inside an account you
@@ -358,7 +361,8 @@ Plan for WhatsApp-Web parity work: `docs/inbox-whatsapp-parity-plan.md`.
 
 ## 7. Production server
 
-`ssh -i "<path>/wp_crm.pem" ubuntu@54.237.169.69` — Ubuntu, ~900 MB RAM,
+`ssh -i "D:\Junkies Coder\Pm2 keys AWS\wp_crm.pem" ubuntu@13.202.236.134`
+(DNS of wacrm.junkiescoder.com; the old `54.237.169.69` times out) — Ubuntu, ~900 MB RAM,
 11 GB disk. Single Docker container `wacrm` from
 `ghcr.io/junkiescoder/wacrm:latest`, deployed by the master CI workflow.
 nginx terminates TLS on 80/443 and proxies to `127.0.0.1:3000`; certbot
@@ -398,7 +402,7 @@ sudo dmesg -T | grep -i oom-kill        # 900 MB box, worth checking
   with its reboot option commented out, so the box ran kernel
   `7.0.0-1006-aws` for 2.5 weeks with `1010` and `1011` installed on disk
   doing nothing. A kernel cannot be swapped while running, so that reads as
-  *patched* to a package audit while the running system is not.
+  _patched_ to a package audit while the running system is not.
   `deploy/unattended-upgrades-reboot.conf` →
   `/etc/apt/apt.conf.d/52unattended-upgrades-reboot` fixes it: reboot at
   **20:00 UTC**, and only on nights when one is required.
@@ -418,3 +422,49 @@ sudo dmesg -T | grep -i oom-kill        # 900 MB box, worth checking
     `unless-stopped` and nginx is `enabled` — all three verified. Downtime
     is 1-2 minutes, Meta retries webhook deliveries that fail, and a missed
     5-minute cron tick is already tolerated.
+
+---
+
+## 8. Billing provider: Razorpay AutoPay is LIVE for everyone (since 23 Oct 2026)
+
+On 23-10-2026 production was switched from manual UPI to Razorpay
+Subscriptions (AutoPay) for every account by ONE database change, at the
+owner's explicit request:
+
+```sql
+update subscription_settings set payment_provider = 'razorpay';
+```
+
+State at the switch: 1 `subscription_settings` row, 0 pending
+`payment_requests`, production `PROD_ENV` has `RAZORPAY_MODE=live`,
+`BILLING_ENV=prod`, live keys, and `RAZORPAY_LIVE_PILOT_ACCOUNT_IDS` empty.
+
+**To switch production back to manual UPI** (instant, no redeploy):
+
+```sql
+update subscription_settings set payment_provider = 'manual_upi';
+-- verify
+select payment_provider from subscription_settings;
+```
+
+What the rollback does and does not do:
+
+- Every production account gets the manual UPI QR flow again
+  (`/api/billing/payment-requests` and `/api/billing/upi-qr` stop returning
+  410 `manual_payments_retired`).
+- Existing AutoPay mandates keep running at Razorpay and keep charging.
+  Cancel them in Super-admin -> Payments -> Subscriptions or the Razorpay
+  Dashboard if they must stop.
+- devcrm/local are unaffected either way: test mode is decided by
+  `RAZORPAY_TEST_ALLOWED_ACCOUNT_IDS`, not by this flag.
+- Harder fallback: remove the live keys from `PROD_ENV` and redeploy; with
+  no Razorpay config every account resolves to `manual_upi`.
+
+How the purchase flow is chosen (`resolvePaymentProvider`,
+`src/lib/billing/razorpay/provider.ts`): no Razorpay config -> manual_upi;
+test mode -> test allowlist; live mode with a non-empty
+`RAZORPAY_LIVE_PILOT_ACCOUNT_IDS` -> only those accounts; live mode with an
+empty pilot list -> this DB flag. An empty pilot list does NOT by itself
+switch anyone to Razorpay. The database is shared by dev and production, so
+never flip this flag for a dev experiment; use `BILLING_PROVIDER_OVERRIDE`
+on dev instead. Runbook: `docs/billing-runbook.md` section 8.

@@ -48,6 +48,23 @@ export interface MemberPermissions {
    * useful context.
    */
   settings_opt_out?: boolean;
+  /**
+   * Live chat with the Replai support team.
+   *
+   * Absent means ALLOW, the usual default. Deliberate: the person who hits
+   * a problem is usually not the owner, and making them relay it through
+   * one defeats the point of having a support channel. An owner who wants
+   * to keep support conversations to themselves can still switch it off
+   * per member.
+   */
+  settings_live_chat?: boolean;
+  /**
+   * Settings → AI Connectors: connect Claude / ChatGPT to your OWN account
+   * and manage those connections. Absent means ALLOW, like live chat: it
+   * only governs a member's own connections, and the workspace AI policy
+   * (owner) is what limits what those connections may do.
+   */
+  settings_ai_connectors?: boolean;
 }
 
 export const DEFAULT_MEMBER_PERMISSIONS: MemberPermissions = {
@@ -67,6 +84,8 @@ export const DEFAULT_MEMBER_PERMISSIONS: MemberPermissions = {
   settings_api: false,
   settings_alerts: false,
   settings_opt_out: true,
+  settings_live_chat: true,
+  settings_ai_connectors: true,
 };
 
 export const PERMISSION_ITEMS: {
@@ -169,6 +188,18 @@ export const SETTINGS_SUB_ITEMS: {
     key: 'settings_opt_out',
     label: 'Opt-in / Opt-out',
     desc: 'View the STOP/START keywords and confirmation wording (owner-only to edit)',
+    defaultVal: true,
+  },
+  {
+    key: 'settings_live_chat',
+    label: 'Live Chat',
+    desc: 'Message the Replai support team and read the shared thread',
+    defaultVal: true,
+  },
+  {
+    key: 'settings_ai_connectors',
+    label: 'AI Connectors',
+    desc: 'Connect Claude and ChatGPT to their own account',
     defaultVal: true,
   },
 ];
@@ -458,7 +489,9 @@ export interface Conversation {
 export type NotificationType =
   | 'conversation_assigned'
   /** A message-usage threshold was crossed (migration 079). */
-  | 'usage_threshold';
+  | 'usage_threshold'
+  /** An AI app (Claude, ChatGPT) was connected or disconnected. */
+  | 'ai_connection';
 
 export interface Notification {
   id: string;
@@ -612,6 +645,12 @@ export interface Message {
    * badge in the inbox. Migration 033.
    */
   ai_generated?: boolean;
+  /**
+   * Set when a connected AI app (Claude / ChatGPT) sent this on a
+   * member's behalf through the AI connector. `sender_id` is still that
+   * member. Drives the "via Claude" badge. Migration 20261001000500.
+   */
+  via_ai?: { platform?: string; connection_id?: string } | null;
 }
 
 export type ReactionActor = 'customer' | 'agent';

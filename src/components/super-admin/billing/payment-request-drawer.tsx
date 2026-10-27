@@ -1,7 +1,7 @@
 'use client';
 
 // ============================================================
-// Payment review drawer — the screen where money becomes access.
+// Payment review drawer: the screen where money becomes access.
 //
 // Design priorities, in order:
 //  1. Make a mismatch impossible to miss. The expected and paid amounts
@@ -9,7 +9,10 @@
 //     approving an underpayment is the costly mistake here.
 //  2. Make the granted duration explicit BEFORE approving. The admin sees
 //     the exact end date they're about to hand out, not just "1 month".
-//  3. Require a reason on rejection — the customer reads it.
+//  3. Require a reason on rejection; the customer reads it.
+//
+// Rendered in the shared Sheet (focus trap, Escape, labelled title),
+// like the AutoPay drawer.
 // ============================================================
 
 import { useMemo, useState } from 'react';
@@ -31,10 +34,13 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { formatCurrency } from '@/lib/currency';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { formatMoneyMajor } from '@/lib/billing/money-format';
 import { addDuration } from '@/lib/subscription/status';
 import { cn } from '@/lib/utils';
 import type { AdminPaymentRequest } from '@/types/super-admin';
+import { accountStatusLabel } from './billing-labels';
+import { formatIst, StatusPill } from './razorpay-shared';
 
 type Action = 'approve' | 'reject';
 
@@ -44,35 +50,14 @@ interface Props {
   onReviewed: () => void | Promise<void>;
 }
 
+/** IST date and time, like every other billing screen. */
 function formatDateTime(value: string | null): string {
-  if (!value) return '—';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '—';
-  return new Intl.DateTimeFormat(undefined, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(d);
+  return formatIst(value, { time: true });
 }
 
 function formatDate(value: Date | string | null): string {
-  if (!value) return '—';
-  const d = typeof value === 'string' ? new Date(value) : value;
-  if (Number.isNaN(d.getTime())) return '—';
-  return new Intl.DateTimeFormat(undefined, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  }).format(d);
+  return formatIst(value);
 }
-
-const STATUS_STYLE: Record<AdminPaymentRequest['status'], string> = {
-  pending: 'bg-amber-50 text-amber-700',
-  approved: 'bg-green-50 text-green-700',
-  rejected: 'bg-red-50 text-red-700',
-};
 
 export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
   const [action, setAction] = useState<Action | null>(null);
@@ -142,7 +127,7 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
     if (!action) return;
 
     if (action === 'reject' && !note.trim()) {
-      setError('Add a reason — the customer sees this message.');
+      setError('Add a reason. The customer sees this message.');
       return;
     }
 
@@ -160,7 +145,8 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
         const days = Number(overrideDays);
         const months = Number(overrideMonths);
         if (Number.isFinite(days) && days > 0) body.durationDays = days;
-        else if (Number.isFinite(months) && months > 0) body.durationMonths = months;
+        else if (Number.isFinite(months) && months > 0)
+          body.durationMonths = months;
       }
 
       const res = await fetch('/api/super-admin/billing/payment-requests', {
@@ -185,37 +171,37 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
   };
 
   return (
-    <>
-      <div className="fixed inset-0 z-[100] bg-black/30" onClick={onClose} />
-
-      <div className="fixed inset-y-0 right-0 z-[110] flex w-full max-w-lg flex-col border-l border-slate-200 bg-white shadow-2xl">
+    <Sheet
+      open
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className="w-full gap-0 border-slate-200 bg-white p-0 text-slate-900 sm:max-w-lg data-[side=right]:sm:max-w-lg"
+      >
         {/* Header */}
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 p-6">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="truncate text-lg font-bold text-slate-900">
-                {request.plan_name_snapshot}
-              </h3>
-              <span
-                className={cn(
-                  'rounded-full px-2 py-0.5 text-[11px] font-medium capitalize',
-                  STATUS_STYLE[request.status],
-                )}
-              >
-                {request.status}
-              </span>
-            </div>
+            <SheetTitle className="flex items-center gap-2 text-lg font-bold text-slate-900">
+              <span className="truncate">{request.plan_name_snapshot}</span>
+              <StatusPill domain="manual" status={request.status} />
+            </SheetTitle>
             <p className="text-sm text-slate-500">
-              {request.cycle_label_snapshot} · {request.account_name ?? 'Unknown account'}
+              {request.cycle_label_snapshot} ·{' '}
+              {request.account_name ?? 'Unknown account'}
             </p>
           </div>
           <Button
             variant="ghost"
             size="icon"
             onClick={onClose}
+            aria-label="Close payment request"
             className="shrink-0 text-slate-400 hover:text-slate-900"
           >
-            <X className="h-5 w-5" />
+            <X className="h-5 w-5" aria-hidden />
           </Button>
         </div>
 
@@ -230,7 +216,7 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-xs text-slate-500">Plan price</p>
                 <p className="mt-1 text-lg font-bold text-slate-900">
-                  {formatCurrency(request.expected_amount, request.currency)}
+                  {formatMoneyMajor(request.expected_amount, request.currency)}
                 </p>
               </div>
               <div
@@ -238,17 +224,17 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
                   'rounded-xl border p-4',
                   request.amount_matches
                     ? 'border-green-200 bg-green-50'
-                    : 'border-red-200 bg-red-50',
+                    : 'border-red-200 bg-red-50'
                 )}
               >
                 <p className="text-xs text-slate-500">Customer paid</p>
                 <p
                   className={cn(
                     'mt-1 text-lg font-bold',
-                    request.amount_matches ? 'text-green-700' : 'text-red-700',
+                    request.amount_matches ? 'text-green-700' : 'text-red-700'
                   )}
                 >
-                  {formatCurrency(request.paid_amount, request.currency)}
+                  {formatMoneyMajor(request.paid_amount, request.currency)}
                 </p>
               </div>
             </div>
@@ -259,9 +245,9 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
                 <p className="text-sm text-red-700">
                   {request.amount_difference < 0 ? 'Underpaid' : 'Overpaid'} by{' '}
                   <span className="font-semibold">
-                    {formatCurrency(
+                    {formatMoneyMajor(
                       Math.abs(request.amount_difference),
-                      request.currency,
+                      request.currency
                     )}
                   </span>
                   . Verify against your bank statement before approving.
@@ -277,7 +263,9 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
             </p>
             <div className="divide-y divide-slate-100 rounded-xl border border-slate-200">
               <div className="flex items-center justify-between gap-3 p-3.5">
-                <span className="text-sm text-slate-500">UTR / Transaction ID</span>
+                <span className="text-sm text-slate-500">
+                  UTR / Transaction ID
+                </span>
                 <div className="flex min-w-0 items-center gap-2">
                   <code className="truncate font-mono text-sm font-medium text-slate-900 select-all">
                     {request.transaction_ref}
@@ -316,7 +304,11 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
                 />
               ) : null}
               {request.payer_bank ? (
-                <DetailRow icon={Building2} label="Bank" value={request.payer_bank} />
+                <DetailRow
+                  icon={Building2}
+                  label="Bank"
+                  value={request.payer_bank}
+                />
               ) : null}
               <DetailRow
                 icon={CalendarClock}
@@ -351,10 +343,15 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
               <p className="mt-2 text-xs text-slate-500">
                 Workspace status:{' '}
                 <span className="font-medium text-slate-700">
-                  {request.account_subscription_status ?? 'unknown'}
+                  {request.account_subscription_status
+                    ? accountStatusLabel(request.account_subscription_status)
+                    : 'Unknown'}
                 </span>
                 {request.account_subscription_ends_at ? (
-                  <> · ends {formatDate(request.account_subscription_ends_at)}</>
+                  <>
+                    {' '}
+                    · ends {formatDate(request.account_subscription_ends_at)}
+                  </>
                 ) : null}
               </p>
             </div>
@@ -380,14 +377,17 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
                 'rounded-xl border p-4',
                 request.status === 'approved'
                   ? 'border-green-200 bg-green-50'
-                  : 'border-red-200 bg-red-50',
+                  : 'border-red-200 bg-red-50'
               )}
             >
-              <p className="text-sm font-semibold text-slate-900 capitalize">
-                {request.status} on {formatDateTime(request.reviewed_at)}
+              <p className="text-sm font-semibold text-slate-900">
+                {request.status === 'approved' ? 'Approved' : 'Rejected'} on{' '}
+                {formatDateTime(request.reviewed_at)}
               </p>
               {request.review_note ? (
-                <p className="mt-1 text-sm text-slate-600">{request.review_note}</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {request.review_note}
+                </p>
               ) : null}
               {request.status === 'approved' && request.activated_until ? (
                 <p className="mt-2 text-sm text-slate-600">
@@ -418,7 +418,7 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
                 </p>
                 {preview.isExtension ? (
                   <p className="mt-1 text-xs text-slate-500">
-                    Existing time is preserved — the new window starts{' '}
+                    Existing time is preserved. The new window starts{' '}
                     {formatDate(preview.start)}.
                   </p>
                 ) : null}
@@ -428,7 +428,7 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
                 <p className="mb-1.5 text-xs font-medium text-slate-600">
                   Override duration{' '}
                   <span className="text-slate-400">
-                    (optional — defaults to the purchased cycle)
+                    (optional, defaults to the purchased cycle)
                   </span>
                 </p>
                 <div className="grid grid-cols-2 gap-2">
@@ -461,7 +461,8 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
 
               <div>
                 <p className="mb-1.5 text-xs font-medium text-slate-600">
-                  Internal note <span className="text-slate-400">(optional)</span>
+                  Internal note{' '}
+                  <span className="text-slate-400">(optional)</span>
                 </p>
                 <textarea
                   rows={2}
@@ -515,7 +516,7 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
                     'inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:opacity-60',
                     action === 'approve'
                       ? 'bg-green-600 hover:bg-green-700'
-                      : 'bg-red-600 hover:bg-red-700',
+                      : 'bg-red-600 hover:bg-red-700'
                   )}
                 >
                   {busy ? (
@@ -570,9 +571,17 @@ export function PaymentRequestDrawer({ request, onClose, onReviewed }: Props) {
               </div>
             )}
           </div>
-        ) : null}
-      </div>
-    </>
+        ) : (
+          // Phase 6: reviewed rows are history. Approve/Reject exist only
+          // for requests still pending (the server claim enforces it too).
+          <div className="shrink-0 border-t border-slate-200 bg-slate-50/80 p-4">
+            <p className="text-xs text-slate-500">
+              Read-only. This request has already been reviewed.
+            </p>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -601,7 +610,9 @@ function DetailRow({
           {value}
         </a>
       ) : (
-        <span className="truncate text-sm font-medium text-slate-900">{value}</span>
+        <span className="truncate text-sm font-medium text-slate-900">
+          {value}
+        </span>
       )}
     </div>
   );

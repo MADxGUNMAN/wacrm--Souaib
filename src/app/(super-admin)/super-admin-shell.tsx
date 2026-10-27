@@ -41,12 +41,14 @@ function SuperAdminShellInner({ children }: { children: React.ReactNode }) {
   return (
     <div
       data-mode="light"
+      // See dashboard-shell: <main> is the only scroll container.
+      data-app-shell
       className="fixed inset-0 flex overflow-hidden bg-slate-50 text-slate-900"
     >
       <SuperAdminSidebar open={sidebarOpen} onClose={closeSidebar} />
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <SuperAdminHeader onOpenSidebar={() => setSidebarOpen(true)} />
-        <main className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6">
+        <main className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6">
           {children}
         </main>
       </div>

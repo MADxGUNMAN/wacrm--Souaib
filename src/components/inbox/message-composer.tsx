@@ -52,7 +52,7 @@ import {
   STICKER_MAX_BYTES,
 } from '@/lib/storage/upload-media';
 import { inspectWebPFile } from '@/lib/storage/webp';
-import { ReplyQuote } from './reply-quote';
+import { ReplyDraftQuote, type QuotePreview } from './reply-quote';
 import { useTranslations } from 'next-intl';
 import {
   InteractiveBuilder,
@@ -68,6 +68,10 @@ import {
 } from './location-picker-dialog';
 import { EmojiPicker } from './emoji-picker/emoji-picker';
 import type { WhatsAppContactCard } from '@/lib/whatsapp/meta-api';
+import {
+  TEXT_MESSAGE_MAX,
+  MEDIA_CAPTION_MAX,
+} from '@/lib/whatsapp/content-types';
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind =
@@ -76,8 +80,7 @@ export type ComposerMediaKind =
 /** Supabase Storage bucket holding agent-sent chat attachments (migration 023). */
 export const CHAT_MEDIA_BUCKET = 'chat-media';
 
-/** Meta caps media captions at 1024 chars. Enforced here and in the send route. */
-export const MEDIA_CAPTION_MAX = 1024;
+export { TEXT_MESSAGE_MAX, MEDIA_CAPTION_MAX };
 
 /** Hard cap on a single voice recording so it can't blow the upload/
  *  transcode limits — auto-stops the recorder when reached. */
@@ -99,8 +102,8 @@ export interface SendMediaPayload {
 interface ReplyDraft {
   /** Internal UUID of the message being replied to — sent back through onSend. */
   id: string;
-  authorLabel: string;
-  preview: string;
+  /** What the "replying to" chip shows. Same shape as an in-bubble quote. */
+  quote: QuotePreview;
 }
 
 // Mirrors the chat-media bucket's allowed_mime_types (migration 023) for
@@ -196,13 +199,22 @@ export function MessageComposer({
     (emoji: string) => {
       const textarea = textareaRef.current;
       if (!textarea) {
-        setText((prev) => prev + emoji);
+        setText((prev) => {
+          const next = prev + emoji;
+          return next.slice(0, TEXT_MESSAGE_MAX);
+        });
         return;
       }
 
       const start = textarea.selectionStart ?? text.length;
       const end = textarea.selectionEnd ?? text.length;
       const nextText = text.slice(0, start) + emoji + text.slice(end);
+      if (nextText.length > TEXT_MESSAGE_MAX) {
+        toast.warning(
+          `Cannot add emoji: message is at the ${TEXT_MESSAGE_MAX.toLocaleString()}-character limit.`
+        );
+        return;
+      }
       setText(nextText);
 
       setTimeout(() => {
@@ -300,6 +312,13 @@ export function MessageComposer({
     const trimmed = text.trim();
     if (!trimmed || sending || sessionExpired) return;
 
+    if (trimmed.length > TEXT_MESSAGE_MAX) {
+      toast.error(
+        `Message exceeds WhatsApp's ${TEXT_MESSAGE_MAX.toLocaleString()}-character limit (${trimmed.length.toLocaleString()} characters).`
+      );
+      return;
+    }
+
     setSending(true);
     try {
       onSend(trimmed, replyTo?.id);
@@ -323,9 +342,30 @@ export function MessageComposer({
     [handleSend]
   );
 
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const pasted = e.clipboardData.getData('text');
+      if (!pasted) return;
+      const currentLen = textareaRef.current?.value.length ?? text.length;
+      const selectionLen =
+        (textareaRef.current?.selectionEnd ?? 0) -
+        (textareaRef.current?.selectionStart ?? 0);
+      const resultingLen = currentLen - selectionLen + pasted.length;
+      if (resultingLen > TEXT_MESSAGE_MAX) {
+        toast.warning(
+          `Pasted text exceeds WhatsApp's ${TEXT_MESSAGE_MAX.toLocaleString()}-character limit and was truncated.`
+        );
+      }
+    },
+    [text.length]
+  );
+
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const val = e.target.value;
+      let val = e.target.value;
+      if (val.length > TEXT_MESSAGE_MAX) {
+        val = val.slice(0, TEXT_MESSAGE_MAX);
+      }
       setText(val);
       adjustHeight();
       if (val.trim().length > 0) {
@@ -358,10 +398,16 @@ export function MessageComposer({
         }
         return;
       }
-      const draftText = typeof data.draft === 'string' ? data.draft.trim() : '';
+      let draftText = typeof data.draft === 'string' ? data.draft.trim() : '';
       if (!draftText) {
         toast.error("The assistant didn't return a reply.");
         return;
+      }
+      if (draftText.length > TEXT_MESSAGE_MAX) {
+        toast.warning(
+          `AI draft was truncated to WhatsApp's ${TEXT_MESSAGE_MAX.toLocaleString()}-character limit.`
+        );
+        draftText = draftText.slice(0, TEXT_MESSAGE_MAX);
       }
       setText(draftText);
       // Let the textarea grow to fit and drop the cursor at the end so
@@ -447,9 +493,17 @@ export function MessageComposer({
       const body = qr.content_text ?? '';
       // Separate the snippet from any existing draft with a newline so the
       // words don't run together ("Thanks" + "we'll…" → "Thankswe'll…").
-      setText((prev) =>
-        prev && !/\s$/.test(prev) ? `${prev}\n${body}` : `${prev}${body}`
-      );
+      setText((prev) => {
+        const next =
+          prev && !/\s$/.test(prev) ? `${prev}\n${body}` : `${prev}${body}`;
+        if (next.length > TEXT_MESSAGE_MAX) {
+          toast.warning(
+            `Quick reply was truncated to ${TEXT_MESSAGE_MAX.toLocaleString()} characters.`
+          );
+          return next.slice(0, TEXT_MESSAGE_MAX);
+        }
+        return next;
+      });
       requestAnimationFrame(() => {
         adjustHeight();
         const el = textareaRef.current;
@@ -704,11 +758,7 @@ export function MessageComposer({
     <div className="border-border bg-card border-t p-3">
       {replyTo && (
         <div className="mb-2">
-          <ReplyQuote
-            authorLabel={replyTo.authorLabel}
-            preview={replyTo.preview}
-            onDismiss={onClearReply}
-          />
+          <ReplyDraftQuote preview={replyTo.quote} onDismiss={onClearReply} />
         </div>
       )}
       {sessionExpired && (
@@ -942,6 +992,8 @@ export function MessageComposer({
             value={text}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            maxLength={TEXT_MESSAGE_MAX}
             placeholder={
               readOnly
                 ? t('readOnlyTitle')
@@ -967,7 +1019,12 @@ export function MessageComposer({
             size="sm"
             canAct={!readOnly}
             gateReason="send messages"
-            disabled={!text.trim() || sessionExpired || sending}
+            disabled={
+              !text.trim() ||
+              text.length > TEXT_MESSAGE_MAX ||
+              sessionExpired ||
+              sending
+            }
             onClick={handleSend}
             className="bg-primary hover:bg-primary/90 h-9 w-9 shrink-0 p-0 disabled:opacity-40"
           >
@@ -976,13 +1033,33 @@ export function MessageComposer({
         </div>
       )}
 
-      {/* Hint sits outside the flex row so its height doesn't push
-          `items-end` buttons below the textarea. Indented to line up
-          under the textarea left edge. */}
-      {!draft && !recording && !isFloating && (
-        <p className="text-muted-foreground mt-1 pl-[2.75rem] text-[10px]">
-          {t('draftHint')}
-        </p>
+      {/* Hint / Character counter */}
+      {!draft && !recording && (
+        <div className="mt-1 flex items-center justify-between px-1">
+          {!isFloating ? (
+            <p className="text-muted-foreground pl-[2.75rem] text-[10px]">
+              {t('draftHint')}
+            </p>
+          ) : (
+            <div />
+          )}
+          {text.length >= 3000 && (
+            <span
+              className={cn(
+                'ml-auto text-[10px] font-medium tabular-nums transition-colors',
+                text.length >= TEXT_MESSAGE_MAX
+                  ? 'text-destructive font-semibold'
+                  : text.length >= 3800
+                    ? 'text-amber-500'
+                    : 'text-muted-foreground'
+              )}
+              title={`${text.length} of ${TEXT_MESSAGE_MAX} characters`}
+            >
+              {text.length.toLocaleString()} /{' '}
+              {TEXT_MESSAGE_MAX.toLocaleString()}
+            </span>
+          )}
+        </div>
       )}
 
       {/* Interactive-message builder dialog. */}

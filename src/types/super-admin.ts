@@ -9,6 +9,13 @@
 // - CMS content types (site_settings, landing_sections, etc.)
 // ============================================================
 
+import type {
+  AmountKind,
+  BillingChannel,
+  EventClassification,
+  EventInitiator,
+  MoneyInvolved,
+} from '@/lib/billing/event-channel';
 import type { MemberPermissions } from '@/types';
 
 // ============================================================
@@ -383,6 +390,8 @@ export interface SiteSettings {
   header_links: NavLink[];
   footer_links: FooterColumn[];
   contact_notification_email: string | null;
+  /** Auth showcase, navbar CTAs, footer newsletter — see lib/cms/marketing-copy. */
+  marketing_copy?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -675,6 +684,116 @@ export interface SubscriberRow {
     /** Length of the queued window (`endsAt - startsAt`), not time until it ends. */
     durationDays: number;
   } | null;
+  /**
+   * The workspace's Razorpay AutoPay (live preferred over test, then the
+   * newest). `null` = none; `undefined` = the lookup failed, so unknown.
+   */
+  autopay?: SubscriberAutopay | null;
+  /**
+   * How the workspace has access. `undefined` = the lookup failed, so the
+   * UI says "Not recorded" rather than guessing.
+   */
+  accessVia?: SubscriberAccessVia;
+  /**
+   * Pricing this workspace sees and is charged in (localized pricing).
+   * `undefined` = the lookup failed, so the UI shows nothing rather than
+   * guessing Global.
+   */
+  pricingRegion?: SubscriberPricingRegion;
+}
+
+export interface SubscriberPricingRegion {
+  /** 'global' or an ISO alpha-2 country code. */
+  region: string;
+  currency: string;
+  /** Country detected from the owner's phone, if any. */
+  countryCode: string | null;
+  source: 'subscription' | 'phone' | 'fallback';
+  reason: string;
+  /** Plain-language reason for the tooltip. */
+  reasonText: string;
+  /**
+   * Currency the live AutoPay mandate is charged in, when the pricing is
+   * pinned by one. Differs from `currency` after a Global currency change.
+   */
+  mandateCurrency?: string | null;
+}
+
+/**
+ * How a workspace has (or last had) access, derived server-side by
+ * src/lib/billing/access-via.ts from the newest grant event.
+ */
+export interface SubscriberAccessVia {
+  kind:
+    | 'razorpay_autopay'
+    | 'manual_upi'
+    | 'admin_grant'
+    | 'trial'
+    | 'none'
+    | 'unknown';
+  /** False when access has lapsed: the UI reads "Last access: …". */
+  current: boolean;
+  /** When the grant was recorded. */
+  since: string | null;
+  detail: string | null;
+}
+
+/**
+ * One subscription_events row as GET /api/super-admin/billing/events
+ * returns it, with HOW it happened (`channel`) derived server-side by
+ * classifyBillingEvent (src/lib/billing/event-channel.ts).
+ */
+export interface BillingEventView {
+  id: string;
+  accountId: string;
+  accountName: string;
+  ownerEmail: string | null;
+  eventType: string;
+  channel: BillingChannel;
+  context: EventClassification['context'];
+  initiatedBy: EventInitiator;
+  moneyInvolved: MoneyInvolved;
+  amountKind: AmountKind;
+  /** Major units (NUMERIC). On autopay_* rows this is the plan price. */
+  amount: number | null;
+  /** Payment or subscription currency, else the request's, else INR. */
+  currency: string;
+  mode: 'test' | 'live' | null;
+  fromStatus: string | null;
+  toStatus: string | null;
+  endsAt: string | null;
+  previousEndsAt: string | null;
+  durationMonths: number | null;
+  durationDays: number | null;
+  windowKind: 'paid' | 'trial' | null;
+  planName: string | null;
+  cycleLabel: string | null;
+  note: string | null;
+  paymentRequestId: string | null;
+  billingSubscriptionId: string | null;
+  billingPaymentId: string | null;
+  providerSubscriptionId: string | null;
+  providerPaymentId: string | null;
+  /** payment_requests.transaction_ref of the linked manual payment. */
+  utr: string | null;
+  createdAt: string;
+}
+
+/** A Razorpay subscription summarised for the Subscribers tab (F6). */
+export interface SubscriberAutopay {
+  /** billing_subscriptions.id */
+  id: string;
+  mode: 'test' | 'live';
+  status: string;
+  paymentMethod: string | null;
+  /** billing_subscriptions.method_summary ("UPI te****@razorpay"). */
+  methodSummary?: Record<string, unknown> | null;
+  chargeAt: string | null;
+  amountMinor: number;
+  currency: string;
+  providerSubscriptionId: string | null;
+  /** Razorpay will charge on `chargeAt` unless someone cancels it. */
+  charging: boolean;
 }
 
 export interface SubscriberCounts {
@@ -735,6 +854,12 @@ export interface IntegrationPage {
   seo_meta_title: string;
   seo_meta_description: string;
   is_published: boolean;
+  /**
+   * Page-specific structured content, for pages whose sections don't fit
+   * the generic columns (e.g. /integrations/ai — see
+   * src/lib/cms/ai-integration-content.ts). `{}` for the others.
+   */
+  content?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }

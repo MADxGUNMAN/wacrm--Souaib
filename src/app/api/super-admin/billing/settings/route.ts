@@ -6,6 +6,10 @@
 //
 // Super admin only.
 //
+// The Global currency is NOT editable here once the row exists: it moves
+// only through /api/super-admin/billing/global-currency, which re-prices
+// every Global cycle at the same time (localized-pricing-report.md §12).
+//
 // Fields are WHITELISTED rather than spread from the request body. A
 // blind `.update(body)` would let a crafted request write `id`,
 // `created_at`, or any column added by a future migration — and on this
@@ -18,8 +22,17 @@
 import { NextResponse } from 'next/server';
 
 import { supabaseAdmin } from '@/lib/auth/admin-client';
+import {
+  applyRegionSettingsPatch,
+  isGlobalRegion,
+  parseRegionParam,
+  sanitizeRegionSettings,
+} from '@/lib/billing/pricing/regions';
 import { requireSuperAdmin } from '@/lib/super-admin/guard';
-import { normalisePlanFeatures, serialisePlanFeatures } from '@/lib/subscription/plans';
+import {
+  normalisePlanFeatures,
+  serialisePlanFeatures,
+} from '@/lib/subscription/plans';
 import { isValidUpiId } from '@/lib/subscription/upi';
 import { ValidationError } from '@/lib/subscription/validation';
 
@@ -121,10 +134,16 @@ function buildPatch(body: Record<string, unknown>): Record<string, unknown> {
     const value = raw === null ? null : String(raw).trim();
 
     if (REQUIRED_TEXT_FIELDS.has(field) && !value) {
-      throw new ValidationError(`${field.replace(/_/g, ' ')} cannot be empty`, field);
+      throw new ValidationError(
+        `${field.replace(/_/g, ' ')} cannot be empty`,
+        field
+      );
     }
     if (value && value.length > 2000) {
-      throw new ValidationError('That text is too long (max 2000 characters)', field);
+      throw new ValidationError(
+        'That text is too long (max 2000 characters)',
+        field
+      );
     }
     patch[field] = value === '' ? null : value;
   }
@@ -137,7 +156,7 @@ function buildPatch(body: Record<string, unknown>): Record<string, unknown> {
     if (!isValidUpiId(String(patch.upi_id))) {
       throw new ValidationError(
         'That does not look like a UPI ID. Expected something like name@bank.',
-        'upi_id',
+        'upi_id'
       );
     }
   }
@@ -145,7 +164,10 @@ function buildPatch(body: Record<string, unknown>): Record<string, unknown> {
   if ('currency' in patch && patch.currency) {
     const code = String(patch.currency).toUpperCase();
     if (!/^[A-Z]{3}$/.test(code)) {
-      throw new ValidationError('Currency must be a 3-letter code, e.g. INR', 'currency');
+      throw new ValidationError(
+        'Currency must be a 3-letter code, e.g. INR',
+        'currency'
+      );
     }
     patch.currency = code;
   }
@@ -160,7 +182,7 @@ function buildPatch(body: Record<string, unknown>): Record<string, unknown> {
     if (!Number.isInteger(n) || n < 0 || n > 3650) {
       throw new ValidationError(
         `${field.replace(/_/g, ' ')} must be a whole number between 0 and 3650`,
-        field,
+        field
       );
     }
     patch[field] = n;
@@ -172,11 +194,13 @@ function buildPatch(body: Record<string, unknown>): Record<string, unknown> {
   // serves both — a second format would mean a second parser to keep
   // in step for no gain.
   if ('custom_plan_features' in body) {
-    const features = serialisePlanFeatures(normalisePlanFeatures(body.custom_plan_features));
+    const features = serialisePlanFeatures(
+      normalisePlanFeatures(body.custom_plan_features)
+    );
     if (features.length > 40) {
       throw new ValidationError(
         'The custom card can list at most 40 features',
-        'custom_plan_features',
+        'custom_plan_features'
       );
     }
     patch.custom_plan_features = features;
@@ -185,9 +209,124 @@ function buildPatch(body: Record<string, unknown>): Record<string, unknown> {
   return patch;
 }
 
+// ------------------------------------------------------------
+// Localized pricing: ?region=<ISO alpha-2> edits a country's page copy,
+// stored as whitelisted overrides in `pricing_regions.settings`. Without
+// the parameter (or with region=global) both verbs behave exactly as
+// before. See docs/razopay/localized-pricing-report.md.
+// ------------------------------------------------------------
+
+function readRegion(request: Request): string | null {
+  return parseRegionParam(new URL(request.url).searchParams.get('region'));
+}
+
+function invalidRegion(): NextResponse {
+  return NextResponse.json(
+    { error: 'Unknown pricing region', field: 'region' },
+    { status: 400 }
+  );
+}
+
+async function readRegionRow(code: string) {
+  const { data, error } = await supabaseAdmin()
+    .from('pricing_regions')
+    .select('code, currency, is_enabled, settings')
+    .eq('code', code)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data as {
+    code: string;
+    currency: string | null;
+    is_enabled: boolean;
+    settings: Record<string, unknown> | null;
+  } | null;
+}
+
+async function getRegionSettingsResponse(code: string): Promise<NextResponse> {
+  const admin = supabaseAdmin();
+  const [{ data: global, error }, row] = await Promise.all([
+    admin.from('subscription_settings').select('*').limit(1).maybeSingle(),
+    readRegionRow(code),
+  ]);
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+  return NextResponse.json({
+    region: {
+      code,
+      currency: row?.currency?.trim().toUpperCase() ?? null,
+      is_enabled: row?.is_enabled ?? false,
+      configured: Boolean(row),
+    },
+    // Only this country's own overrides: the editor opens blank and shows
+    // the Global wording as placeholders.
+    settings: row?.settings ?? {},
+    global,
+  });
+}
+
+async function putRegionSettings(
+  code: string,
+  body: Record<string, unknown>,
+  userId: string
+): Promise<NextResponse> {
+  const row = await readRegionRow(code);
+  const patch = sanitizeRegionSettings(body, row?.currency ?? null);
+  if (
+    'upi_id' in patch &&
+    patch.upi_id &&
+    !isValidUpiId(String(patch.upi_id))
+  ) {
+    throw new ValidationError(
+      'That does not look like a UPI ID. Expected something like name@bank.',
+      'upi_id'
+    );
+  }
+  if (Object.keys(patch).length === 0) {
+    return NextResponse.json(
+      { error: 'No editable fields were supplied' },
+      { status: 400 }
+    );
+  }
+  const settings = applyRegionSettingsPatch(row?.settings ?? {}, patch);
+  const admin = supabaseAdmin();
+  const { data, error } = row
+    ? await admin
+        .from('pricing_regions')
+        .update({ settings, updated_by_user_id: userId })
+        .eq('code', code)
+        .select('code, currency, is_enabled, settings')
+        .single()
+    : await admin
+        .from('pricing_regions')
+        .insert({
+          code,
+          settings,
+          created_by_user_id: userId,
+          updated_by_user_id: userId,
+        })
+        .select('code, currency, is_enabled, settings')
+        .single();
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+  return NextResponse.json({
+    region: {
+      code,
+      currency: data.currency ?? null,
+      is_enabled: Boolean(data.is_enabled),
+      configured: true,
+    },
+    settings: data.settings ?? {},
+  });
+}
+
 export async function GET(request: Request) {
   try {
     await requireSuperAdmin(request);
+    const region = readRegion(request);
+    if (!region) return invalidRegion();
+    if (!isGlobalRegion(region)) return await getRegionSettingsResponse(region);
     const admin = supabaseAdmin();
 
     const { data, error } = await admin
@@ -205,23 +344,28 @@ export async function GET(request: Request) {
     if (err instanceof NextResponse) return err;
     return NextResponse.json(
       { error: 'Failed to load subscription settings' },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }
 
 export async function PUT(request: Request) {
   try {
-    await requireSuperAdmin(request);
+    const { userId } = await requireSuperAdmin(request);
+    const region = readRegion(request);
+    if (!region) return invalidRegion();
     const admin = supabaseAdmin();
 
     const body = (await request.json()) as Record<string, unknown>;
+    if (!isGlobalRegion(region)) {
+      return await putRegionSettings(region, body, userId);
+    }
     const patch = buildPatch(body);
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(
         { error: 'No editable fields were supplied' },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -231,9 +375,40 @@ export async function PUT(request: Request) {
     // instead of failing — the admin's edit becomes the initial row.
     const { data: existing } = await admin
       .from('subscription_settings')
-      .select('id')
+      .select('id, currency')
       .limit(1)
       .maybeSingle();
+
+    // The Global currency changes only through
+    // /api/super-admin/billing/global-currency, which re-prices every
+    // Global cycle in the same transaction. Changing it here would turn
+    // 990 INR into 990 USD. An unchanged value is dropped silently (the
+    // open settings form may still echo it).
+    if (existing && 'currency' in patch) {
+      const stored = String(
+        (existing as { currency?: string | null }).currency ?? ''
+      )
+        .trim()
+        .toUpperCase();
+      if (String(patch.currency ?? '').toUpperCase() !== stored) {
+        return NextResponse.json(
+          {
+            error:
+              'Change the Global currency from the Global header on Plans & prices, so every Global price is converted at the same time.',
+            code: 'use_global_currency_header',
+            field: 'currency',
+          },
+          { status: 409 }
+        );
+      }
+      delete patch.currency;
+      if (Object.keys(patch).length === 0) {
+        return NextResponse.json(
+          { error: 'No editable fields were supplied' },
+          { status: 400 }
+        );
+      }
+    }
 
     if (!existing) {
       const { data: inserted, error: insertErr } = await admin
@@ -265,13 +440,13 @@ export async function PUT(request: Request) {
     if (err instanceof ValidationError) {
       return NextResponse.json(
         { error: err.message, field: err.field },
-        { status: err.status },
+        { status: err.status }
       );
     }
     console.error('[super-admin/billing/settings] PUT failed:', err);
     return NextResponse.json(
       { error: 'Failed to update subscription settings' },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }

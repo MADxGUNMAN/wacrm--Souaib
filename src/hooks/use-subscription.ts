@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+import type { AutopayView } from '@/lib/billing/razorpay/view';
 import type { SubscriptionStatus } from '@/lib/subscription/types';
 
 export interface SubscriptionSnapshot {
@@ -30,6 +31,8 @@ export interface SubscriptionSnapshot {
     isExpired: boolean;
     isBlocked: boolean;
     inGracePeriod: boolean;
+    /** Set while Razorpay is still collecting a due AutoPay charge. */
+    autopayGraceEndsAt?: string | null;
     billingDisabled: boolean;
     daysLeft: number | null;
     endsAt: string | null;
@@ -67,6 +70,17 @@ export interface SubscriptionSnapshot {
   } | null;
   /** True while this account still owes us a plan choice before using the CRM. */
   planSelectionRequired: boolean;
+  /**
+   * Purchase flow for this account, decided by the server. Optional so an
+   * older server response still type-checks; absent means manual UPI.
+   */
+  paymentProvider?: 'manual_upi' | 'razorpay';
+  /** Razorpay AutoPay state (customer-safe projection), or null. */
+  autopay?: AutopayView | null;
+  /** Server-computed: may /upgrade-plan offer "Start with trial"? */
+  trialOfferVisible?: boolean;
+  /** "Cancel AutoPay?" dialog text, already filled. Null without AutoPay. */
+  autopayCancelNote?: string | null;
   copy: {
     trialBanner: string | null;
     trialBannerCta: string;
@@ -75,6 +89,8 @@ export interface SubscriptionSnapshot {
     expiredHeading: string | null;
     pendingReviewMessage: string | null;
     supportNote: string | null;
+    /** Set only once the Refund and Cancellation Policy is published. */
+    refundPolicyHref?: string | null;
     memberBlocked: {
       heading: string;
       body: string;
@@ -118,9 +134,16 @@ interface Store {
   data: SubscriptionSnapshot | null;
   loading: boolean;
   error: string | null;
+  /**
+   * True once the first load has finished, whatever the outcome (data,
+   * 401 or error). Lets a screen wait for the server's answer instead of
+   * rendering a default and then swapping it, e.g. the payment page
+   * choosing between manual UPI and Razorpay AutoPay.
+   */
+  loaded: boolean;
 }
 
-let store: Store = { data: null, loading: false, error: null };
+let store: Store = { data: null, loading: false, error: null, loaded: false };
 const listeners = new Set<() => void>();
 /** Shared in-flight request so N mounting components make one call. */
 let inFlight: Promise<void> | null = null;
@@ -151,22 +174,24 @@ async function load(): Promise<void> {
         // 401 is expected on the signed-out path (a redirect is already
         // in flight); don't surface it as an error banner.
         if (res.status === 401) {
-          setStore({ data: null, loading: false, error: null });
+          setStore({ data: null, loading: false, error: null, loaded: true });
           return;
         }
         const body = await res.json().catch(() => ({}));
         setStore({
           loading: false,
+          loaded: true,
           error: body?.error ?? 'Could not load subscription details',
         });
         return;
       }
 
       const data = (await res.json()) as SubscriptionSnapshot;
-      setStore({ data, loading: false, error: null });
+      setStore({ data, loading: false, error: null, loaded: true });
     } catch {
       setStore({
         loading: false,
+        loaded: true,
         error: 'Could not load subscription details',
       });
     } finally {
@@ -179,7 +204,7 @@ async function load(): Promise<void> {
 
 /** Clear the shared snapshot — call on sign-out so the next user starts clean. */
 export function resetSubscriptionStore(): void {
-  store = { data: null, loading: false, error: null };
+  store = { data: null, loading: false, error: null, loaded: false };
   inFlight = null;
   emit();
 }

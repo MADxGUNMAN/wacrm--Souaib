@@ -65,3 +65,12 @@ export interface ActivityItem {
   /** Optional deep-link for the whole row (not all items have a target). */
   href?: string
 }
+
+/** One cursor page of the activity feed (see loadActivityPage). */
+export interface ActivityPage {
+  items: ActivityItem[]
+  /** True when at least one older event exists. */
+  hasMore: boolean
+  /** Pass as `before` to load the next (older) page. */
+  nextCursor: string | null
+}

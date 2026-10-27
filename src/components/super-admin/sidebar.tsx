@@ -6,24 +6,31 @@ import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/use-auth';
 import { useBranding } from '@/hooks/use-branding';
+import { useSupportUnreadForAdmin } from '@/hooks/use-support-unread';
 import {
   Activity,
   Bell,
+  Building2,
+  Bug,
   ChevronDown,
   CreditCard,
   FileText,
-  Inbox,
+  Globe,
+  Headset,
   LayoutDashboard,
   LibraryBig,
   LifeBuoy,
   LogOut,
   Mail,
+  MessagesSquare,
   Newspaper,
+  Package,
   Send,
+  Server,
   Settings,
-  Table2,
+  SlidersHorizontal,
   Tag,
-  Users,
+  Wallet,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -39,6 +46,15 @@ interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
+  /**
+   * Which live count, if any, badges this item.
+   *
+   * A key rather than a number because `navGroups` is module-level static
+   * data — it cannot call a hook. The component resolves the key against
+   * counts it subscribes to itself, which keeps the nav declarative and
+   * makes adding a second badged item a one-word change.
+   */
+  badge?: 'supportUnread';
 }
 
 interface NavGroup {
@@ -48,76 +64,109 @@ interface NavGroup {
   items: NavItem[];
 }
 
-const dashboardItem: NavItem = {
-  href: '/super-admin',
-  label: 'Dashboard',
-  icon: LayoutDashboard,
-};
+// ─── How the nav is organised ────────────────────────────────
+//
+// By the job the operator is doing, not by which feature a page belongs
+// to:
+//
+//   top level   the two pages used every day — no click to reach them
+//   Billing     what customers pay: plans, payments, and the trial /
+//               renewal reminder emails that drive those payments
+//   Support     every inbox that needs a human reply, whichever channel
+//               it arrived through, with the Live chat settings last
+//   Website     the public marketing site and the audience it collects
+//   Product     content we ship to customers inside the product
+//   System      platform-wide events, health and configuration
+//
+// Items within a group run from most- to least-frequently used.
+
+const topItems: NavItem[] = [
+  { href: '/super-admin', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/super-admin/accounts', label: 'Accounts', icon: Building2 },
+];
 
 const navGroups: NavGroup[] = [
-  {
-    id: 'workspace',
-    label: 'Workspace',
-    icon: Users,
-    items: [{ href: '/super-admin/accounts', label: 'Accounts', icon: Users }],
-  },
   {
     id: 'billing',
     label: 'Billing',
     icon: CreditCard,
     items: [
-      { href: '/super-admin/payments', label: 'Payments', icon: CreditCard },
+      { href: '/super-admin/payments', label: 'Payments', icon: Wallet },
       { href: '/super-admin/plans', label: 'Plans & Pricing', icon: Tag },
+      // Trial and renewal reminders — they exist to turn trials into
+      // payments, so they sit with billing rather than with content.
+      { href: '/super-admin/auto-mail', label: 'Auto Mail', icon: Send },
     ],
   },
   {
-    id: 'content',
-    label: 'Content & Communication',
-    icon: FileText,
+    id: 'support',
+    label: 'Support',
+    icon: Headset,
+    items: [
+      {
+        href: '/super-admin/live-chat',
+        label: 'Live chat',
+        icon: MessagesSquare,
+        badge: 'supportUnread',
+      },
+      {
+        href: '/super-admin/contact-submissions',
+        // Public-website contact form submissions.
+        label: 'Inquiries',
+        icon: Mail,
+      },
+      {
+        href: '/super-admin/sheets-addon/reports',
+        label: 'Add-on reports',
+        icon: Bug,
+      },
+      // A sibling path, NOT /super-admin/live-chat/settings: isActive()
+      // treats every path under an href as that item, so a nested route
+      // would light up "Live chat" too whenever settings was open.
+      {
+        href: '/super-admin/live-chat-settings',
+        label: 'Chat settings',
+        icon: SlidersHorizontal,
+      },
+    ],
+  },
+  {
+    id: 'website',
+    label: 'Website',
+    icon: Globe,
     items: [
       { href: '/super-admin/cms', label: 'CMS & Landing', icon: FileText },
+      { href: '/super-admin/newsletter', label: 'Newsletter', icon: Newspaper },
+    ],
+  },
+  {
+    id: 'product',
+    label: 'Product content',
+    icon: Package,
+    items: [
       {
         href: '/super-admin/template-library',
         label: 'Template Library',
         icon: LibraryBig,
       },
       {
-        href: '/super-admin/contact-submissions',
-        label: 'Contact submissions',
-        icon: Mail,
-      },
-      { href: '/super-admin/auto-mail', label: 'Auto Mail', icon: Send },
-      { href: '/super-admin/newsletter', label: 'Newsletter', icon: Newspaper },
-    ],
-  },
-  {
-    id: 'sheets-addon',
-    label: 'Sheet Add-on',
-    icon: Table2,
-    items: [
-      {
         href: '/super-admin/sheets-addon/help',
-        label: 'Help Content',
+        label: 'Add-on help',
         icon: LifeBuoy,
       },
-      {
-        href: '/super-admin/sheets-addon/reports',
-        label: 'Issue Reports',
-        icon: Inbox,
-      },
     ],
   },
   {
-    id: 'platform',
-    label: 'Platform',
-    icon: Activity,
+    id: 'system',
+    label: 'System',
+    icon: Server,
     items: [
-      { href: '/super-admin/health', label: 'Health', icon: Activity },
       {
         href: '/super-admin/notifications',
         label: 'Notifications',
         icon: Bell,
       },
+      { href: '/super-admin/health', label: 'System health', icon: Activity },
       { href: '/super-admin/settings', label: 'Settings', icon: Settings },
     ],
   },
@@ -134,19 +183,25 @@ function SidebarLink({
   pathname,
   onNavigate,
   nested = false,
+  badgeCount = 0,
+  badgeLabel,
 }: {
   item: NavItem;
   pathname: string;
   onNavigate: () => void;
   nested?: boolean;
+  badgeCount?: number;
+  badgeLabel?: string;
 }) {
   const active = isActive(pathname, item.href);
   const Icon = item.icon;
+  const showBadge = badgeCount > 0;
 
   return (
     <Link
       href={item.href}
       onClick={onNavigate}
+      title={item.label}
       aria-current={active ? 'page' : undefined}
       className={cn(
         'flex items-center gap-3 rounded-lg text-sm font-medium transition-colors duration-200',
@@ -158,7 +213,19 @@ function SidebarLink({
     >
       <Icon className={cn('h-4 w-4 shrink-0', active && 'text-[#159947]')} />
       <span className="min-w-0 flex-1 truncate">{item.label}</span>
-      {active && nested ? (
+      {/* The count stays visible on the active page, unlike the tenant
+          Inbox dot. Being on the Live chat page does not mean you have read
+          every waiting thread — it is a list, and the number is what tells
+          you how much of it still needs you. */}
+      {showBadge ? (
+        <span
+          aria-label={badgeLabel}
+          title={badgeLabel}
+          className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[#25D366] px-1 text-[10px] font-bold text-white"
+        >
+          {badgeCount > 9 ? '9+' : badgeCount}
+        </span>
+      ) : active && nested ? (
         <span
           className="h-1.5 w-1.5 rounded-full bg-[#25D366]"
           aria-hidden="true"
@@ -172,6 +239,7 @@ export function SuperAdminSidebar({ open, onClose }: SuperAdminSidebarProps) {
   const pathname = usePathname();
   const { signOut } = useAuth();
   const { faviconUrl, siteName } = useBranding();
+  const supportUnread = useSupportUnreadForAdmin();
   const confirm = useConfirm();
   const [groupExpansion, setGroupExpansion] = useState<Record<string, boolean>>(
     {}
@@ -266,11 +334,14 @@ export function SuperAdminSidebar({ open, onClose }: SuperAdminSidebarProps) {
           aria-label="Main navigation"
         >
           <div className="space-y-1">
-            <SidebarLink
-              item={dashboardItem}
-              pathname={pathname}
-              onNavigate={onClose}
-            />
+            {topItems.map((item) => (
+              <SidebarLink
+                key={item.href}
+                item={item}
+                pathname={pathname}
+                onNavigate={onClose}
+              />
+            ))}
           </div>
 
           <div className="my-4 border-t border-slate-100" />
@@ -331,6 +402,20 @@ export function SuperAdminSidebar({ open, onClose }: SuperAdminSidebarProps) {
                           pathname={pathname}
                           onNavigate={onClose}
                           nested
+                          badgeCount={
+                            item.badge === 'supportUnread'
+                              ? supportUnread.conversations
+                              : 0
+                          }
+                          badgeLabel={
+                            item.badge === 'supportUnread'
+                              ? `${supportUnread.conversations} workspace${
+                                  supportUnread.conversations === 1 ? '' : 's'
+                                } waiting — ${supportUnread.messages} unread message${
+                                  supportUnread.messages === 1 ? '' : 's'
+                                }`
+                              : undefined
+                          }
                         />
                       ))}
                     </div>

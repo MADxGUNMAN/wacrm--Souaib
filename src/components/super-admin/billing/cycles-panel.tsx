@@ -32,8 +32,15 @@ import type { BillingCycle } from '@/lib/subscription/types';
 import { cn } from '@/lib/utils';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
-export function CyclesPanel() {
+/**
+ * `region` is 'global' (default, exactly today's editor) or a country
+ * code. Edits and deletes are scoped by the server from the stored row,
+ * so only list and create need to name the region.
+ */
+export function CyclesPanel({ region = 'global' }: { region?: string } = {}) {
   const confirm = useConfirm();
+  const isGlobal = region === 'global';
+  const query = isGlobal ? '' : `?region=${encodeURIComponent(region)}`;
   const [cycles, setCycles] = useState<BillingCycle[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +50,7 @@ export function CyclesPanel() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/super-admin/billing/cycles');
+      const res = await fetch(`/api/super-admin/billing/cycles${query}`);
       if (!res.ok) throw new Error('Failed to load billing cycles');
       const data = await res.json();
       setCycles(data.cycles ?? []);
@@ -53,7 +60,7 @@ export function CyclesPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [query]);
 
   useEffect(() => {
     void load();
@@ -117,7 +124,9 @@ export function CyclesPanel() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-500">
-          These become the toggle on the upgrade page.
+          {isGlobal
+            ? 'These become the toggle on the upgrade page.'
+            : 'These become the toggle on the upgrade page for customers in this country, once its localized plan is enabled.'}
         </p>
         <button
           type="button"
@@ -144,6 +153,11 @@ export function CyclesPanel() {
       ) : null}
 
       <div className="space-y-3">
+        {!isGlobal && cycles.length === 0 && !loading ? (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
+            No billing cycles yet. Create one, or use Copy from Global above.
+          </div>
+        ) : null}
         {cycles.map((cycle) => (
           <div
             key={cycle.id}
@@ -228,6 +242,7 @@ export function CyclesPanel() {
       {editing || creating ? (
         <CycleDialog
           cycle={editing}
+          region={region}
           onClose={() => {
             setEditing(null);
             setCreating(false);
@@ -245,10 +260,12 @@ export function CyclesPanel() {
 
 function CycleDialog({
   cycle,
+  region,
   onClose,
   onSaved,
 }: {
   cycle: BillingCycle | null;
+  region: string;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -318,6 +335,9 @@ function CycleDialog({
         position: Number(position) || 0,
       };
       if (cycle) payload.id = cycle.id;
+      // New cycles belong to the selected region. Edits never send it:
+      // the server reads the stored row's region.
+      else if (region !== 'global') payload.region = region;
 
       const res = await fetch('/api/super-admin/billing/cycles', {
         method: cycle ? 'PUT' : 'POST',

@@ -10,6 +10,7 @@ import { useBranding } from '@/hooks/use-branding';
 import { hasSectionAccess } from '@/lib/auth/roles';
 import { useTotalUnread } from '@/hooks/use-total-unread';
 import { useUnreadNotifications } from '@/hooks/use-unread-notifications';
+import { useSupportUnreadForAccount } from '@/hooks/use-support-unread';
 import {
   Bell,
   Crown,
@@ -134,6 +135,7 @@ export function Sidebar({
   };
   const totalUnread = useTotalUnread();
   const unreadNotifications = useUnreadNotifications();
+  const supportUnread = useSupportUnreadForAccount();
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it
@@ -426,6 +428,14 @@ export function Sidebar({
                   const isActive = pathname.startsWith(item.href);
                   const label = t(item.labelKey as string);
 
+                  // A support reply lands in Settings → Live chat, which
+                  // nobody visits speculatively. Badging the Settings entry
+                  // is what makes the reply discoverable from anywhere in
+                  // the app. Suppressed while you are already in Settings,
+                  // matching how the Inbox dot hides on /inbox.
+                  const showSupportBadge =
+                    item.href === '/settings' && supportUnread > 0 && !isActive;
+
                   const settingsLink = (
                     <Link
                       href={item.href}
@@ -439,10 +449,36 @@ export function Sidebar({
                           : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                       )}
                     >
-                      <item.icon
-                        className={cn(collapsed ? 'h-5 w-5' : 'h-4 w-4')}
-                      />
-                      {!collapsed && <span>{label}</span>}
+                      <div className="relative flex items-center justify-center">
+                        <item.icon
+                          className={cn(collapsed ? 'h-5 w-5' : 'h-4 w-4')}
+                        />
+                        {collapsed && showSupportBadge && (
+                          <span
+                            aria-label={t('unreadSupportMessages', {
+                              count: supportUnread,
+                            })}
+                            className="bg-primary text-primary-foreground ring-card absolute -top-1.5 -right-2 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold ring-2"
+                          >
+                            {supportUnread > 9 ? '9+' : supportUnread}
+                          </span>
+                        )}
+                      </div>
+                      {!collapsed && (
+                        <>
+                          <span className="flex-1 truncate">{label}</span>
+                          {showSupportBadge && (
+                            <span
+                              aria-label={t('unreadSupportMessages', {
+                                count: supportUnread,
+                              })}
+                              className="bg-primary text-primary-foreground flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-semibold"
+                            >
+                              {supportUnread > 9 ? '9+' : supportUnread}
+                            </span>
+                          )}
+                        </>
+                      )}
                     </Link>
                   );
 

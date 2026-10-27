@@ -1,0 +1,7 @@
+{
+  "task_id": "task-razorpay-phase5",
+  "task_description": "Razorpay Phase 5: super-admin automated billing (API routes under /api/super-admin/billing/razorpay, tabs on /super-admin/payments, F6 warning) and account delete/ban integration that cancels live AutoPay first (F7, D9). Full design and ordered steps: d:/Junkies Coder/whatsapp-crm-nextjs/.agents/tasks/razorpay-phase5/plan.md",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}

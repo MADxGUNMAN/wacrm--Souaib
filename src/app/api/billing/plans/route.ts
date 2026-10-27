@@ -19,15 +19,22 @@
 import { NextResponse } from 'next/server';
 
 import { getCurrentAccount } from '@/lib/auth/account';
+import { getAccountPricingRegion } from '@/lib/billing/pricing/region-store';
 import { getPlansBundle } from '@/lib/subscription/queries';
 import { toBillingErrorResponse } from '@/lib/subscription/guard';
 
 export async function GET() {
   try {
     // Auth only — no role or subscription check.
-    await getCurrentAccount();
+    const ctx = await getCurrentAccount();
 
-    const bundle = await getPlansBundle();
+    // Localized pricing: the workspace's region comes from its owner's
+    // phone (or a live mandate), decided here and never by the browser.
+    const pricing = await getAccountPricingRegion(ctx.accountId);
+    const bundle = await getPlansBundle({
+      region: pricing.region,
+      currency: pricing.currency,
+    });
 
     return NextResponse.json(bundle);
   } catch (err) {

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import type { SiteSettings, LegalPage } from '@/types/super-admin';
+import { resolveMarketingCopy } from '@/lib/cms/marketing-copy';
 
 interface LandingFooterProps {
   settings: SiteSettings | null;
@@ -12,6 +13,7 @@ interface LandingFooterProps {
 
 export function LandingFooter({ settings, legalPages }: LandingFooterProps) {
   const siteName = settings?.site_name || 'Replai';
+  const newsletter = resolveMarketingCopy(settings?.marketing_copy).newsletter;
   const copyrightFull =
     settings?.copyright_text ||
     `© ${new Date().getFullYear()} Junkies Coder. All rights reserved.|||Made with ❤️ in India`;
@@ -59,7 +61,7 @@ export function LandingFooter({ settings, legalPages }: LandingFooterProps) {
       if (res.ok) {
         setNewsletterMessage({
           type: 'success',
-          text: data.message || 'Check your email to confirm!',
+          text: data.message || newsletter.success_message,
         });
         setNewsletterEmail('');
       } else {
@@ -217,11 +219,10 @@ export function LandingFooter({ settings, legalPages }: LandingFooterProps) {
         {settings?.show_newsletter && (
           <div className="col-span-1 flex flex-col gap-3 text-sm text-slate-600">
             <h4 className="mb-2 font-semibold text-slate-900">
-              Subscribe to newsletter
+              {newsletter.heading}
             </h4>
             <p className="mb-1 text-xs leading-relaxed text-slate-500">
-              Get the latest updates and product announcements directly to your
-              inbox.
+              {newsletter.body}
             </p>
             <form
               onSubmit={handleNewsletterSubmit}
@@ -229,7 +230,8 @@ export function LandingFooter({ settings, legalPages }: LandingFooterProps) {
             >
               <input
                 type="email"
-                placeholder="Enter your email"
+                placeholder={newsletter.placeholder}
+                aria-label={newsletter.placeholder}
                 required
                 value={newsletterEmail}
                 onChange={(e) => setNewsletterEmail(e.target.value)}
@@ -244,7 +246,7 @@ export function LandingFooter({ settings, legalPages }: LandingFooterProps) {
                 {newsletterLoading && (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 )}
-                {newsletterLoading ? 'Subscribing...' : 'Subscribe'}
+                {newsletterLoading ? 'Subscribing...' : newsletter.button_text}
               </button>
             </form>
             {newsletterMessage && (
